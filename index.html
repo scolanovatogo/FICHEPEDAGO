@@ -91,7 +91,7 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .paper .tb.thick{border:2px solid #000}
 .paper .tb td.sm{font-size:16px;line-height:1.27}
 .paper .tb td.just .ln{text-align:justify}
-.paper u{text-decoration-line:underline;text-decoration-thickness:1px;text-underline-offset:4px;font-weight:700}
+.paper u{text-decoration:none;border-bottom:1.3px solid currentColor;padding-bottom:2px;font-weight:700}
 .paper .box{border:1px solid #000;padding:0 4px}
 .paper img{display:block;margin:4px auto}
 .paper .katex{font-size:1.02em}
@@ -335,18 +335,6 @@ const lines=s=>String(s??'').split('\n');
 const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
 function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
 const has=s=>String(s??'').trim().length>0;
-const romanNumber=n=>{const vals=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];let out='';for(const [v,ch] of vals){while(n>=v){out+=ch;n-=v}}return out||String(n)};
-/* Les lignes indentées dans le champ Contenus représentent le niveau a., b., c. */
-function numberedContentLines(value){
-  const src=String(value??'').split('\n');let main=0,sub=0;
-  return src.map(raw=>{
-    const nested=/^\s{2,}/.test(raw)||/^\s*[↳›]/.test(raw);
-    let t=mk(raw,true).replace(/^[-•–·▪●]+\s*/, '').replace(/^\s*[↳›]\s*/, '').trim();
-    if(!t)return '';
-    if(nested){const label=String.fromCharCode(97+Math.min(sub++,25))+'. ';return label+t}
-    main++;sub=0;return main+'. '+t;
-  }).filter(Boolean);
-}
 
 /* =========================================================
    Modèle de document (commun à l'aperçu, au PDF et au Word)
@@ -391,7 +379,7 @@ function buildDoc(f0){
   const caps=f.capacites.filter(c=>has(c.cap)||has(c.contenus));
   if(caps.length){
     doc.push(tb({cols:[A?30:33,A?70:67],head:[row([cell(['Capacités'],{shade:'#4472C4',color:'#fff',bold:true,align:'center'}),cell(['Contenus'],{shade:'#4472C4',color:'#fff',bold:true,align:'center'})])],
-      rows:caps.map((c,i)=>row([cell(lines(c.cap).map((x,j)=>(j?'':'**'+romanNumber(i+1)+'. **')+'**'+mk(x)+'**'),{}),cell(numberedContentLines(c.contenus))])),gap:12}));
+      rows:caps.map(c=>row([cell(lines(c.cap).map(x=>'**'+mk(x)+'**'),{}),cell(lines(c.contenus).map(x=>mk(x,true)))])),gap:12}));
   }
   /* --- Répartition des séances (modèle A) --- */
   const sea=f.seances;
@@ -539,6 +527,7 @@ function paginate(doc){
     return m.h};
   doc.forEach((b,bi)=>{
     const m=meas[bi];
+    if(b.pb&&used>0) np();
     if(b.t!=='tbl'){
       let need=m.h; if(b.keep){let j=bi+1;while(doc[j]&&doc[j].keep&&doc[j].t!=='tbl'){need+=meas[j].h;j++}need+=firstPiece(j)}
       if(used+need>CONTENT_H&&used>0) np();
@@ -556,6 +545,7 @@ function paginate(doc){
   return pages.filter(p=>p.length).map(p=>p.map(x=>x.html||tblHTML(x.b,x.rows,true)).join(''));
 }
 function footerLeft(f){
+  if(f.__exam){const w=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');return {who:w,rest:(f.examTitle||'Épreuve')+' - '+discLabel(f)+(has(f.classe)?' '+f.classe:'')+' ',titre:''}}
   const who=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');
   return {who, rest:discLabel(f)+(has(f.classe)?' '+f.classe:'')+(has(f.leconNo)||has(f.titre)?' - Leçon'+(has(f.leconNo)?' '+f.leconNo:'')+' :':'')+' ', titre:has(f.titre)?(f.titre.charAt(0)+f.titre.slice(1).toLowerCase()):''};
 }
@@ -680,6 +670,7 @@ function buildDocx(f,docModel){
       borders:{top:T,bottom:T,left:T,right:T,insideHorizontal:ONE,insideVertical:ONE},rows});
   }
   for(const b of docModel){
+    if(b.pb) children.push(new D.Paragraph({pageBreakBefore:true,spacing:{before:0,after:0,line:20},children:[]}));
     if(b.t==='tbl'){children.push(tableOf(b));children.push(new D.Paragraph({spacing:{before:0,after:0,line:120},children:[]}));}
     else if(b.t==='img'){children.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{after:b.img.credit?0:120},children:[imgRun(b.img)]}));if(b.img.credit)children.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{after:120},children:[new D.TextRun({text:(/^(Sch|Repr)/.test(b.img.credit)?'':'Source : ')+b.img.credit,italics:true,size:18,font:'Bookman Old Style'})]}))}
     else b.lines.forEach((x,i)=>children.push(new D.Paragraph({alignment:al(b.align||(b.just?'justify':'left')),keepNext:!!b.keep||i<b.lines.length-1&&false,spacing:{before:0,after:i===b.lines.length-1?Math.round((b.gap??8)*15):0,line:240},indent:b.indent?{left:400}:undefined,children:runsDocx(x,{size:sizeN,bold:b.bold})})));
@@ -698,28 +689,28 @@ async function saveFile(name,blob){
   if(dl){return dl.save({filename:name,data:blob})}
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();
 }
-async function exportWord(){
-  const f=F(); if(!window.docx) throw new Error('Le module Word n’est pas chargé (connexion nécessaire).');
+async function exportWord(ctx){
+  const f=ctx?ctx.f:F(); if(!window.docx) throw new Error('Le module Word n’est pas chargé (connexion nécessaire).');
   await ensureFonts();
-  const blob=await window.docx.Packer.toBlob(buildDocx(f,buildDoc(f)));
-  await saveFile(fileBase(f)+'.docx',blob);
+  const blob=await window.docx.Packer.toBlob(buildDocx(f,ctx?ctx.doc:buildDoc(f)));
+  await saveFile((ctx?ctx.base:fileBase(f))+'.docx',blob);
 }
-async function exportPDF(onProgress){
-  const f=F(); if(!window.html2canvas||!window.jspdf) throw new Error('Le module PDF n’est pas chargé (connexion nécessaire).');
+async function exportPDF(onProgress,ctx){
+  const f=ctx?ctx.f:F(); if(!window.html2canvas||!window.jspdf) throw new Error('Le module PDF n’est pas chargé (connexion nécessaire).');
   await ensureFonts();
-  const pages=paginate(buildDoc(f));
+  const pages=paginate(ctx?ctx.doc:buildDoc(f));
   const st=document.getElementById('stage'); st.innerHTML=pagesHTML(f,pages);
   const { jsPDF }=window.jspdf; const pdf=new jsPDF({unit:'pt',format:'a4',compress:true});
   const els=[...st.querySelectorAll('.paper')];
   for(let i=0;i<els.length;i++){
     onProgress&&onProgress(i+1,els.length);
-    let cv; try{cv=await window.html2canvas(els[i],{scale:1.5,backgroundColor:'#ffffff',logging:false,useCORS:true})}catch(e){cv=await window.html2canvas(els[i],{scale:1.25,backgroundColor:'#ffffff',logging:false})}
+    let cv; try{cv=await window.html2canvas(els[i],{scale:2,backgroundColor:'#ffffff',logging:false})}catch(e){cv=await window.html2canvas(els[i],{scale:1.5,backgroundColor:'#ffffff',logging:false})}
     if(i>0) pdf.addPage();
-    pdf.addImage(cv.toDataURL('image/jpeg',0.90),'JPEG',0,0,595.28,841.89);
+    pdf.addImage(cv.toDataURL('image/jpeg',0.92),'JPEG',0,0,595.28,841.89,undefined,'FAST');
     cv.width=cv.height=0;
   }
   st.innerHTML='';
-  await saveFile(fileBase(f)+'.pdf',pdf.output('blob'));
+  await saveFile((ctx?ctx.base:fileBase(f))+'.pdf',pdf.output('blob'));
 }
 
 /* =========================================================
@@ -1371,7 +1362,7 @@ async function genSeanceContent(f,i,o){
   const prompt=`Tu es conseiller pédagogique expert de l’approche par compétences (collège). Prépare le contenu de la séance décrite par ce contexte JSON : ${JSON.stringify(ctx)}.
 Ensemble des capacités et contenus de la leçon :
 ${capsText(f)}
-${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. ${LATEX_RULE}
+${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…). ${LATEX_RULE}
 Réponds uniquement par un objet JSON avec ces clés (valeurs en texte, lignes séparées par \\n) :
 ${desc}`;
   let d=await ask(prompt);
@@ -1481,12 +1472,240 @@ async function genBilan(f,o){
   '- "vf" : exercice « Vrai ou faux » de 6 affirmations numérotées, une par ligne ; consigne : répondre par V ou F et corriger les affirmations fausses. La solution donne V ou F pour chacune avec la correction des fausses.\n'+
   '- "mix" : exercice en trois parties : (a) 2 questions directes ; (b) 3 phrases à compléter (mets ……… à la place du mot manquant) ; (c) relier par des flèches : colonne de gauche numérotée 1, 2, 3, 4 et colonne de droite lettrée a, b, c, d dans un ordre mélangé. La solution donne les réponses de chaque partie (ex. 1→c).\n'+
   '- "sp" : TROIS situations-problèmes différentes et progressives, chacune avec un contexte concret local et des consignes numérotées qui font mobiliser plusieurs séances de la leçon. La solution de chacune est une résolution détaillée et rédigée.\n'+
-  'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+LATEX_RULE;
+  'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+(f.tpl==='B'?'Discipline expérimentale : les situations-problèmes s’appuient sur une expérience, un montage, des mesures ou un objet technique du quotidien, avec des données chiffrées ; les questions peuvent demander de légender, de schématiser ou d’interpréter un montage décrit par écrit. ':'')+LATEX_RULE;
   const d=await ask(prompt);
   const put=(k,v)=>{if(v&&typeof v==='object'){if(typeof v.q==='string'&&has(v.q)) bl[k].q=v.q; if(typeof v.s==='string'&&has(v.s)) bl[k].s=v.s}};
   put(0,d&&d.vf);put(1,d&&d.mix);((d&&d.sp)||[]).slice(0,3).forEach((v,k)=>put(2+k,v));
   return bl.some(x=>has(x.q));
 }
+/* =========================================================
+   Épreuves : sujet, corrigé et grille de correction
+   ========================================================= */
+const EPR_TYPES=['Devoir surveillé','Composition','Interrogation écrite','Devoir','Examen blanc'];
+const EPR_PERIODES=['','1er Trimestre','2e Trimestre','3e Trimestre','1er Semestre','2e Semestre'];
+const EPR_CLASSES=['6e','5e','4e','3e'];
+function newEpr(){return {dre:'',insp:'',type:'Devoir surveillé',periode:'1er Trimestre',annee:'',disc:'maths',sub:'',classe:'6e',coef:'',duree:'',p1:8,p2:6,p3:6,caps:'',ctx:'',content:null}}
+function eprInit(){if(!DB.epr) DB.epr=newEpr(); const E=DB.epr,n=newEpr(); for(const k in n) if(E[k]===undefined) E[k]=n[k]; return E}
+const fmtN=n=>String(Math.round(n*100)/100).replace('.',',');
+const parseN=s=>{const v=parseFloat(String(s==null?'':s).replace(/\s/g,'').replace(',','.'));return isNaN(v)?0:v};
+const eprModel=E=>/^(4|3)/.test(E.classe)?'43':'65';
+const eprS=x=>typeof x==='string'?x:Array.isArray(x)?x.map(eprS).join('\n'):(x==null?'':String(x));
+function parseGrille(txt){
+  return String(txt||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
+    const p=l.split('|').map(x=>x.trim());
+    if(p.length>=3) return {ind:p[0],niv:p.slice(1,p.length-1).join(' | '),pts:parseN(p[p.length-1])};
+    if(p.length===2) return {ind:'',niv:p[0],pts:parseN(p[1])};
+    return {ind:'',niv:p[0],pts:0};
+  });
+}
+const grilleTxt=L=>(L||[]).map(l=>[eprS(l.ind),eprS(l.niv),fmtN(parseN(l.pts))].join(' | ')).join('\n');
+const normPart=p=>({titre:eprS(p&&p.titre),bareme:eprS(p&&p.bareme),enonce:eprS(p&&p.enonce),corrige:eprS(p&&p.corrige)});
+const normGrille=g=>({critere:eprS(g&&g.critere),nom:eprS(g&&g.nom),txt:Array.isArray(g&&g.lignes)?grilleTxt(g.lignes):eprS(g&&g.txt)});
+function eprDiscNom(E){
+  const d=DISCIPLINES.find(x=>x.id===E.disc)||{nom:''};
+  return E.disc==='pct'?(E.sub||'PCT'):d.nom.split(' (')[0];
+}
+function eprTitle(E){return E.type+(has(E.periode)?' du '+E.periode:'')}
+function eprPseudo(E){return {prenom:DB.profile.prenom,nom:DB.profile.nom,disc:E.disc,sub:E.sub,classe:E.classe,titre:'',__exam:true,examTitle:eprTitle(E)}}
+function eprHead(E){
+  const b=t=>'**'+t+'**', lab=(l,v)=>l+(has(v)?' '+v:'');
+  return tb({cols:[34,38,28],thick:true,gap:12,rows:[
+    row([cell([b(lab('DRE',E.dre))],{align:'center'}),cell([b(eprTitle(E))],{align:'center'}),cell([b(lab('Année scolaire :',E.annee))],{align:'center'})]),
+    row([cell([b(has(E.insp)?E.insp:'Périmètre pédagogique')],{align:'center'}),cell([b('Épreuves de '+eprDiscNom(E))],{align:'center'}),cell([b(lab('Classe :',E.classe)+'   '+lab('Coef :',E.coef)),b(lab('Durée :',E.duree))],{align:'center'})])
+  ]});
+}
+function grilleRows(E){
+  const G=(E.content&&E.content.grille)||[], m=eprModel(E), rows=[];
+  G.forEach(g=>{
+    const L=parseGrille(g.txt), tot=L.reduce((a,x)=>a+x.pts,0);
+    const lab=['**'+(m==='43'&&has(g.critere)?g.critere:'')+'**','**'+g.nom+'**','('+fmtN(tot)+(tot>1?' pts)':' pt)')].filter(x=>x!=='****');
+    const per=L.map(()=>[]);
+    if(L.length>=lab.length) lab.forEach((t,i)=>per[i].push(t));
+    else if(L.length===2){per[0].push(lab.slice(0,-1).join(' '));per[1].push(lab[lab.length-1])}
+    else per[0]=lab;
+    L.forEach((x,i)=>rows.push(row([
+      cell(per[i]),cell(has(x.ind)?[x.ind]:[]),cell([x.niv]),cell([fmtN(x.pts)+(x.pts>1?' pts':' pt')],{align:'center'})
+    ],{bt:i===0,bb:i===L.length-1})));
+  });
+  return rows;
+}
+function repartTable(E){
+  const C=E.content,G=C.grille||[],n=(C.consignes||[]).length;
+  if(eprModel(E)!=='43'||n<2||G.length<2) return null;
+  const sums=G.map(()=>Array(n).fill(0));
+  G.forEach((g,j)=>parseGrille(g.txt).forEach(l=>{
+    const mm=/^\s*[–-]?\s*C\s?(\d)\b/.exec(l.niv);
+    if(mm&&+mm[1]>=1&&+mm[1]<=n) sums[j][+mm[1]-1]+=l.pts; else for(let c=0;c<n;c++) sums[j][c]+=l.pts/n;
+  }));
+  const k=G.length*n, w=100/k;
+  return tb({thick:true,cols:Array(k).fill(w),gap:10,
+    head:[row(G.map(g=>cell(['**'+(has(g.critere)?g.critere:g.nom)+'**'],{span:n,align:'center'})))],
+    rows:[row(sums.flatMap(a=>a.map(v=>cell([fmtN(v)],{align:'center'}))))]});
+}
+function buildEprDoc(E){
+  const doc=[eprHead(E)], C=E.content; if(!C) return doc;
+  const exT=(n,t,p)=>({t:'p',lines:['**__Exercice '+n+'__ : '+t+'** *('+fmtN(parseN(p))+' pts)*'],keep:true,gap:4});
+  doc.push(exT(1,'Situation d’évaluation',E.p1));
+  doc.push({t:'p',lines:String(C.situation).split('\n'),just:true,gap:6});
+  (C.consignes||[]).forEach((c,i)=>doc.push({t:'p',lines:['**Consigne'+(C.consignes.length>1?' '+(i+1):'')+'** : '+c],just:true,gap:4}));
+  const rt=repartTable(E); if(rt) doc.push(rt);
+  doc.push(exT(2,'Questions objectives',E.p2));
+  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});doc.push({t:'p',lines:String(p.enonce).split('\n'),gap:6,indent:true})});
+  doc.push(exT(3,'Questions traditionnelles',E.p3));
+  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});doc.push({t:'p',lines:String(p.enonce).split('\n'),gap:6,indent:true})});
+  doc.push({t:'p',lines:['**__Proposition de corrigé type__**'],align:'center',gap:10,pb:true});
+  doc.push({t:'p',lines:['**__Exercice 1__**'],keep:true,gap:4});
+  doc.push({t:'p',lines:String(C.corrSit).split('\n'),gap:8});
+  const gr=grilleRows(E);
+  if(gr.length){
+    const hd=t=>cell(['**'+t+'**'],{shade:'#4472C4',color:'#fff',align:'center'});
+    doc.push({t:'p',lines:['**Grille de correction de la situation d’évaluation**'],align:'center',keep:true,gap:4});
+    doc.push(tb({thick:true,cols:[21,27,40,12],head:[row([hd('Critères'),hd('Indicateurs'),hd('Niveaux de performance'),hd('Barème')])],rows:gr,gap:10}));
+  }
+  doc.push({t:'p',lines:['**__Exercice 2__**'],keep:true,gap:4});
+  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});doc.push({t:'p',lines:String(p.corrige).split('\n'),gap:6,indent:true})});
+  doc.push({t:'p',lines:['**__Exercice 3__**'],keep:true,gap:4});
+  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});doc.push({t:'p',lines:String(p.corrige).split('\n'),gap:6,indent:true})});
+  return doc;
+}
+function eprBase(E){return noAccent(['epreuve',E.disc,E.classe,E.type,E.periode].filter(has).join('-')).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
+async function genEpreuve(E){
+  const m=eprModel(E);
+  const caps=String(E.caps).split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!caps.length) throw {code:'fatal',message:'Indiquez d’abord les capacités à évaluer.'};
+  const p1=parseN(E.p1),p2=parseN(E.p2),p3=parseN(E.p3);
+  const disc=eprDiscNom(E), maths=E.disc==='maths';
+  const modele=m==='65'
+   ? 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec UNE SEULE consigne. Exercice 2 en quatre parties : I. « Réponds par vrai ou faux » (4 affirmations, 0,5 pt chacune) ; II. « Choisis la bonne réponse » (4 questions à choix a), b), c), d) dont parfois « aucune réponse », 0,5 pt chacune) ; III. « Complète sans recopier le texte » (phrase avec ... a ... et ... b ..., 0,5 pt par mot) ; IV. « Réarrange les groupes de mots suivants pour obtenir une phrase correcte » (groupes séparés par « / », 1 pt). Exercice 3 : questions traditionnelles courtes et variées (écrire en lettres, calculs, écriture d’un ensemble, une construction géométrique…), chaque question avec son barème.'
+   : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (4 lignes numérotées r), s), t), v) en colonne de gauche et a), b), c), d) en désordre à droite, écrites sous la forme « r) … ⟷ a) … » une par ligne, 0,5 pt chacune) ; D) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
+  const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
+  'CAPACITÉS À ÉVALUER :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+
+  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les capacités ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. Aucune figure ne peut être jointe : si une construction est demandée, décris-la par écrit (« Trace… »), les données étant dans le texte.\n\n'+
+  'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
+  'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
+  'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent à la situation (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère contient plusieurs lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème multiple de 0,25}. Les indicateurs sont : CM1 « Compréhension de la situation / Respect de la consigne / Pertinence de la réponse » ; CM2 « Exactitude des calculs ou des résultats » ; CM3 « Enchaînement de la démarche / Cohérence des résultats » ; CP « Qualité de la langue / Présentation / problème entièrement résolu ». Les niveaux de performance sont CONCRETS : ils citent les données, les calculs et les résultats attendus de cette situation.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales).':'')+'\n\n'+
+  'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…"}],"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
+  (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+LATEX_RULE;
+  const d=await ask(prompt);
+  if(!d||!has(eprS(d.situation))||!Array.isArray(d.consignes)||!d.consignes.length||!Array.isArray(d.grille)||!d.grille.length) throw {code:'invalid_json',message:'L’épreuve reçue est incomplète. Relancez la préparation.'};
+  E.content={situation:eprS(d.situation),consignes:d.consignes.map(eprS),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,4).map(normGrille)};
+}
+async function eprCorrect(E,ins){
+  const C=E.content;
+  const cur={situation:C.situation,consignes:C.consignes,ex2:C.ex2,ex3:C.ex3,corrSit:C.corrSit,grille:C.grille.map(g=>({critere:g.critere,nom:g.nom,lignes:parseGrille(g.txt)}))};
+  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nApplique uniquement cette instruction, en gardant les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+LATEX_RULE;
+  const r=await ask(prompt); let n=0;
+  if(r&&typeof r==='object'){
+    if(r.situation!==undefined){C.situation=eprS(r.situation);n++}
+    if(Array.isArray(r.consignes)&&r.consignes.length){C.consignes=r.consignes.map(eprS);n++}
+    if(Array.isArray(r.ex2)&&r.ex2.length){C.ex2=r.ex2.map(normPart);n++}
+    if(Array.isArray(r.ex3)&&r.ex3.length){C.ex3=r.ex3.map(normPart);n++}
+    if(r.corrSit!==undefined){C.corrSit=eprS(r.corrSit);n++}
+    if(Array.isArray(r.grille)&&r.grille.length){C.grille=r.grille.slice(0,4).map(normGrille);n++}
+  }
+  return n;
+}
+function eprSay(t,err){const el=document.getElementById('ep-st');if(el){el.textContent=t;el.className='status genstatus'+(err?' err':' muted')}}
+async function eprAct(a,b){
+  const E=eprInit();
+  if(a==='new'){askConfirm(b,'epnew',()=>{const k=newEpr();for(const x of ['dre','insp','type','periode','annee','disc','sub','classe','coef','duree','p1','p2','p3']) k[x]=E[x];DB.epr=k;save();render()},'Effacer cette épreuve ?');return}
+  if(a==='addprog'){
+    const sel=document.getElementById('ep-prog'); const p=sel&&(DB.progs||[]).find(x=>x.id===sel.value); if(!p){eprSay('Choisissez d’abord une leçon.',true);return}
+    const add=(p.capacites||[]).map(c=>String(c.cap||'').trim()).filter(Boolean);
+    const have=new Set(String(E.caps).split('\n').map(x=>x.trim()));
+    E.caps=[...String(E.caps).split('\n').filter(has),...add.filter(x=>!have.has(x))].join('\n'); save();render();return}
+  if(a==='gen'){
+    if(!aiKind()){eprSay(NO_AI,true);return}
+    b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;
+    await acquireGenWakeLock();
+    try{await genEpreuve(E);save();render();eprSay('Épreuve préparée : relisez le sujet, le corrigé et la grille, puis téléchargez-la.')}
+    catch(e){eprSay(errCopy(e),true);b.disabled=false}
+    await releaseGenWakeLock();return}
+  if(a==='corr'){
+    const ta=document.getElementById('corr-ep'),ins=((ta&&ta.value)||'').trim();
+    if(!ins){eprSay('Écrivez ou dictez d’abord l’instruction.',true);return}
+    if(!aiKind()){eprSay(NO_AI,true);return}
+    b.disabled=true; eprSay('Application de l’instruction…');
+    try{const n=await eprCorrect(E,ins);save();render();eprSay(n?'Instruction appliquée ('+n+' partie(s) modifiée(s)) : relisez le résultat.':'Rien n’a été modifié : précisez la partie concernée.',!n)}
+    catch(e){eprSay(errCopy(e),true)}
+    b.disabled=false;return}
+  if(a==='word'||a==='pdf'){
+    const st=document.getElementById('ep-ex'); b.disabled=true; if(st){st.className='status muted';st.textContent=a==='word'?'Création du fichier Word…':'Création du PDF…'}
+    try{
+      const ctx={f:eprPseudo(E),doc:buildEprDoc(E),base:eprBase(E)};
+      if(a==='word') await exportWord(ctx); else await exportPDF((i,n)=>{if(st)st.textContent='Création du PDF : page '+i+' sur '+n+'…'},ctx);
+      if(st) st.textContent='Fichier prêt. Vérifiez son enregistrement dans vos téléchargements.';
+    }catch(er){if(st){st.className='status err';st.textContent=(er&&er.code==='declined')?'Téléchargement annulé.':('Échec de l’export : '+(er&&er.message||er))}}
+    b.disabled=false;return}
+}
+function eprSel(label,path,opts,rr){
+  const E=eprInit(),v=getp(E,path)??'';
+  return `<label class="f">${esc(label)}<select data-ep="${path}"${rr?' data-eprr="1"':''}>${opts.map(o=>{const [val,txt]=Array.isArray(o)?o:[o,o||'—'];return `<option value="${esc(val)}"${val===v?' selected':''}>${esc(txt)}</option>`}).join('')}</select></label>`;
+}
+function eprFld(label,path,o){
+  o=o||{}; const E=eprInit(),v=getp(E,path)??'';
+  const ctl=o.rows?`<textarea data-ep="${path}" rows="${Math.max(o.rows,String(v).split('\n').length)}" placeholder="${esc(o.ph||'')}">${esc(v)}</textarea>`
+    :`<input type="${o.type||'text'}" data-ep="${path}" value="${esc(v)}" placeholder="${esc(o.ph||'')}"${o.step?' step="'+o.step+'"':''}>`;
+  return `<label class="f${o.wide?' wide':''}">${esc(label)}${o.hint?`<span class="hint">${esc(o.hint)}</span>`:''}${ctl}</label>`;
+}
+function renderEpr(){
+  const E=eprInit(), C=E.content;
+  const d=DISCIPLINES.find(x=>x.id===E.disc)||DISCIPLINES[0];
+  const progs=(DB.progs||[]).filter(p=>(p.capacites||[]).length&&(!p.classe||p.classe===E.classe||true));
+  const total=parseN(E.p1)+parseN(E.p2)+parseN(E.p3);
+  const head=`<section class="card"><h2>Épreuve <small>sujet, corrigé et grille de correction</small></h2>
+   <p class="muted small" style="margin:0 0 10px">Remplissez l’entête (les rubriques vides restent imprimées sans valeur), indiquez la classe et les capacités à évaluer, puis lancez la préparation.</p>
+   <div class="grid">
+    ${eprFld('DRE','dre',{ph:'Plateaux-Est'})}${eprFld('Périmètre pédagogique / inspection (texte tel qu’imprimé)','insp',{ph:'Périmètre pédagogique de Notsé-Ville 2'})}
+    ${eprSel('Type d’évaluation','type',EPR_TYPES)}${eprSel('Période','periode',EPR_PERIODES.map(x=>[x,x||'(aucune)']))}
+    ${eprFld('Année scolaire','annee',{ph:'2026-2027'})}
+    ${eprSel('Discipline','disc',DISCIPLINES.map(x=>[x.id,x.nom]),true)}
+    ${d.subs.length?eprSel('Spécialité','sub',[['','—'],...d.subs]):''}
+    ${eprSel('Classe','classe',EPR_CLASSES,true)}
+    ${eprFld('Coefficient','coef',{ph:'1'})}${eprFld('Durée','duree',{ph:'1h 30'})}</div></section>
+   <section class="card"><h2>Capacités à évaluer</h2>
+    <div class="grid">${eprFld('Capacités à évaluer (une par ligne)','caps',{rows:4,wide:true,ph:'Ex. : Calculer la somme de nombres entiers naturels',hint:'Saisissez-les ou reprenez celles d’une leçon déjà préparée'})}</div>
+    ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre les capacités d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités</button></div>`:''}
+    <div class="grid">${eprFld('Précisions (facultatif)','ctx',{rows:2,wide:true,ph:'Ex. : contexte du marché, éviter les fractions, situation sur la construction d’un jardin…'})}
+    ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
+    <div class="muted small" style="margin:4px 0 10px">Total : ${fmtN(total)} points${total!==20?' (en général 20)':''} · modèle utilisé : ${eprModel(E)==='43'?'4ᵉ / 3ᵉ (deux consignes dans la situation)':'6ᵉ / 5ᵉ (une consigne dans la situation)'}.</div>
+    <div class="row"><button class="btn" type="button" data-epact="gen">${C?'Refaire toute l’épreuve':'Préparer l’épreuve'}</button>${C?'<button class="btn danger sm" type="button" data-epact="new">Nouvelle épreuve</button>':''}</div>
+    <div id="ep-st" class="status genstatus muted" role="status" style="margin-top:10px"></div></section>`;
+  if(!C) return head;
+  const part=(k,i,p)=>`<div class="moment"><h4>${esc(p.titre||'Partie')}</h4><div class="grid">${eprFld('Titre','content.'+k+'.'+i+'.titre')}${eprFld('Barème','content.'+k+'.'+i+'.bareme')}${eprFld('Énoncé','content.'+k+'.'+i+'.enonce',{rows:3,wide:true})}${eprFld('Corrigé','content.'+k+'.'+i+'.corrige',{rows:3,wide:true})}</div></div>`;
+  const gsum=(C.grille||[]).reduce((a,g)=>a+parseGrille(g.txt).reduce((b,x)=>b+x.pts,0),0);
+  const ok=Math.abs(gsum-parseN(E.p1))<0.001;
+  const edit=`<section class="card"><h2>Sujet</h2><div class="grid">
+    ${eprFld('Exercice 1 : situation d’évaluation','content.situation',{rows:5,wide:true})}
+    ${(C.consignes||[]).map((c,i)=>eprFld('Consigne '+(i+1),'content.consignes.'+i,{rows:2,wide:true})).join('')}</div>
+    <div style="font-weight:700;margin:10px 0 4px">Exercice 2 : questions objectives</div>${(C.ex2||[]).map((p,i)=>part('ex2',i,p)).join('')}
+    <div style="font-weight:700;margin:10px 0 4px">Exercice 3 : questions traditionnelles</div>${(C.ex3||[]).map((p,i)=>part('ex3',i,p)).join('')}</section>
+   <section class="card"><h2>Corrigé et grille de correction</h2><div class="grid">
+    ${eprFld('Corrigé de la situation (exercice 1)','content.corrSit',{rows:6,wide:true})}
+    ${(C.grille||[]).map((g,i)=>eprFld((g.critere?g.critere+' : ':'')+g.nom+' — une ligne par indicateur : indicateur | niveau de performance | barème','content.grille.'+i+'.txt',{rows:4,wide:true})).join('')}</div>
+    <div class="status small ${ok?'muted':'err'}" style="margin-top:6px">Total de la grille : ${fmtN(gsum)} pt(s)${ok?' : conforme à la situation.':' : il devrait valoir '+fmtN(parseN(E.p1))+' pts.'}</div></section>
+   <section class="card"><h2>Corriger avec une instruction</h2>
+    <textarea id="corr-ep" rows="2" placeholder="Ex. : rends la consigne 2 plus facile ; change les prix dans la situation ; ajoute une question sur les diviseurs" style="width:100%"></textarea>
+    <div class="row" style="margin-top:8px"><button class="btn alt sm" type="button" data-mic="ep">🎤 Dicter</button><button class="btn sm" type="button" data-epact="corr">Appliquer l’instruction</button></div>
+    <div id="ai-ep" class="status muted small"></div></section>
+   <section class="card"><h2>Télécharger l’épreuve</h2><div class="row"><button class="btn" type="button" data-epact="word">Télécharger en Word (.docx)</button><button class="btn alt" type="button" data-epact="pdf">Télécharger en PDF</button></div>
+    <div id="ep-ex" class="status muted" role="status" style="margin-top:8px"></div></section>
+   <div class="sheet-wrap" id="eprSheets" aria-label="Aperçu de l’épreuve"><div class="muted">Préparation de l’aperçu…</div></div>`;
+  return head+edit;
+}
+let eprPrevT=null;
+async function eprPreview(){
+  const E=eprInit(); const box=document.getElementById('eprSheets'); if(!box||!E.content) return;
+  try{await ensureFonts();const pages=paginate(buildEprDoc(E));box.innerHTML=pagesHTML(eprPseudo(E),pages);
+    const w=box.clientWidth-28,k=Math.min(1,w/794);box.querySelectorAll('.paper').forEach(p=>{p.style.zoom=k<1?k:''})}
+  catch(e){box.innerHTML='<div class="status err">Aperçu impossible : '+esc(e.message||e)+'</div>'}
+}
+function eprAfter(){
+  document.querySelectorAll('textarea[data-ep]').forEach(t=>{t.style.height='auto';t.style.height=Math.max(t.scrollHeight+2,40)+'px'});
+  eprPreview();
+}
+
 const CORR_KEYS=['capTitre','contenus','situation','resolution','synthese','essentiel','exoApp','exoAppSol','exoMaison','exoMaisonSol','correction','consignes','trace','evalQ','evalR','recap'];
 async function applyCorrection(i){
   const f=F(),s=f.seances[i],st=document.getElementById('ai-'+i),ta=document.getElementById('corr-'+i);
@@ -1564,6 +1783,7 @@ function render(){
    <div class="nav" role="tablist">
     <button data-view="fiche" aria-current="${view==='fiche'}">Fiche en cours</button>
     <button data-view="mes" aria-current="${view==='mes'}">Mes fiches (${DB.fiches.length})</button>
+    <button data-view="epr" aria-current="${view==='epr'}">Épreuves</button>
     <button data-view="prog" aria-current="${view==='prog'}">Programmes</button>
     ${isAdmin()||view==='set'?`<button data-view="set" aria-current="${view==='set'}">Réglages</button>`:''}</div>
    <div class="who"><span>${esc([DB.profile.prenom,DB.profile.nom].filter(Boolean).join(' '))}</span><span id="savestate" class="save-state"></span></div></div>`;
@@ -1571,6 +1791,7 @@ function render(){
   if(view==='fiche') body=renderFiche();
   else if(view==='mes') body=renderMes();
   else if(view==='set') body=renderSet();
+  else if(view==='epr') body=renderEpr();
   else body=renderProg();
   root.innerHTML=nav+body;
   afterRender();
@@ -1647,7 +1868,7 @@ function progOptions(f){
 function stepCaps(f){
   const rows=f.capacites.map((c,i)=>`<div class="cap-row">
     <label class="f" for="cap_${i}">Capacité<textarea id="cap_${i}" data-p="capacites.${i}.cap" rows="2">${esc(c.cap)}</textarea></label>
-    <label class="f" for="con_${i}">Contenus<span class="hint">Un sous-titre par ligne (1, 2, 3…). Indentez de deux espaces les sous-titres de niveau inférieur (a, b, c…).</span><textarea id="con_${i}" data-p="capacites.${i}.contenus" rows="${Math.max(2,c.contenus.split('\n').length)}">${esc(c.contenus)}</textarea></label>
+    <label class="f" for="con_${i}">Contenus<span class="hint">Un contenu par ligne, avec « - » au début</span><textarea id="con_${i}" data-p="capacites.${i}.contenus" rows="${Math.max(2,c.contenus.split('\n').length)}">${esc(c.contenus)}</textarea></label>
     <button class="btn danger sm" data-delcap="${i}" aria-label="Supprimer la capacité ${i+1}" style="margin-top:22px">Retirer</button></div>`).join('');
   const po=progOptions(f);
   return `${toolbar()}
@@ -1816,6 +2037,7 @@ function touch(){const f=F();if(f)f.updated=Date.now();save()}
 root.addEventListener('input',e=>{
   const t=e.target;
   if(t.dataset.pp){DB.profile[t.dataset.pp]=t.value;save();return}
+  if(t.dataset.ep){setp(eprInit(),t.dataset.ep,t.value);if(t.tagName==='TEXTAREA'){t.style.height='auto';t.style.height=Math.max(t.scrollHeight+2,40)+'px'}save();return}
   if(!t.dataset.p) return;
   const f=F(); let val=t.value;
   if(t.dataset.dureefix){val=val.replace(/ ; /g,'\n')}
@@ -1826,6 +2048,7 @@ root.addEventListener('input',e=>{
 });
 root.addEventListener('change',e=>{
   const t=e.target,f=F();
+  if(t.dataset.ep){const E=eprInit();setp(E,t.dataset.ep,t.value);if(t.dataset.ep==='disc'){const dd=DISCIPLINES.find(x=>x.id===E.disc);E.sub=(dd&&dd.subs[0])||''}save();if(t.dataset.eprr||t.dataset.ep==='classe'||t.dataset.ep==='disc'){render()}else if(DB.epr.content){clearTimeout(eprPrevT);eprPrevT=setTimeout(eprPreview,300)}return}
   if(t.dataset.nb){
     const ok=setNbSeances(+t.value||1); touch(); if(!ok){render();const n=document.querySelector('.card');n&&n.insertAdjacentHTML('afterbegin','<div class="note warn" style="margin-bottom:10px">Pour réduire le nombre de séances, supprimez d’abord les séances en trop à l’étape 3 (elles contiennent du texte).</div>')} else render(); return}
   if(t.dataset.rerender==='disc'){
@@ -1859,6 +2082,7 @@ root.addEventListener('mousedown',e=>{if(e.target.closest('#fbar button'))e.prev
 root.addEventListener('toggle',e=>{const d=e.target;if(d.matches&&d.matches('details.seance')){const i=+d.dataset.i;d.open?openSeances.add(i):openSeances.delete(i)}},true);
 root.addEventListener('click',async e=>{
   const b=e.target.closest('button'); if(!b) return; const f=F(); const d=b.dataset;
+  if(d.epact){await eprAct(d.epact,b);return}
   if(d.view){view=d.view;render();scrollTo(0,0);return}
   if(d.step){step=+d.step;render();scrollTo(0,0);return}
   if(d.go){step=+d.go;render();scrollTo(0,0);return}
@@ -1878,7 +2102,7 @@ root.addEventListener('click',async e=>{
   if(b.dataset.pick){const [i,key,n]=b.dataset.pick.split('|');pickImage(i,key,+n);return}
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
-  if(d.mic!==undefined){toggleMic(+d.mic,b);return}
+  if(d.mic!==undefined){toggleMic(d.mic,b);return}
   if(d.bilan!==undefined){
     const st=document.getElementById('bil-st'); const say=(t,err)=>{if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
     if(!aiKind()){say(NO_AI,true);return}
@@ -1979,6 +2203,7 @@ function render2(){const y=scrollY;render();scrollTo(0,y)}
 
 function afterRender(){
   document.querySelectorAll('textarea[data-p]').forEach(t=>{t.style.height='auto';t.style.height=Math.max(t.scrollHeight+2,40)+'px'});
+  if(view==='epr') eprAfter();
   if(view==='fiche'&&step===4) buildPreview();
   if(view==='fiche'&&step!==4) setStatus(memOnly?'Non enregistré (navigateur bloqué)':'');
 }
