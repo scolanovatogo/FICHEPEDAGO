@@ -330,6 +330,7 @@ function runsHTML(s,base){
   }).join('');
 }
 const mk=(s,keepNL)=>{let t=String(s??'').replace(/\[\[[a-zA-Z]+[:|]/g,'').replace(/\[\[/g,'[').replace(/\]\]/g,']').replace(/\*+/g,'').replace(/__+/g,' ');return (keepNL?t.replace(/[ \t]+/g,' ').replace(/[ \t]*\n[ \t]*/g,'\n'):t.replace(/\s*\n+\s*/g,' ')).trim()};
+function isAdmin(){try{if(location.hash==='#admin'&&DB&&DB.ai&&!DB.ai.admin){DB.ai.admin=true;save()}}catch(e){}return !!(DB&&DB.ai&&DB.ai.admin)}
 const lines=s=>String(s??'').split('\n');
 const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
 function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
@@ -1552,7 +1553,7 @@ function render(){
     <button data-view="fiche" aria-current="${view==='fiche'}">Fiche en cours</button>
     <button data-view="mes" aria-current="${view==='mes'}">Mes fiches (${DB.fiches.length})</button>
     <button data-view="prog" aria-current="${view==='prog'}">Programmes</button>
-    <button data-view="set" aria-current="${view==='set'}">Réglages</button></div>
+    ${isAdmin()||view==='set'?`<button data-view="set" aria-current="${view==='set'}">Réglages</button>`:''}</div>
    <div class="who"><span>${esc([DB.profile.prenom,DB.profile.nom].filter(Boolean).join(' '))}</span><span id="savestate" class="save-state"></span></div></div>`;
   let body='';
   if(view==='fiche') body=renderFiche();
