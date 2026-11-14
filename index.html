@@ -1484,7 +1484,7 @@ async function genBilan(f,o){
 const EPR_TYPES=['Devoir surveillé','Composition','Interrogation écrite','Devoir','Examen blanc'];
 const EPR_PERIODES=['','1er Trimestre','2e Trimestre','3e Trimestre','1er Semestre','2e Semestre'];
 const EPR_CLASSES=['6e','5e','4e','3e'];
-function newEpr(){return {dre:'',insp:'',type:'Devoir surveillé',periode:'1er Trimestre',annee:'',disc:'maths',sub:'',classe:'6e',coef:'',duree:'',p1:8,p2:6,p3:6,caps:'',ctx:'',content:null}}
+function newEpr(){return {dre:'',insp:'',type:'Devoir surveillé',periode:'1er Trimestre',annee:'',disc:'maths',sub:'',classe:'6e',coef:'',duree:'',p1:8,p2:6,p3:6,caps:'',ctx:'',hint:'',notions:'',content:null}}
 function eprInit(){if(!DB.epr) DB.epr=newEpr(); const E=DB.epr,n=newEpr(); for(const k in n) if(E[k]===undefined) E[k]=n[k]; return E}
 const fmtN=n=>String(Math.round(n*100)/100).replace('.',',');
 const parseN=s=>{const v=parseFloat(String(s==null?'':s).replace(/\s/g,'').replace(',','.'));return isNaN(v)?0:v};
@@ -1579,7 +1579,7 @@ async function genEpreuve(E){
    ? 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec UNE SEULE consigne. Exercice 2 en quatre parties : I. « Réponds par vrai ou faux » (4 affirmations, 0,5 pt chacune) ; II. « Choisis la bonne réponse » (4 questions à choix a), b), c), d) dont parfois « aucune réponse », 0,5 pt chacune) ; III. « Complète sans recopier le texte » (phrase avec ... a ... et ... b ..., 0,5 pt par mot) ; IV. « Réarrange les groupes de mots suivants pour obtenir une phrase correcte » (groupes séparés par « / », 1 pt). Exercice 3 : questions traditionnelles courtes et variées (écrire en lettres, calculs, écriture d’un ensemble, une construction géométrique…), chaque question avec son barème.'
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (4 lignes numérotées r), s), t), v) en colonne de gauche et a), b), c), d) en désordre à droite, écrites sous la forme « r) … ⟷ a) … » une par ligne, 0,5 pt chacune) ; D) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
-  'CAPACITÉS À ÉVALUER :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  'CAPACITÉS À ÉVALUER (avec leurs contenus : reprends leur vocabulaire) :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.notions)?'\nNOTIONS DU COURS FOURNIES PAR L’ENSEIGNANT (base des questions) :\n'+String(E.notions).slice(0,6000):'')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les capacités ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. Aucune figure ne peut être jointe : si une construction est demandée, décris-la par écrit (« Trace… »), les données étant dans le texte.\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
@@ -1605,6 +1605,49 @@ async function eprCorrect(E,ins){
     if(Array.isArray(r.grille)&&r.grille.length){C.grille=r.grille.slice(0,4).map(normGrille);n++}
   }
   return n;
+}
+let EPR_BUSY=false;
+async function extractForEpr(src,hint){
+  const prompt=`Tu lis un document scolaire fourni par un enseignant du Togo (photo, capture d’écran ou PDF) : tableau « Capacités | Contenus », programme éducatif, ou leçon / cours entier.
+${hint?'Si le document contient plusieurs leçons, ne garde que : « '+hint+' ». ':'Si le document contient plusieurs leçons, prends-les TOUTES, dans l’ordre. '}
+Réponds uniquement par un objet JSON : {"classe":"ex. 4e ou chaîne vide","titre":"titre de la leçon ou du document","capacites":[{"capacite":"intitulé","contenus":["contenu 1","contenu 2"]}],"notions":"…"}
+Règles : recopie fidèlement les capacités et les contenus du tableau, sans les reformuler ; une entrée par ligne du tableau. S’il n’y a pas de tableau (leçon ou cours), déduis les capacités visées (verbes d’action : identifier, calculer, construire…) et mets en contenus les notions étudiées. « notions » : si le document est un cours ou une leçon (définitions, propriétés, formules, exemples, données), résume en texte les notions et formules essentielles utiles pour composer des questions (1500 caractères maximum) ; sinon chaîne vide. ${LATEX_RULE}`;
+  return ask(prompt,{images:src.images});
+}
+async function eprImport(files){
+  const E=eprInit(); if(EPR_BUSY) return; EPR_BUSY=true;
+  let nCaps=0,nDocs=0,errs=[];
+  try{
+    for(let i=0;i<files.length;i++){
+      const file=files[i], isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+      eprSay('Lecture du document '+(i+1)+' sur '+files.length+'…');
+      let d=null; const kind=aiKind();
+      if(kind==='gemini'||kind==='anthropic'){
+        try{d=await extractForEpr({images:[isPdf?file:await canvasBlob(file,2200)]},(E.hint||'').trim())}catch(e){errs.push(errCopy(e))}
+      }
+      if(!d||!(d.capacites||[]).length){
+        try{
+          eprSay('Lecture locale du document '+(i+1)+' (reconnaissance du texte)…');
+          const dl=isPdf?localData((await pdfRead(file,40)).pos):localData(await ocrItems(file));
+          if(dl&&(dl.capacites||[]).length) d={capacites:dl.capacites,notions:''};
+        }catch(e){errs.push(e&&e.message||'lecture impossible')}
+      }
+      if(!d||!(d.capacites||[]).length){continue}
+      const have=new Set(String(E.caps).split('\n').map(x=>x.trim()).filter(Boolean)), add=[];
+      for(const c of d.capacites){
+        const cap=String(c.capacite||'').replace(/\*/g,'').trim(); if(!cap) continue;
+        const ct=(c.contenus||[]).map(x=>String(x).replace(/\*/g,'').replace(/^[-•]\s*/,'').trim()).filter(Boolean);
+        const line=cap+(ct.length?' — '+ct.join(' ; '):''); if(!have.has(line)){have.add(line);add.push(line)}
+      }
+      if(add.length){E.caps=[...String(E.caps).split('\n').filter(has),...add].join('\n');nCaps+=add.length;nDocs++}
+      if(has(d.notions)) E.notions=((E.notions?E.notions+'\n\n':'')+String(d.notions).trim()).slice(0,6000);
+      if(has(d.classe)&&!EPR_CLASSES.includes(E.classe)) E.classe=String(d.classe);
+      save();
+    }
+    render();
+    eprSay(nCaps?nCaps+' capacité(s) ajoutée(s) depuis '+nDocs+' document(s). Vérifiez la liste, puis lancez la préparation.':'Aucune capacité reconnue'+(errs.length?' ('+errs[0]+')':'')+'. Essayez une photo plus nette ou saisissez les capacités à la main.',!nCaps);
+  }catch(e){eprSay(errCopy(e),true)}
+  EPR_BUSY=false;
 }
 function eprSay(t,err){const el=document.getElementById('ep-st');if(el){el.textContent=t;el.className='status genstatus'+(err?' err':' muted')}}
 async function eprAct(a,b){
@@ -1665,7 +1708,13 @@ function renderEpr(){
     ${eprSel('Classe','classe',EPR_CLASSES,true)}
     ${eprFld('Coefficient','coef',{ph:'1'})}${eprFld('Durée','duree',{ph:'1h 30'})}</div></section>
    <section class="card"><h2>Capacités à évaluer</h2>
+    <div class="row" style="margin-bottom:8px">
+      <label class="btn" for="eprPhoto" style="cursor:pointer">Ajouter des photos ou captures</label><input type="file" id="eprPhoto" accept="image/*" multiple hidden>
+      <label class="btn" for="eprPdf" style="cursor:pointer">Ajouter des PDF</label><input type="file" id="eprPdf" accept="application/pdf,.pdf" multiple hidden></div>
+    <p class="muted small" style="margin:0 0 8px">Déposez autant de tableaux de capacités et contenus que vous voulez (photo, capture d’écran ou PDF), ou même un programme ou une leçon entière : les questions suivront les capacités et les contenus lus.</p>
+    <div class="grid">${eprFld('Limiter à une leçon (facultatif)','hint',{ph:'Ex. : Leçon 4 Nombres rationnels',hint:'Utile si le PDF contient tout un programme'})}</div>
     <div class="grid">${eprFld('Capacités à évaluer (une par ligne)','caps',{rows:4,wide:true,ph:'Ex. : Calculer la somme de nombres entiers naturels',hint:'Saisissez-les ou reprenez celles d’une leçon déjà préparée'})}</div>
+    ${has(E.notions)?`<div class="grid">${eprFld('Notions du cours lues (modifiables)','notions',{rows:3,wide:true})}</div>`:''}
     ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre les capacités d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités</button></div>`:''}
     <div class="grid">${eprFld('Précisions (facultatif)','ctx',{rows:2,wide:true,ph:'Ex. : contexte du marché, éviter les fractions, situation sur la construction d’un jardin…'})}
     ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
@@ -2048,6 +2097,7 @@ root.addEventListener('input',e=>{
 });
 root.addEventListener('change',e=>{
   const t=e.target,f=F();
+  if((t.id==='eprPhoto'||t.id==='eprPdf')&&t.files&&t.files.length){const fl=[...t.files];t.value='';eprImport(fl);return}
   if(t.dataset.ep){const E=eprInit();setp(E,t.dataset.ep,t.value);if(t.dataset.ep==='disc'){const dd=DISCIPLINES.find(x=>x.id===E.disc);E.sub=(dd&&dd.subs[0])||''}save();if(t.dataset.eprr||t.dataset.ep==='classe'||t.dataset.ep==='disc'){render()}else if(DB.epr.content){clearTimeout(eprPrevT);eprPrevT=setTimeout(eprPreview,300)}return}
   if(t.dataset.nb){
     const ok=setNbSeances(+t.value||1); touch(); if(!ok){render();const n=document.querySelector('.card');n&&n.insertAdjacentHTML('afterbegin','<div class="note warn" style="margin-bottom:10px">Pour réduire le nombre de séances, supprimez d’abord les séances en trop à l’étape 3 (elles contiennent du texte).</div>')} else render(); return}
