@@ -91,7 +91,7 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .paper .tb.thick{border:2px solid #000}
 .paper .tb td.sm{font-size:16px;line-height:1.27}
 .paper .tb td.just .ln{text-align:justify}
-.paper u{text-decoration-line:underline;text-decoration-thickness:1.2px;text-underline-offset:3px;font-weight:700}
+.paper u{text-decoration-line:underline;text-decoration-thickness:1px;text-underline-offset:4px;font-weight:700}
 .paper .box{border:1px solid #000;padding:0 4px}
 .paper img{display:block;margin:4px auto}
 .paper .katex{font-size:1.02em}
@@ -335,6 +335,18 @@ const lines=s=>String(s??'').split('\n');
 const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
 function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
 const has=s=>String(s??'').trim().length>0;
+const romanNumber=n=>{const vals=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];let out='';for(const [v,ch] of vals){while(n>=v){out+=ch;n-=v}}return out||String(n)};
+/* Les lignes indentées dans le champ Contenus représentent le niveau a., b., c. */
+function numberedContentLines(value){
+  const src=String(value??'').split('\n');let main=0,sub=0;
+  return src.map(raw=>{
+    const nested=/^\s{2,}/.test(raw)||/^\s*[↳›]/.test(raw);
+    let t=mk(raw,true).replace(/^[-•–·▪●]+\s*/, '').replace(/^\s*[↳›]\s*/, '').trim();
+    if(!t)return '';
+    if(nested){const label=String.fromCharCode(97+Math.min(sub++,25))+'. ';return label+t}
+    main++;sub=0;return main+'. '+t;
+  }).filter(Boolean);
+}
 
 /* =========================================================
    Modèle de document (commun à l'aperçu, au PDF et au Word)
@@ -379,7 +391,7 @@ function buildDoc(f0){
   const caps=f.capacites.filter(c=>has(c.cap)||has(c.contenus));
   if(caps.length){
     doc.push(tb({cols:[A?30:33,A?70:67],head:[row([cell(['Capacités'],{shade:'#4472C4',color:'#fff',bold:true,align:'center'}),cell(['Contenus'],{shade:'#4472C4',color:'#fff',bold:true,align:'center'})])],
-      rows:caps.map(c=>row([cell(lines(c.cap).map(x=>'**'+mk(x)+'**'),{}),cell(lines(c.contenus).map(x=>mk(x,true)))])),gap:12}));
+      rows:caps.map((c,i)=>row([cell(lines(c.cap).map((x,j)=>(j?'':'**'+romanNumber(i+1)+'. **')+'**'+mk(x)+'**'),{}),cell(numberedContentLines(c.contenus))])),gap:12}));
   }
   /* --- Répartition des séances (modèle A) --- */
   const sea=f.seances;
@@ -701,9 +713,9 @@ async function exportPDF(onProgress){
   const els=[...st.querySelectorAll('.paper')];
   for(let i=0;i<els.length;i++){
     onProgress&&onProgress(i+1,els.length);
-    let cv; try{cv=await window.html2canvas(els[i],{scale:3,backgroundColor:'#ffffff',logging:false})}catch(e){cv=await window.html2canvas(els[i],{scale:2,backgroundColor:'#ffffff',logging:false})}
+    let cv; try{cv=await window.html2canvas(els[i],{scale:1.5,backgroundColor:'#ffffff',logging:false,useCORS:true})}catch(e){cv=await window.html2canvas(els[i],{scale:1.25,backgroundColor:'#ffffff',logging:false})}
     if(i>0) pdf.addPage();
-    pdf.addImage(cv.toDataURL('image/jpeg',0.95),'JPEG',0,0,595.28,841.89);
+    pdf.addImage(cv.toDataURL('image/jpeg',0.90),'JPEG',0,0,595.28,841.89);
     cv.width=cv.height=0;
   }
   st.innerHTML='';
@@ -1635,7 +1647,7 @@ function progOptions(f){
 function stepCaps(f){
   const rows=f.capacites.map((c,i)=>`<div class="cap-row">
     <label class="f" for="cap_${i}">Capacité<textarea id="cap_${i}" data-p="capacites.${i}.cap" rows="2">${esc(c.cap)}</textarea></label>
-    <label class="f" for="con_${i}">Contenus<span class="hint">Un contenu par ligne, avec « - » au début</span><textarea id="con_${i}" data-p="capacites.${i}.contenus" rows="${Math.max(2,c.contenus.split('\n').length)}">${esc(c.contenus)}</textarea></label>
+    <label class="f" for="con_${i}">Contenus<span class="hint">Un sous-titre par ligne (1, 2, 3…). Indentez de deux espaces les sous-titres de niveau inférieur (a, b, c…).</span><textarea id="con_${i}" data-p="capacites.${i}.contenus" rows="${Math.max(2,c.contenus.split('\n').length)}">${esc(c.contenus)}</textarea></label>
     <button class="btn danger sm" data-delcap="${i}" aria-label="Supprimer la capacité ${i+1}" style="margin-top:22px">Retirer</button></div>`).join('');
   const po=progOptions(f);
   return `${toolbar()}
