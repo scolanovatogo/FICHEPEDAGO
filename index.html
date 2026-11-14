@@ -1009,6 +1009,7 @@ async function pdfImages(doc,count){
 }
 /* ---------- extraction du programme ---------- */
 const LATEX_RULE='Écris toute fraction, puissance, racine ou symbole mathématique en LaTeX entre signes dollar (ex. $\\frac{3}{4}$, $x^{2}$, $\\sqrt{a+b}$, $\\overrightarrow{AB}$, $\\mathbb{Q}$, $\\parallel$). Mets en **gras** les mots clés et souligne les titres avec __titre__. N’utilise aucune autre balise.';
+const LATEX_RULE_EPR=LATEX_RULE.replace('Mets en **gras** les mots clés et souligne les titres avec __titre__.','Mets en **gras** les mots clés. Ne souligne RIEN (aucun __ ... __), pas même « Choisis la bonne réponse » ou « Complète le texte suivant ».');
 async function extractProgramme(f,src,hint){
   const prompt=`Tu lis un programme scolaire (${src.text?'texte extrait d’un PDF, colonnes séparées par « | »':'photo ou pages d’un document'}) présentant une leçon sous forme de tableau « Capacités | Contenus », avec parfois la compétence, le thème, le titre de la leçon et le nombre de séances.
 ${hint?'Si le document contient plusieurs leçons ou thèmes, extrais UNIQUEMENT : « '+hint+' ». ':'Si le document contient plusieurs leçons, extrais la première leçon complète. '}
@@ -1265,6 +1266,92 @@ function cavalierSvg(sp){
   if(views) return `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="380" viewBox="0 0 480 380">${viewsG(P,480,380)}</svg>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="340" viewBox="0 0 480 340">${cavalierG(P,480,340)}</svg>`;
 }
+
+/* =========================================================
+   Figures géométriques : l'IA décrit la figure (points, segments, cercles, angles) et l'application la trace exactement
+   ========================================================= */
+const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
+const GEO_RULE='00) GÉOMÉTRIE PLANE : pour toute figure faite de points, segments, droites, cercles, angles, triangles, quadrilatères, symétries, configurations… ne dessine PAS en SVG : réponds {"geo":{…}} avec la description géométrique de la figure, que l’application trace exactement. '+GEO_DOC;
+function geoSvg(spec){
+  const W=480,H=340,M=42;
+  const A=(...k)=>{for(const x of k) if(Array.isArray(spec&&spec[x])) return spec[x]; return []};
+  const X=t=>String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const P={},pts=(spec&&(spec.points||spec.sommets))||{};
+  for(const k in pts){const v=pts[k];if(Array.isArray(v)&&Number.isFinite(+v[0])&&Number.isFinite(+v[1]))P[k]=[+v[0],+v[1]]}
+  const names=Object.keys(P); if(!names.length) throw new Error('Figure sans points');
+  const g=n=>P[String(n)];
+  const circles=[];
+  for(const c of A('cercles','circles')){const o=g(c.c||c.centre);if(!o)continue;let r=+c.r;const th=c.passePar||c.through;if(!(r>0)&&th&&g(th)){const q=g(th);r=Math.hypot(q[0]-o[0],q[1]-o[1])}if(r>0)circles.push({o,r,label:c.label,dash:c.tirets===true})}
+  const xs=names.map(k=>P[k][0]),ys=names.map(k=>P[k][1]);
+  circles.forEach(c=>{xs.push(c.o[0]-c.r,c.o[0]+c.r);ys.push(c.o[1]-c.r,c.o[1]+c.r)});
+  const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+  const dx=Math.max(x1-x0,0.5),dy=Math.max(y1-y0,0.5),sc=Math.min((W-2*M)/dx,(H-2*M)/dy);
+  const ox=(W-dx*sc)/2,oy=(H-dy*sc)/2;
+  const T=p=>[ox+(p[0]-x0)*sc,H-(oy+(p[1]-y0)*sc)];
+  const Q={};names.forEach(k=>Q[k]=T(P[k]));
+  const f1=v=>v.toFixed(1);
+  const out=[]; const nb={}; const link=(a,b)=>{(nb[a]=nb[a]||[]).push(b);(nb[b]=nb[b]||[]).push(a)};
+  const cx=names.reduce((a,k)=>a+Q[k][0],0)/names.length,cy=names.reduce((a,k)=>a+Q[k][1],0)/names.length;
+  const text=(x,y,t,anc,sz,w)=>`<text x="${f1(x)}" y="${f1(y)}" font-size="${sz||16}" font-family="Arial" text-anchor="${anc||'middle'}"${w?` font-weight="${w}"`:''}>${X(t)}</text>`;
+  const line=(p,q,dash,w)=>`<line x1="${f1(p[0])}" y1="${f1(p[1])}" x2="${f1(q[0])}" y2="${f1(q[1])}" stroke="#000" stroke-width="${w||2}"${dash?' stroke-dasharray="7 5"':''}/>`;
+  const outward=(m,defd)=>{let vx=m[0]-cx,vy=m[1]-cy;const n=Math.hypot(vx,vy);return n<1?defd:[vx/n,vy/n]};
+  for(const c of circles){const o=T(c.o);out.push(`<circle cx="${f1(o[0])}" cy="${f1(o[1])}" r="${f1(c.r*sc)}" fill="none" stroke="#000" stroke-width="2"${c.dash?' stroke-dasharray="7 5"':''}/>`);
+    if(c.label) out.push(text(o[0]+c.r*sc*0.72+4,o[1]-c.r*sc*0.72-4,c.label,'start',15))}
+  for(const pg of A('polygones','polygons')){const L=(pg.p||pg).filter(n=>Q[n]);if(L.length<3)continue;
+    out.push(`<polygon points="${L.map(n=>f1(Q[n][0])+','+f1(Q[n][1])).join(' ')}" fill="none" stroke="#000" stroke-width="2"${pg.tirets===true?' stroke-dasharray="7 5"':''}/>`);
+    L.forEach((n,i)=>link(n,L[(i+1)%L.length]))}
+  for(const raw of A('segments')){const sg=Array.isArray(raw)?{p:raw}:raw;const [a,b]=(sg.p||[]);if(!Q[a]||!Q[b])continue;
+    out.push(line(Q[a],Q[b],sg.tirets===true,2));link(a,b);
+    const m=[(Q[a][0]+Q[b][0])/2,(Q[a][1]+Q[b][1])/2],ux=Q[b][0]-Q[a][0],uy=Q[b][1]-Q[a][1],ln=Math.hypot(ux,uy)||1;
+    const nx=-uy/ln,ny=ux/ln;
+    const k=Math.max(0,Math.min(3,Math.round(+sg.trait||0)));
+    {const c1=[0.5*ux/ln+0.866*nx,0.5*uy/ln+0.866*ny],c2=[0.5*ux/ln-0.866*nx,0.5*uy/ln-0.866*ny];
+    const fl=v=>(v[0]<0||(Math.abs(v[0])<1e-9&&v[1]>0))?[-v[0],-v[1]]:v;
+    const ob=[fl(c1),fl(c2)].sort((a,b)=>a[1]-b[1])[0];
+    for(let i=0;i<k;i++){const t=(i-(k-1)/2)*6;out.push(line([m[0]+ux/ln*t-ob[0]*7,m[1]+uy/ln*t-ob[1]*7],[m[0]+ux/ln*t+ob[0]*7,m[1]+uy/ln*t+ob[1]*7],false,1.6))}}
+    if(sg.label){let o=outward([m[0]+nx,m[1]+ny],[nx,ny]);const dd=(o[0]*nx+o[1]*ny)>=0?1:-1;const px=m[0]+dd*nx*15,py=m[1]+dd*ny*15;out.push(text(px,py+5,sg.label,'middle',15))}}
+  for(const d of A('droites','lines')){const [a,b]=(d.p||[]);if(!Q[a]||!Q[b])continue;
+    const p=Q[a],q=Q[b],vx=q[0]-p[0],vy=q[1]-p[1];let t0=-1e6,t1=1e6;const pp=[-vx,vx,-vy,vy],qq=[p[0]-6,W-6-p[0],p[1]-6,H-6-p[1]];let ok=true;
+    for(let i=0;i<4;i++){if(pp[i]===0){if(qq[i]<0)ok=false}else{const t=qq[i]/pp[i];if(pp[i]<0)t0=Math.max(t0,t);else t1=Math.min(t1,t)}}
+    if(!ok||t0>t1)continue;const e0=[p[0]+t0*vx,p[1]+t0*vy],e1=[p[0]+t1*vx,p[1]+t1*vy];
+    out.push(line(e0,e1,d.tirets===true,2));
+    if(d.label){const far=Math.hypot(e1[0]-q[0],e1[1]-q[1])>Math.hypot(e0[0]-q[0],e0[1]-q[1])?e1:e0;const n=Math.hypot(vx,vy)||1;out.push(text(far[0]-vx/n*18*(far===e1?1:-1)+(-vy/n)*12,far[1]-vy/n*18*(far===e1?1:-1)+(vx/n)*12+5,d.label,'middle',15))}}
+  for(const ra of A('anglesDroits','rightAngles')){const [a,v,b]=ra.p||ra;if(!Q[a]||!Q[v]||!Q[b])continue;
+    const u1=[Q[a][0]-Q[v][0],Q[a][1]-Q[v][1]],u2=[Q[b][0]-Q[v][0],Q[b][1]-Q[v][1]],l1=Math.hypot(...u1)||1,l2=Math.hypot(...u2)||1;
+    const sz=Math.min(14,0.32*Math.min(l1,l2));const e1=[u1[0]/l1*sz,u1[1]/l1*sz],e2=[u2[0]/l2*sz,u2[1]/l2*sz],V=Q[v];
+    out.push(`<polyline points="${f1(V[0]+e1[0])},${f1(V[1]+e1[1])} ${f1(V[0]+e1[0]+e2[0])},${f1(V[1]+e1[1]+e2[1])} ${f1(V[0]+e2[0])},${f1(V[1]+e2[1])}" fill="none" stroke="#000" stroke-width="1.6"/>`)}
+  for(const an of A('angles')){const [a,v,b]=an.p||[];if(!Q[a]||!Q[v]||!Q[b])continue;
+    const u1=[Q[a][0]-Q[v][0],Q[a][1]-Q[v][1]],u2=[Q[b][0]-Q[v][0],Q[b][1]-Q[v][1]],l1=Math.hypot(...u1)||1,l2=Math.hypot(...u2)||1;
+    const r=Math.min(28,0.42*Math.min(l1,l2)),V=Q[v],p1=[V[0]+u1[0]/l1*r,V[1]+u1[1]/l1*r],p2=[V[0]+u2[0]/l2*r,V[1]+u2[1]/l2*r];
+    const sw=(u1[0]*u2[1]-u1[1]*u2[0])>0?1:0;
+    out.push(`<path d="M ${f1(p1[0])} ${f1(p1[1])} A ${f1(r)} ${f1(r)} 0 0 ${sw} ${f1(p2[0])} ${f1(p2[1])}" fill="none" stroke="#000" stroke-width="1.6"/>`);
+    if(an.label){let bx=u1[0]/l1+u2[0]/l2,by=u1[1]/l1+u2[1]/l2;const bn=Math.hypot(bx,by)||1;bx/=bn;by/=bn;out.push(text(V[0]+bx*(r+16),V[1]+by*(r+16)+5,an.label,'middle',14))}}
+  for(const k of names){const p=Q[k];out.push(`<circle cx="${f1(p[0])}" cy="${f1(p[1])}" r="2.6" fill="#000" stroke="#000" stroke-width="1"/>`);
+    if(/^_/.test(k))continue;
+    const ns=(nb[k]||[]).filter(n=>Q[n]);let dv;
+    if(ns.length){const mx=ns.reduce((a,n)=>a+Q[n][0],0)/ns.length,my=ns.reduce((a,n)=>a+Q[n][1],0)/ns.length;dv=[p[0]-mx,p[1]-my]}else dv=[p[0]-cx,p[1]-cy];
+    let n=Math.hypot(dv[0],dv[1]);if(n<1){dv=[0,-1];n=1}dv=[dv[0]/n,dv[1]/n];
+    const anc=dv[0]>0.35?'start':dv[0]<-0.35?'end':'middle';
+    out.push(text(p[0]+dv[0]*13,p[1]+dv[1]*13+(dv[1]>0.3?11:dv[1]<-0.3?-2:6),k,anc,18,'bold'))}
+  for(const t of A('textes','texts')){if(!Number.isFinite(+t.x)||!Number.isFinite(+t.y))continue;const p=T([+t.x,+t.y]);out.push(text(p[0],p[1],t.t||t.texte||'','middle',15))}
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${out.join('')}</svg>`;
+}
+async function eprFig(spec,dw,keepCredit){
+  const im=await svgToPngImage(geoSvg(spec));
+  im.dw=dw||320; if(!keepCredit) im.credit=''; im.geo=spec; return im;
+}
+async function eprFigOf(spec,dw){ if(!spec||typeof spec!=='object') return null; try{return await eprFig(spec,dw,false)}catch(e){return null} }
+async function eprMergeParts(old,arr){
+  const out=[]; old=old||[];
+  for(let i=0;i<arr.length;i++){const x=arr[i]||{},p=normPart(x),o=old[i]||{};
+    p.fig=(x.fig&&typeof x.fig==='object')?await eprFigOf(x.fig,300):(o.fig||null);
+    p.figCorr=(x.figCorr&&typeof x.figCorr==='object')?await eprFigOf(x.figCorr,300):(o.figCorr||null);
+    out.push(p)}
+  return out;
+}
+const nuS=t=>String(t==null?'':t).replace(/__(?=\S)([\s\S]*?\S)__/g,'$1');
+function cleanUl(C){const r=Object.assign({},C);for(const k of ['situation','corrSit'])r[k]=nuS(C[k]);r.consignes=(C.consignes||[]).map(nuS);
+  for(const k of ['ex2','ex3'])r[k]=(C[k]||[]).map(p=>Object.assign({},p,{titre:nuS(p.titre),bareme:nuS(p.bareme),enonce:nuS(p.enonce),corrige:nuS(p.corrige)}));return r}
 async function genFigure(f,i){
   const s=f.seances[i];
   const prompt=`Tu es un enseignant qui dessine au tableau. ${f.tpl==='B'?'Dessine la figure du COURS (trace écrite) qui illustre la notion de la séance sur l’objet de la situation':'Dessine la figure qui accompagne cette situation d’apprentissage'} (niveau ${f.classe||'collège'}, ${discLabel(f)}, leçon « ${f.titre} »).
@@ -1272,6 +1359,7 @@ Situation : ${s.situation}
 Capacité de la séance : ${s.capTitre}
 La figure doit représenter EXACTEMENT l’objet de la situation (pas un objet générique) avec ses dimensions, et suivre le type de représentation et les conventions du document d’accompagnement s’il en fournit un.
 ${guideBlock(f)}Règles : 
+${GEO_RULE}
 0) Si la figure est un pavé droit, un cube ou une pièce parallélépipédique en perspective cavalière, ne la dessine pas toi-même, UNIQUEMENT si l’objet de la situation EST réellement un pavé droit, un cube ou un bloc de cette forme (brique, boîte, table, bloc…) et que la leçon porte sur sa représentation ; sinon dessine toi-même la figure adaptée à la leçon : réponds {"solide":{"L":longueur,"l":profondeur,"h":hauteur,"unite":"cm","objet":"nom exact de l’objet de la situation","creux":true ou false,"alveoles":2,"epaisseur":épaisseur des parois,"representation":"cavaliere" ou "vues" ou "les deux"},"svg":"","query":""} avec les dimensions de la situation ; l’application trace alors la figure correcte (arêtes cachées en pointillés). « creux » doit être true si la situation ou le document dit que l’objet est creux (avec des alvéoles ou une cavité) et false s’il est plein ou si rien n’est précisé ; prends les dimensions de la situation : respecte exactement ce que disent la situation et le document d’accompagnement. « representation » : « vues » pour les vues de face, de gauche et de dessus, « cavaliere » pour la perspective cavalière, « les deux » si la leçon demande les deux.
 1) Calcule d’abord mentalement les coordonnées de chaque point dans un repère de 480 × 340 (y vers le bas) pour que la figure respecte EXACTEMENT les données de la situation (milieux, parallèles, perpendiculaires, longueurs proportionnelles, angles droits).
 2) Fond blanc, traits noirs fins (stroke-width 2), texte noir de 18 px, légendes en français.
@@ -1280,9 +1368,15 @@ ${guideBlock(f)}Règles :
 5) Pour les sciences ou la technologie : schéma simple et lisible (appareil, circuit, vues), avec légendes. En dessin technique, les arêtes visibles sont en trait continu et les arêtes cachées en pointillés (stroke-dasharray=7 5) ; en vues de face, de dessus et de gauche, aligne les vues entre elles et garde les mêmes dimensions.
 6) Balises SVG autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan. width="480" height="340" viewBox="0 0 480 340".
 Si aucune figure n’est utile ou possible, mets "svg":"" et propose "query" (recherche Wikimedia Commons).
-Réponds uniquement par {"svg":"<svg …>…</svg>","query":""}.`;
-  const d=await ask(prompt);
-  return d||{};
+Réponds uniquement par {"geo":{…}} (figure de géométrie plane) ou par {"svg":"<svg …>…</svg>","query":""}.`;
+  let d=await ask(prompt)||{};
+  if(!(d.geo||d.solide||(d.svg&&String(d.svg).trim()))){
+    try{
+      const d2=await ask('Tu es un enseignant de mathématiques qui dessine au tableau. Décris la figure de géométrie qui accompagne cette situation (niveau '+(f.classe||'collège')+', leçon « '+(f.titre||'')+' »).\nSituation : '+s.situation+'\nCapacité : '+s.capTitre+'\nLa figure représente exactement les données de la situation, sans la réponse.\n'+GEO_DOC+'\nRéponds uniquement par {"geo":{…}}.');
+      if(d2&&d2.geo) d=d2;
+    }catch(e){ if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal')) throw e }
+  }
+  return d;
 }
 function classRank(c){
   const t=String(c||'').toLowerCase().replace(/\s+/g,'');
@@ -1389,7 +1483,8 @@ ${desc}`;
   if(needsFigure(f,s)&&(o.overwrite||!s[imageField])){
     let g=null; try{g=await genFigure(f,i)}catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
     let ok=false;
-    if(g&&g.solide){try{s[imageField]=await svgToPngImage(cavalierSvg(g.solide));if(g.solide.objet)s[imageField].credit='Représentation'+(/vue/i.test(String(g.solide.representation))?' en vues':' en perspective cavalière')+' : '+String(g.solide.objet)+(g.solide.creux===true?' (creux)':'')+' — schéma généré automatiquement, vérifier les dimensions';ok=true}catch(e){}}
+    if(g&&g.geo){try{const im=await eprFig(g.geo,380,true);if(im){s[imageField]=im;ok=true}}catch(e){}}
+    if(!ok&&g&&g.solide){try{s[imageField]=await svgToPngImage(cavalierSvg(g.solide));if(g.solide.objet)s[imageField].credit='Représentation'+(/vue/i.test(String(g.solide.representation))?' en vues':' en perspective cavalière')+' : '+String(g.solide.objet)+(g.solide.creux===true?' (creux)':'')+' — schéma généré automatiquement, vérifier les dimensions';ok=true}catch(e){}}
     if(!ok&&g&&g.svg){try{s[imageField]=await svgToPngImage(g.svg);ok=true}catch(e){}}
     if(!ok){s.imgKey=String((g&&g.query)||((f.titre||'illustration pédagogique')+' '+(s.capTitre||'')));s.autoImgSearch=true;
       if(FIG_REF.test(s.situation||'')) (GEN.figMissing=GEN.figMissing||[]).push(i+1)}
@@ -1484,12 +1579,12 @@ async function genBilan(f,o){
 const EPR_TYPES=['Devoir surveillé','Composition','Interrogation écrite','Devoir','Examen blanc'];
 const EPR_PERIODES=['','1er Trimestre','2e Trimestre','3e Trimestre','1er Semestre','2e Semestre'];
 const EPR_CLASSES=['6e','5e','4e','3e'];
-function newEpr(){return {dre:'',insp:'',type:'Devoir surveillé',periode:'1er Trimestre',annee:'',disc:'maths',sub:'',classe:'6e',coef:'',duree:'',p1:8,p2:6,p3:6,caps:'',ctx:'',hint:'',notions:'',content:null}}
+function newEpr(){return {dre:'',insp:'',type:'Devoir surveillé',periode:'1er Trimestre',annee:'',disc:'maths',sub:'',classe:'6e',coef:'',duree:'',p1:8,p2:6,p3:6,caps:'',ctx:'',content:null}}
 function eprInit(){if(!DB.epr) DB.epr=newEpr(); const E=DB.epr,n=newEpr(); for(const k in n) if(E[k]===undefined) E[k]=n[k]; return E}
 const fmtN=n=>String(Math.round(n*100)/100).replace('.',',');
 const parseN=s=>{const v=parseFloat(String(s==null?'':s).replace(/\s/g,'').replace(',','.'));return isNaN(v)?0:v};
 const eprModel=E=>/^(4|3)/.test(E.classe)?'43':'65';
-const eprS=x=>typeof x==='string'?x:Array.isArray(x)?x.map(eprS).join('\n'):(x==null?'':String(x));
+const eprS=x=>typeof x==='string'?x.replace(/__(?=\S)([\s\S]*?\S)__/g,'$1'):Array.isArray(x)?x.map(eprS).join('\n'):(x==null?'':String(x));
 function parseGrille(txt){
   return String(txt||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
     const p=l.split('|').map(x=>x.trim());
@@ -1543,19 +1638,21 @@ function repartTable(E){
     rows:[row(sums.flatMap(a=>a.map(v=>cell([fmtN(v)],{align:'center'}))))]});
 }
 function buildEprDoc(E){
-  const doc=[eprHead(E)], C=E.content; if(!C) return doc;
+  const doc=[eprHead(E)], C0=E.content; if(!C0) return doc; const C=cleanUl(C0);
   const exT=(n,t,p)=>({t:'p',lines:['**__Exercice '+n+'__ : '+t+'** *('+fmtN(parseN(p))+' pts)*'],keep:true,gap:4});
   doc.push(exT(1,'Situation d’évaluation',E.p1));
   doc.push({t:'p',lines:String(C.situation).split('\n'),just:true,gap:6});
+  if(C.figSit) doc.push({t:'img',img:C.figSit,gap:6});
   (C.consignes||[]).forEach((c,i)=>doc.push({t:'p',lines:['**Consigne'+(C.consignes.length>1?' '+(i+1):'')+'** : '+c],just:true,gap:4}));
   const rt=repartTable(E); if(rt) doc.push(rt);
   doc.push(exT(2,'Questions objectives',E.p2));
-  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});doc.push({t:'p',lines:String(p.enonce).split('\n'),gap:6,indent:true})});
+  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});doc.push({t:'p',lines:String(p.enonce).split('\n'),gap:6,indent:true});if(p.fig)doc.push({t:'img',img:p.fig,gap:6})});
   doc.push(exT(3,'Questions traditionnelles',E.p3));
-  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});doc.push({t:'p',lines:String(p.enonce).split('\n'),gap:6,indent:true})});
+  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});doc.push({t:'p',lines:String(p.enonce).split('\n'),gap:6,indent:true});if(p.fig)doc.push({t:'img',img:p.fig,gap:6})});
   doc.push({t:'p',lines:['**__Proposition de corrigé type__**'],align:'center',gap:10,pb:true});
   doc.push({t:'p',lines:['**__Exercice 1__**'],keep:true,gap:4});
   doc.push({t:'p',lines:String(C.corrSit).split('\n'),gap:8});
+  if(C.corrSitFig) doc.push({t:'img',img:C.corrSitFig,gap:6});
   const gr=grilleRows(E);
   if(gr.length){
     const hd=t=>cell(['**'+t+'**'],{shade:'#4472C4',color:'#fff',align:'center'});
@@ -1563,9 +1660,9 @@ function buildEprDoc(E){
     doc.push(tb({thick:true,cols:[21,27,40,12],head:[row([hd('Critères'),hd('Indicateurs'),hd('Niveaux de performance'),hd('Barème')])],rows:gr,gap:10}));
   }
   doc.push({t:'p',lines:['**__Exercice 2__**'],keep:true,gap:4});
-  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});doc.push({t:'p',lines:String(p.corrige).split('\n'),gap:6,indent:true})});
+  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});doc.push({t:'p',lines:String(p.corrige).split('\n'),gap:6,indent:true});if(p.figCorr)doc.push({t:'img',img:p.figCorr,gap:6})});
   doc.push({t:'p',lines:['**__Exercice 3__**'],keep:true,gap:4});
-  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});doc.push({t:'p',lines:String(p.corrige).split('\n'),gap:6,indent:true})});
+  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});doc.push({t:'p',lines:String(p.corrige).split('\n'),gap:6,indent:true});if(p.figCorr)doc.push({t:'img',img:p.figCorr,gap:6})});
   return doc;
 }
 function eprBase(E){return noAccent(['epreuve',E.disc,E.classe,E.type,E.periode].filter(has).join('-')).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
@@ -1579,79 +1676,44 @@ async function genEpreuve(E){
    ? 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec UNE SEULE consigne. Exercice 2 en quatre parties : I. « Réponds par vrai ou faux » (4 affirmations, 0,5 pt chacune) ; II. « Choisis la bonne réponse » (4 questions à choix a), b), c), d) dont parfois « aucune réponse », 0,5 pt chacune) ; III. « Complète sans recopier le texte » (phrase avec ... a ... et ... b ..., 0,5 pt par mot) ; IV. « Réarrange les groupes de mots suivants pour obtenir une phrase correcte » (groupes séparés par « / », 1 pt). Exercice 3 : questions traditionnelles courtes et variées (écrire en lettres, calculs, écriture d’un ensemble, une construction géométrique…), chaque question avec son barème.'
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (4 lignes numérotées r), s), t), v) en colonne de gauche et a), b), c), d) en désordre à droite, écrites sous la forme « r) … ⟷ a) … » une par ligne, 0,5 pt chacune) ; D) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
-  'CAPACITÉS À ÉVALUER (avec leurs contenus : reprends leur vocabulaire) :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.notions)?'\nNOTIONS DU COURS FOURNIES PAR L’ENSEIGNANT (base des questions) :\n'+String(E.notions).slice(0,6000):'')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  'CAPACITÉS À ÉVALUER :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+
-  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les capacités ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. Aucune figure ne peut être jointe : si une construction est demandée, décris-la par écrit (« Trace… »), les données étant dans le texte.\n\n'+
+  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les capacités ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
   'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
   'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent à la situation (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère contient plusieurs lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème multiple de 0,25}. Les indicateurs sont : CM1 « Compréhension de la situation / Respect de la consigne / Pertinence de la réponse » ; CM2 « Exactitude des calculs ou des résultats » ; CM3 « Enchaînement de la démarche / Cohérence des résultats » ; CP « Qualité de la langue / Présentation / problème entièrement résolu ». Les niveaux de performance sont CONCRETS : ils citent les données, les calculs et les résultats attendus de cette situation.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales).':'')+'\n\n'+
-  'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…"}],"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
-  (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+LATEX_RULE;
+  'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…","fig":facultatif,"figCorr":facultatif}],"figSit":facultatif,"figCorrSit":facultatif,"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
+  (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+LATEX_RULE_EPR;
   const d=await ask(prompt);
   if(!d||!has(eprS(d.situation))||!Array.isArray(d.consignes)||!d.consignes.length||!Array.isArray(d.grille)||!d.grille.length) throw {code:'invalid_json',message:'L’épreuve reçue est incomplète. Relancez la préparation.'};
   E.content={situation:eprS(d.situation),consignes:d.consignes.map(eprS),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,4).map(normGrille)};
+  {const C=E.content;
+   C.figSit=await eprFigOf(d.figSit,320); C.corrSitFig=await eprFigOf(d.figCorrSit,320);
+   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}}
 }
 async function eprCorrect(E,ins){
   const C=E.content;
-  const cur={situation:C.situation,consignes:C.consignes,ex2:C.ex2,ex3:C.ex3,corrSit:C.corrSit,grille:C.grille.map(g=>({critere:g.critere,nom:g.nom,lignes:parseGrille(g.txt)}))};
-  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nApplique uniquement cette instruction, en gardant les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+LATEX_RULE;
+  const slim=p=>({titre:p.titre,bareme:p.bareme,enonce:p.enonce,corrige:p.corrige,fig:p.fig?'(figure existante)':undefined,figCorr:p.figCorr?'(figure existante)':undefined});
+  const cur={situation:C.situation,consignes:C.consignes,ex2:(C.ex2||[]).map(slim),ex3:(C.ex3||[]).map(slim),corrSit:C.corrSit,figSit:C.figSit?'(figure existante)':undefined,figCorrSit:C.corrSitFig?'(figure existante)':undefined,grille:C.grille.map(g=>({critere:g.critere,nom:g.nom,lignes:parseGrille(g.txt)}))};
+  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nApplique uniquement cette instruction, en gardant les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+' Pour ajouter ou modifier une figure, donne les clés figSit, figCorrSit (situation et son corrigé) ou fig, figCorr dans la partie concernée, sous la forme ci-dessous ; les figures marquées « (figure existante) » sont conservées si tu n’y touches pas. '+GEO_DOC+' '+LATEX_RULE_EPR;
   const r=await ask(prompt); let n=0;
   if(r&&typeof r==='object'){
     if(r.situation!==undefined){C.situation=eprS(r.situation);n++}
     if(Array.isArray(r.consignes)&&r.consignes.length){C.consignes=r.consignes.map(eprS);n++}
-    if(Array.isArray(r.ex2)&&r.ex2.length){C.ex2=r.ex2.map(normPart);n++}
-    if(Array.isArray(r.ex3)&&r.ex3.length){C.ex3=r.ex3.map(normPart);n++}
+    if(Array.isArray(r.ex2)&&r.ex2.length){C.ex2=await eprMergeParts(C.ex2,r.ex2);n++}
+    if(Array.isArray(r.ex3)&&r.ex3.length){C.ex3=await eprMergeParts(C.ex3,r.ex3);n++}
+    if(r.figSit&&typeof r.figSit==='object'){const im=await eprFigOf(r.figSit,320);if(im){C.figSit=im;n++}}
+    if(r.figCorrSit&&typeof r.figCorrSit==='object'){const im=await eprFigOf(r.figCorrSit,320);if(im){C.corrSitFig=im;n++}}
     if(r.corrSit!==undefined){C.corrSit=eprS(r.corrSit);n++}
     if(Array.isArray(r.grille)&&r.grille.length){C.grille=r.grille.slice(0,4).map(normGrille);n++}
   }
   return n;
 }
-let EPR_BUSY=false;
-async function extractForEpr(src,hint){
-  const prompt=`Tu lis un document scolaire fourni par un enseignant du Togo (photo, capture d’écran ou PDF) : tableau « Capacités | Contenus », programme éducatif, ou leçon / cours entier.
-${hint?'Si le document contient plusieurs leçons, ne garde que : « '+hint+' ». ':'Si le document contient plusieurs leçons, prends-les TOUTES, dans l’ordre. '}
-Réponds uniquement par un objet JSON : {"classe":"ex. 4e ou chaîne vide","titre":"titre de la leçon ou du document","capacites":[{"capacite":"intitulé","contenus":["contenu 1","contenu 2"]}],"notions":"…"}
-Règles : recopie fidèlement les capacités et les contenus du tableau, sans les reformuler ; une entrée par ligne du tableau. S’il n’y a pas de tableau (leçon ou cours), déduis les capacités visées (verbes d’action : identifier, calculer, construire…) et mets en contenus les notions étudiées. « notions » : si le document est un cours ou une leçon (définitions, propriétés, formules, exemples, données), résume en texte les notions et formules essentielles utiles pour composer des questions (1500 caractères maximum) ; sinon chaîne vide. ${LATEX_RULE}`;
-  return ask(prompt,{images:src.images});
-}
-async function eprImport(files){
-  const E=eprInit(); if(EPR_BUSY) return; EPR_BUSY=true;
-  let nCaps=0,nDocs=0,errs=[];
-  try{
-    for(let i=0;i<files.length;i++){
-      const file=files[i], isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
-      eprSay('Lecture du document '+(i+1)+' sur '+files.length+'…');
-      let d=null; const kind=aiKind();
-      if(kind==='gemini'||kind==='anthropic'){
-        try{d=await extractForEpr({images:[isPdf?file:await canvasBlob(file,2200)]},(E.hint||'').trim())}catch(e){errs.push(errCopy(e))}
-      }
-      if(!d||!(d.capacites||[]).length){
-        try{
-          eprSay('Lecture locale du document '+(i+1)+' (reconnaissance du texte)…');
-          const dl=isPdf?localData((await pdfRead(file,40)).pos):localData(await ocrItems(file));
-          if(dl&&(dl.capacites||[]).length) d={capacites:dl.capacites,notions:''};
-        }catch(e){errs.push(e&&e.message||'lecture impossible')}
-      }
-      if(!d||!(d.capacites||[]).length){continue}
-      const have=new Set(String(E.caps).split('\n').map(x=>x.trim()).filter(Boolean)), add=[];
-      for(const c of d.capacites){
-        const cap=String(c.capacite||'').replace(/\*/g,'').trim(); if(!cap) continue;
-        const ct=(c.contenus||[]).map(x=>String(x).replace(/\*/g,'').replace(/^[-•]\s*/,'').trim()).filter(Boolean);
-        const line=cap+(ct.length?' — '+ct.join(' ; '):''); if(!have.has(line)){have.add(line);add.push(line)}
-      }
-      if(add.length){E.caps=[...String(E.caps).split('\n').filter(has),...add].join('\n');nCaps+=add.length;nDocs++}
-      if(has(d.notions)) E.notions=((E.notions?E.notions+'\n\n':'')+String(d.notions).trim()).slice(0,6000);
-      if(has(d.classe)&&!EPR_CLASSES.includes(E.classe)) E.classe=String(d.classe);
-      save();
-    }
-    render();
-    eprSay(nCaps?nCaps+' capacité(s) ajoutée(s) depuis '+nDocs+' document(s). Vérifiez la liste, puis lancez la préparation.':'Aucune capacité reconnue'+(errs.length?' ('+errs[0]+')':'')+'. Essayez une photo plus nette ou saisissez les capacités à la main.',!nCaps);
-  }catch(e){eprSay(errCopy(e),true)}
-  EPR_BUSY=false;
-}
 function eprSay(t,err){const el=document.getElementById('ep-st');if(el){el.textContent=t;el.className='status genstatus'+(err?' err':' muted')}}
 async function eprAct(a,b){
   const E=eprInit();
+  if(a==='raw'){EPR_RAW=!EPR_RAW;render2();return}
+  if(a==='delfig'){const p=b&&b.dataset&&b.dataset.fp;if(p){setp(E,p,null);save();render2()}return}
   if(a==='new'){askConfirm(b,'epnew',()=>{const k=newEpr();for(const x of ['dre','insp','type','periode','annee','disc','sub','classe','coef','duree','p1','p2','p3']) k[x]=E[x];DB.epr=k;save();render()},'Effacer cette épreuve ?');return}
   if(a==='addprog'){
     const sel=document.getElementById('ep-prog'); const p=sel&&(DB.progs||[]).find(x=>x.id===sel.value); if(!p){eprSay('Choisissez d’abord une leçon.',true);return}
@@ -1708,13 +1770,7 @@ function renderEpr(){
     ${eprSel('Classe','classe',EPR_CLASSES,true)}
     ${eprFld('Coefficient','coef',{ph:'1'})}${eprFld('Durée','duree',{ph:'1h 30'})}</div></section>
    <section class="card"><h2>Capacités à évaluer</h2>
-    <div class="row" style="margin-bottom:8px">
-      <label class="btn" for="eprPhoto" style="cursor:pointer">Ajouter des photos ou captures</label><input type="file" id="eprPhoto" accept="image/*" multiple hidden>
-      <label class="btn" for="eprPdf" style="cursor:pointer">Ajouter des PDF</label><input type="file" id="eprPdf" accept="application/pdf,.pdf" multiple hidden></div>
-    <p class="muted small" style="margin:0 0 8px">Déposez autant de tableaux de capacités et contenus que vous voulez (photo, capture d’écran ou PDF), ou même un programme ou une leçon entière : les questions suivront les capacités et les contenus lus.</p>
-    <div class="grid">${eprFld('Limiter à une leçon (facultatif)','hint',{ph:'Ex. : Leçon 4 Nombres rationnels',hint:'Utile si le PDF contient tout un programme'})}</div>
     <div class="grid">${eprFld('Capacités à évaluer (une par ligne)','caps',{rows:4,wide:true,ph:'Ex. : Calculer la somme de nombres entiers naturels',hint:'Saisissez-les ou reprenez celles d’une leçon déjà préparée'})}</div>
-    ${has(E.notions)?`<div class="grid">${eprFld('Notions du cours lues (modifiables)','notions',{rows:3,wide:true})}</div>`:''}
     ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre les capacités d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités</button></div>`:''}
     <div class="grid">${eprFld('Précisions (facultatif)','ctx',{rows:2,wide:true,ph:'Ex. : contexte du marché, éviter les fractions, situation sur la construction d’un jardin…'})}
     ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
@@ -1722,12 +1778,12 @@ function renderEpr(){
     <div class="row"><button class="btn" type="button" data-epact="gen">${C?'Refaire toute l’épreuve':'Préparer l’épreuve'}</button>${C?'<button class="btn danger sm" type="button" data-epact="new">Nouvelle épreuve</button>':''}</div>
     <div id="ep-st" class="status genstatus muted" role="status" style="margin-top:10px"></div></section>`;
   if(!C) return head;
-  const part=(k,i,p)=>`<div class="moment"><h4>${esc(p.titre||'Partie')}</h4><div class="grid">${eprFld('Titre','content.'+k+'.'+i+'.titre')}${eprFld('Barème','content.'+k+'.'+i+'.bareme')}${eprFld('Énoncé','content.'+k+'.'+i+'.enonce',{rows:3,wide:true})}${eprFld('Corrigé','content.'+k+'.'+i+'.corrige',{rows:3,wide:true})}</div></div>`;
+  const part=(k,i,p)=>`<div class="moment"><h4>${esc(p.titre||'Partie')}</h4><div class="grid">${eprFld('Titre','content.'+k+'.'+i+'.titre')}${eprFld('Barème','content.'+k+'.'+i+'.bareme')}${eprFld('Énoncé','content.'+k+'.'+i+'.enonce',{rows:3,wide:true})}${eprFld('Corrigé','content.'+k+'.'+i+'.corrige',{rows:3,wide:true})}</div>${p.fig?`<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.${k}.${i}.fig">Retirer la figure de l’énoncé</button> `:''}${p.figCorr?`<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.${k}.${i}.figCorr">Retirer la figure du corrigé</button>`:''}</div>`;
   const gsum=(C.grille||[]).reduce((a,g)=>a+parseGrille(g.txt).reduce((b,x)=>b+x.pts,0),0);
   const ok=Math.abs(gsum-parseN(E.p1))<0.001;
   const edit=`<section class="card"><h2>Sujet</h2><div class="grid">
     ${eprFld('Exercice 1 : situation d’évaluation','content.situation',{rows:5,wide:true})}
-    ${(C.consignes||[]).map((c,i)=>eprFld('Consigne '+(i+1),'content.consignes.'+i,{rows:2,wide:true})).join('')}</div>
+    ${(C.consignes||[]).map((c,i)=>eprFld('Consigne '+(i+1),'content.consignes.'+i,{rows:2,wide:true})).join('')}</div>${C.figSit?'<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.figSit">Retirer la figure de la situation</button> ':''}${C.corrSitFig?'<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.corrSitFig">Retirer la figure du corrigé de la situation</button>':''}
     <div style="font-weight:700;margin:10px 0 4px">Exercice 2 : questions objectives</div>${(C.ex2||[]).map((p,i)=>part('ex2',i,p)).join('')}
     <div style="font-weight:700;margin:10px 0 4px">Exercice 3 : questions traditionnelles</div>${(C.ex3||[]).map((p,i)=>part('ex3',i,p)).join('')}</section>
    <section class="card"><h2>Corrigé et grille de correction</h2><div class="grid">
@@ -1741,9 +1797,13 @@ function renderEpr(){
    <section class="card"><h2>Télécharger l’épreuve</h2><div class="row"><button class="btn" type="button" data-epact="word">Télécharger en Word (.docx)</button><button class="btn alt" type="button" data-epact="pdf">Télécharger en PDF</button></div>
     <div id="ep-ex" class="status muted" role="status" style="margin-top:8px"></div></section>
    <div class="sheet-wrap" id="eprSheets" aria-label="Aperçu de l’épreuve"><div class="muted">Préparation de l’aperçu…</div></div>`;
-  return head+edit;
+  const iS=edit.indexOf('<section class="card"><h2>Sujet</h2>'),iI=edit.indexOf('<section class="card"><h2>Corriger avec'),iT=edit.indexOf('<section class="card"><h2>Télécharger'),iP=edit.indexOf('<div class="sheet-wrap" id="eprSheets"');
+  const rawPart=edit.slice(iS,iI),instrPart=edit.slice(iI,iT),dlPart=edit.slice(iT,iP),prevPart=edit.slice(iP);
+  const toggle=`<section class="card"><div class="row"><button class="btn alt" type="button" data-epact="raw" aria-expanded="${EPR_RAW}">${EPR_RAW?'Masquer le texte brut':'Afficher le texte brut (modifier à la main)'}</button></div><div class="muted small" style="margin-top:6px">Le texte brut contient les formules sous forme de code (par exemple $\\frac{3}{4}$). L’aperçu ci-dessus montre le résultat tel qu’il sera imprimé.</div></section>`;
+  return head+prevPart+dlPart+instrPart+toggle+(EPR_RAW?rawPart:'');
 }
 let eprPrevT=null;
+let EPR_RAW=false;
 async function eprPreview(){
   const E=eprInit(); const box=document.getElementById('eprSheets'); if(!box||!E.content) return;
   try{await ensureFonts();const pages=paginate(buildEprDoc(E));box.innerHTML=pagesHTML(eprPseudo(E),pages);
@@ -2097,7 +2157,6 @@ root.addEventListener('input',e=>{
 });
 root.addEventListener('change',e=>{
   const t=e.target,f=F();
-  if((t.id==='eprPhoto'||t.id==='eprPdf')&&t.files&&t.files.length){const fl=[...t.files];t.value='';eprImport(fl);return}
   if(t.dataset.ep){const E=eprInit();setp(E,t.dataset.ep,t.value);if(t.dataset.ep==='disc'){const dd=DISCIPLINES.find(x=>x.id===E.disc);E.sub=(dd&&dd.subs[0])||''}save();if(t.dataset.eprr||t.dataset.ep==='classe'||t.dataset.ep==='disc'){render()}else if(DB.epr.content){clearTimeout(eprPrevT);eprPrevT=setTimeout(eprPreview,300)}return}
   if(t.dataset.nb){
     const ok=setNbSeances(+t.value||1); touch(); if(!ok){render();const n=document.querySelector('.card');n&&n.insertAdjacentHTML('afterbegin','<div class="note warn" style="margin-bottom:10px">Pour réduire le nombre de séances, supprimez d’abord les séances en trop à l’étape 3 (elles contiennent du texte).</div>')} else render(); return}
