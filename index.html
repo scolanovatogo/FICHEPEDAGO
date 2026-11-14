@@ -758,14 +758,14 @@ function diagText(){
 function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=()=>rej(new Error('Lecture du fichier impossible'));r.onload=()=>res(String(r.result).split(',')[1]);r.readAsDataURL(b)})}
 async function geminiCheck(r){
   if(r.ok) return r.json();
-  let msg='',j=null; try{j=await r.json();msg=(j.error&&(j.error.message||(typeof j.error==='string'?j.error:'')))||j.message||''}catch(e){}
+  let msg='',j=null; try{j=await r.json();msg=(j.error&&j.error.message)||''}catch(e){}
   const e={code:'http_'+r.status,message:msg,raw:JSON.stringify(j||{})};
   if(r.status===400&&/api key/i.test(msg)) e.message='Clé Gemini invalide. Vérifiez qu’elle est copiée en entier dans les Réglages.';
   else if(r.status===403) e.message='Clé Gemini refusée ou service non autorisé dans votre compte. '+msg;
   else if(r.status===429) {e.code='rate_limited';e.message='Limite de requêtes Gemini atteinte. Patientez un peu puis recommencez : ce qui est déjà rédigé est conservé.'}
-  else if(r.status===404){e.code='model_gone';e.message=(DB.ai&&DB.ai.proxy)?'Le serveur Cloudflare ne reconnaît pas l’adresse demandée (erreur 404). Vérifiez que son code a bien été remplacé par le code fourni, puis cliquez sur « Déployer ».':(msg||'Modèle Gemini introuvable.')}
+  else if(r.status===404) e.code='model_gone';
   else if(r.status===503||r.status===500||r.status===502||r.status===504) {e.code='service_busy';e.message='Les serveurs Gemini sont temporairement surchargés (erreur '+r.status+'). Nouvelle tentative ou changement automatique de modèle…'}
-  else e.message=(DB.ai&&DB.ai.proxy)?('Le serveur Cloudflare a répondu par l’erreur '+r.status+(msg?' : '+msg:'')+'. Vérifiez la clé GEMINI_API_KEY enregistrée dans les paramètres du serveur.'):(msg||('Erreur Gemini ('+r.status+')'));
+  else e.message=msg||('Erreur Gemini ('+r.status+')');
   throw e;
 }
 function geminiFetch(url,options,timeoutMs){
@@ -774,16 +774,11 @@ function geminiFetch(url,options,timeoutMs){
   return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>clearTimeout(timer));
 }
 function gBase(){return String((DB.ai&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
-function netMsg(e){
-  const p=String((DB.ai&&DB.ai.proxy)||'').trim();
-  const d=(e&&e.message)?String(e.message):String(e||'');
-  return p?('Impossible de joindre le serveur Cloudflare ('+p.replace(/^https?:\/\//,'')+'). Causes possibles : le serveur est arrêté ou mal collé, son code n’autorise pas les appels depuis ce site (CORS), ou la connexion Internet est coupée. Détail technique : '+d):'Connexion à Gemini impossible : vérifiez votre connexion Internet. Détail technique : '+d;
-}
 function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};if(key&&key!=='proxy')h['x-goog-api-key']=key;return h}
 async function geminiModelList(key){
   let r;
   try{r=await geminiFetch(gBase()+'/v1beta/models?pageSize=200',{headers:gHeaders(key||DB.ai.key)},12000)}
-  catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Gemini met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':netMsg(e)}}
+  catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Gemini met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':'Connexion à Gemini impossible : vérifiez votre connexion Internet.'}}
   const j=await geminiCheck(r);
   const list=(j.models||[])
     .filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
@@ -844,7 +839,7 @@ async function geminiJson(prompt,opts){
   const isTest=!!opts.test;
   let waits=0,lastError=null,models;
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
-  catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw (e.code==='network'?e:{code:'network',message:netMsg(e)});throw e}
+  catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle Gemini disponible avec cette clé.'};
   const order=()=>{const k=GEM.good&&keys.includes(GEM.good)?[GEM.good,...keys.filter(x=>x!==GEM.good)]:keys.slice();const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
   for(let round=0;round<(isTest?1:7);round++){
@@ -861,7 +856,7 @@ async function geminiJson(prompt,opts){
           body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.7,responseMimeType:'application/json'}})},isTest?15000:60000);
       }catch(e){
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Gemini met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
-        throw {code:'network',message:netMsg(e)}
+        throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'}
       }
       let j;
       try{j=await geminiCheck(r)}catch(e){
@@ -1417,7 +1412,7 @@ async function generateAll(f,o){
     setGen('Répartition des capacités sur les '+n+' séance(s)…');
     try{await planSeances(f,o)}
     catch(e){
-      if(e&&(e.code==='rate_limited'||e.code==='service_busy'||e.code==='cancelled'||e.code==='not_granted'||e.code==='fatal'||e.code==='network'||e.code==='timeout'||e.code==='no_ai'||/^http_/.test(e.code||''))) throw e;
+      if(e&&(e.code==='rate_limited'||e.code==='service_busy'||e.code==='cancelled'||e.code==='not_granted'||e.code==='fatal')) throw e;
       planLocal(f,o);
       setGen('Le service IA a tardé à répartir les capacités. Répartition locale effectuée automatiquement ; préparation des séances…');
     }
@@ -1433,7 +1428,7 @@ async function generateAll(f,o){
           if(attempt<2){setGen('La séance '+(i+1)+' est incomplète. Nouvelle tentative automatique…');await geminiWait(900)}
         }
       }
-      if(!ok){failed.push(i+1); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal'||last.code==='network'||last.code==='timeout'||last.code==='no_ai'||/^http_/.test(last.code||''))) throw last;}
+      if(!ok){failed.push(i+1); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')) throw last;}
     }
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
     else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' : cliquez à nouveau sur « Préparer les séances » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.',failed.length>0);
@@ -1794,11 +1789,6 @@ root.addEventListener('click',async e=>{
     b.disabled=true; setGen('Test de la connexion à Gemini…');
     try{
       const rep=[];
-      if(DB.ai.proxy){
-        let pr; try{pr=await geminiFetch(gBase()+'/v1beta/models?pageSize=3',{},15000)}catch(e){throw {code:'network',message:netMsg(e)}}
-        if(!pr.ok){let t='';try{t=(await pr.text()).slice(0,240)}catch(e){}
-          throw {code:'http_'+pr.status,message:'Le serveur Cloudflare répond par l’erreur '+pr.status+(t?' : '+t:'')+'. Si le message parle de clé (API key), enregistrez la clé GEMINI_API_KEY dans les paramètres du serveur.'}}
-      }
       if(!DB.ai.proxy) for(let i=0;i<3;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
       const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((DB.ai.proxy?'Serveur joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
     catch(e){DB.ai.model='';setGen(errCopy(e),true)}
