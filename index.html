@@ -271,12 +271,13 @@ const SEED_PROGS=[
    Stockage local
    ========================================================= */
 const KEY='fiches-pedagogiques-v1';
+const DEFAULT_PROXY='https://broad-bird-8227.avognonk.workers.dev';
 let DB={profile:null,fiches:[],cur:null,progs:null,ai:{key:'',keys:['','',''],model:''}};
 let memOnly=false;
 function loadDB(){
   try{const r=localStorage.getItem(KEY); if(r) DB=Object.assign(DB,JSON.parse(r));}catch(e){memOnly=true}
   if(!DB.progs) DB.progs=JSON.parse(JSON.stringify(SEED_PROGS));
-  if(!DB.ai) DB.ai={key:'',model:''}; if(!Array.isArray(DB.ai.keys)) DB.ai.keys=[DB.ai.key||'','','']; DB.ai.keys=[0,1,2].map(i=>String(DB.ai.keys[i]||'')); if(!DB.ai.key) DB.ai.key=DB.ai.keys.find(Boolean)||''; if(DB.ai.provider===undefined) DB.ai.provider=''; if(DB.ai.ckey===undefined){DB.ai.ckey='';DB.ai.cmodel=''}
+  if(!DB.ai) DB.ai={key:'',model:''}; if(!Array.isArray(DB.ai.keys)) DB.ai.keys=[DB.ai.key||'','','']; DB.ai.keys=[0,1,2].map(i=>String(DB.ai.keys[i]||'')); if(!DB.ai.key) DB.ai.key=DB.ai.keys.find(Boolean)||''; if(DB.ai.proxy===undefined) DB.ai.proxy=DEFAULT_PROXY; if(DB.ai.provider===undefined) DB.ai.provider=''; if(DB.ai.ckey===undefined){DB.ai.ckey='';DB.ai.cmodel=''}
   for(const f of DB.fiches) for(const s of f.seances) ensureSeance(s,f.tpl);
 }
 let saveT=null;
@@ -748,7 +749,7 @@ function errCopy(e){
 const NO_IMG='La lecture de photos n’est pas disponible dans votre affichage actuel (Claude n’y reçoit pas les images). Importez plutôt le programme en PDF.';
 const NO_AI='La rédaction automatique n’est pas activée. Activez-la dans l’onglet Réglages avec une clé Gemini gratuite (1 minute, compte Gmail) ou une clé Claude (payante, meilleure qualité). La lecture des PDF et des photos fonctionne déjà sans clé.';
 function setGen(msg,err){GEN.msg=msg;GEN.err=!!err;document.querySelectorAll('.genstatus').forEach(el=>{el.textContent=msg;el.className='status genstatus'+(err?' err':'')})}
-function geminiKeys(){const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,3)}
+function geminiKeys(){if(DB.ai&&String(DB.ai.proxy||'').trim()) return ['proxy'];const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,3)}
 function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
   const k=aiKind(); const nm={gemini:'Gemini',anthropic:'Claude (clé Anthropic)',claude:'Claude'}[k];
@@ -772,9 +773,11 @@ function geminiFetch(url,options,timeoutMs){
   const timer=setTimeout(()=>controller.abort(),timeoutMs||12000);
   return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>clearTimeout(timer));
 }
-async function geminiModelList(){
+function gBase(){return String((DB.ai&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
+function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};if(key&&key!=='proxy')h['x-goog-api-key']=key;return h}
+async function geminiModelList(key){
   let r;
-  try{r=await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',{headers:{'x-goog-api-key':DB.ai.key}},12000)}
+  try{r=await geminiFetch(gBase()+'/v1beta/models?pageSize=200',{headers:gHeaders(key||DB.ai.key)},12000)}
   catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Gemini met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':'Connexion à Gemini impossible : vérifiez votre connexion Internet.'}}
   const j=await geminiCheck(r);
   const list=(j.models||[])
@@ -792,7 +795,7 @@ async function geminiModel(){
   DB.ai.model=pick; save(); return pick;
 }
 function geminiWait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
-const GEM={last:0,gap:1800,dead:{},hot:{},keyIndex:0};
+const GEM={klast:{},gap:1800,hot:{},dead:{},good:'',list:null,listAt:0};
 function retryDelayOf(e){
   const m=/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(e&&e.raw||'')||/retry in (\d+(?:\.\d+)?)s/i.exec(e&&e.message||'');
   return m?Math.ceil(parseFloat(m[1])):0;
@@ -804,12 +807,11 @@ async function gemPause(sec,why){
     await geminiWait(1000);
   }
 }
-async function gemModels(){
-  if(!GEM.list||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList();GEM.listAt=Date.now()}
+async function gemModels(key){
+  if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   const list=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
-  // le modèle qui a déjà fonctionné d'abord, puis les autres : chaque modèle a son propre quota gratuit
   const pref=DB.ai.model&&list.includes(DB.ai.model)?[DB.ai.model]:[];
-  return [...pref,...list.filter(n=>n!==pref[0])].slice(0,6);
+  return [...pref,...list.filter(n=>n!==pref[0])].slice(0,5);
 }
 function fixJsonText(t){
   return String(t)
@@ -830,29 +832,30 @@ function cleanDeep(o){
 }
 async function geminiJson(prompt,opts){
   opts=opts||{};
-  const configuredKeys=geminiKeys();
-  if(!configuredKeys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé Gemini dans Réglages.'};
-  GEM.keyIndex=0; DB.ai.key=configuredKeys[0]; GEM.list=null;
+  const keys=geminiKeys();
+  if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé Gemini dans Réglages.'};
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
   const isTest=!!opts.test;
-  let waits=0,lastError=null;
-  for(let round=0;round<(isTest?1:6);round++){
-    let models;
-    try{models=await gemModels()}catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'};throw e}
-    if(!models.length) throw lastError||{code:'rate_limited',message:'Le quota gratuit du jour est épuisé sur tous les modèles Gemini disponibles pour cette clé. Recommencez demain : ce qui est déjà rédigé est conservé.'};
-    let minWait=0;
-    for(const model of models){
-      if(GEM.hot[model]>Date.now()){minWait=Math.max(1,Math.ceil((GEM.hot[model]-Date.now())/1000));continue}
-      const gap=GEM.last+GEM.gap-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
+  let waits=0,lastError=null,models;
+  try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
+  catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'};throw e}
+  if(!models.length) throw {code:'rate_limited',message:'Aucun modèle Gemini disponible avec cette clé.'};
+  const order=()=>{const k=GEM.good&&keys.includes(GEM.good)?[GEM.good,...keys.filter(x=>x!==GEM.good)]:keys.slice();const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
+  for(let round=0;round<(isTest?1:7);round++){
+    let soonest=0;
+    for(const [key,model] of order()){
+      const hk=key+'|'+model;
+      if(GEM.hot[hk]>Date.now()){const w=Math.ceil((GEM.hot[hk]-Date.now())/1000);soonest=soonest?Math.min(soonest,w):w;continue}
+      const gap=(GEM.klast[key]||0)+GEM.gap-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(GEN.stop&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
-      GEM.last=Date.now();
+      GEM.klast[key]=Date.now();
       let r;
       try{
-        r=await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':DB.ai.key},
+        r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
           body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.7,responseMimeType:'application/json'}})},isTest?15000:60000);
       }catch(e){
-        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Gemini met trop de temps à répondre.'};continue}
+        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Gemini met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
         throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'}
       }
       let j;
@@ -860,29 +863,28 @@ async function geminiJson(prompt,opts){
         lastError=e;
         if(e.code==='rate_limited'){
           const perDay=/PerDay|per day|daily/i.test(e.raw||'')||/limit:\s*0\b/.test(e.raw||'');
-          GEM.dead[model]=Date.now()+(perDay?6*3600e3:90000);
-          if(GEM.keyIndex<configuredKeys.length-1){GEM.keyIndex++;DB.ai.key=configuredKeys[GEM.keyIndex];GEM.list=null;GEM.dead={};GEM.hot={};minWait=0;break;}
-          const d=retryDelayOf(e)||60; minWait=minWait?Math.min(minWait,d+2):d+2;
-          continue;
+          const d=retryDelayOf(e)||65;
+          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);
+          continue;                      // clé ou modèle suivant, sans attendre
         }
-        if(e.code==='service_busy'||e.code==='model_gone'){if(e.code==='model_gone')GEM.dead[model]=Date.now()+24*3600e3;continue}
+        if(e.code==='service_busy'){GEM.hot[hk]=Date.now()+8000;continue}
+        if(e.code==='model_gone'){GEM.dead[model]=Date.now()+24*3600e3;continue}
         throw e;
       }
-      DB.ai.model=model;save();
+      GEM.good=key; if(DB.ai.model!==model){DB.ai.model=model;save()}
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
       const tryParse=x=>{try{return JSON.parse(fixJsonText(x))}catch(e){return JSON.parse(x)}};
       try{return cleanDeep(tryParse(txt))}catch(e){const m=/\{[\s\S]*\}/.exec(txt);if(m){try{return cleanDeep(tryParse(m[0]))}catch(e2){}}lastError={code:'invalid_json',message:'Réponse non exploitable de Gemini.'};continue}
     }
-    // tous les modèles essayés ont échoué : pause automatique puis reprise
     if(isTest) break;
-    const alive=(await gemModels().catch(()=>[])).length;
-    if(!alive) break;
-    if(++waits>5) break;
-    await gemPause(Math.min(75,Math.max(8,minWait||15)),'Gemini limite le nombre de demandes gratuites par minute.');
+    // toutes les clés et tous les modèles sont momentanément limités : pause automatique puis reprise
+    if(!soonest||++waits>5) break;
+    if(soonest>180) break;               // quota du jour épuisé partout
+    await gemPause(Math.min(75,Math.max(5,soonest)),'Les '+(keys.length>1?keys.length+' clés Gemini sont':'quotas Gemini sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
   }
   if(lastError&&lastError.code==='invalid_json') throw lastError;
-  if(lastError&&lastError.code==='rate_limited') throw {code:'rate_limited',message:'Le quota gratuit de Gemini est atteint (limite par minute ou par jour). Ce qui est déjà rédigé est conservé : cliquez à nouveau sur « Préparer les séances » dans quelques minutes, ou demain si le quota du jour est épuisé.'};
+  if(lastError&&lastError.code==='rate_limited') throw {code:'rate_limited',message:'Le quota gratuit de Gemini est atteint sur '+(keys.length>1?'toutes vos clés':'votre clé')+' (limite par minute ou par jour). Ce qui est déjà rédigé est conservé : cliquez à nouveau sur « Préparer les séances » dans quelques minutes, ou demain si le quota du jour est épuisé.'};
   throw {code:'service_busy',message:'Gemini est momentanément indisponible. Réessayez dans quelques minutes. Votre fiche et les textes déjà rédigés sont conservés.'};
 }
 async function claudeJson(prompt,opts){
@@ -1305,7 +1307,9 @@ function ctxSuggest(f,i){let h=0;const t=String(f.titre||f.theme||'');for(let k=
 const SIT_PROGRESS='PROGRESSION (règle n°2) : regarde « numeroSeance » et « acquisAnterieurs ». SÉANCE 1 : la situation s’appuie sur des acquis des classes antérieures ou des leçons précédentes (choisis-en un ou deux dans acquisAnterieurs, ceux qui servent le mieux la capacité) pour faire construire la première notion de la leçon. SÉANCES SUIVANTES : elle s’appuie, chaque fois que c’est possible, sur ce qui vient d’être vu aux séances précédentes de la même leçon (seancesPrecedentes : leurs capacités et contenus), en plus des acquis antérieurs. Tu ne mobilises JAMAIS une notion qui n’a été vue ni dans acquisAnterieurs, ni aux séances précédentes, ni dans la séance du jour. MATÉRIEL SIMPLE (règle n°3) : la situation ne repose que sur ce que des élèves peuvent lire, mesurer ou constater eux-mêmes : étiquette, facture, plaque signalétique, notice, schéma, objet du quotidien, mesure à la règle. N’invente jamais l’observation de particules, d’atomes, d’ions ou de charges, ni une expérience compliquée. Exemple pour les ions : une étiquette d’eau minérale ou d’engrais portant des symboles comme Ca²⁺, Cl⁻ ou NO₃⁻, et la question demande le nom et le type de chacun (n’en tire rien si la leçon est différente).';
 const SIT_RECIPE='ANCRAGE (règle n°1) : le tableau du programme a deux colonnes, les CAPACITÉS (à gauche) et les CONTENUS (à droite). La situation est construite à partir des DEUX : passe en revue chaque contenu de « contenusDeLaSeance » ; les données et la question doivent amener les élèves à rencontrer TOUS ces contenus (aucun oublié, aucun ajouté), et la question finale doit être celle dont la réponse demande la capacité visée sans la nommer, ni nommer les contenus ; elle découle directement de la phrase écrite (mêmes objets, mêmes données) et ne porte jamais sur autre chose. RECETTE DE LA SITUATION : (1) un personnage réel du quotidien togolais (prénom varié) qui a un BESOIN ou une DÉCISION à prendre (acheter, partager, construire, réparer, comparer deux offres, vérifier un compte, mesurer un terrain…) ; (2) des données plausibles pour le Togo (prix en FCFA réalistes, mesures et distances vraisemblables, nombres simples) ; (3) une question ouverte qui oblige à calculer, mesurer, comparer ou conjecturer avec les seuls prérequis, sans nommer la notion. CADRE : utilise celui de « contexteSuggere » (change-le seulement s’il est incompatible avec la leçon) ; ne reprends ni le cadre, ni le personnage, ni le type de question des « situationsDejaEcrites » ; évite le marché de Lomé et Kpalimé s’ils ne sont pas proposés. À ÉVITER : l’exercice déguisé (« Un commerçant a 5 sacs… Calcule… »), les données inventées sans raison, une question dont la réponse est évidente ou qu’on ne se poserait jamais dans la vie, une consigne qui donne déjà la méthode. VÉRIFIE avant de répondre : un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? toutes les données sont-elles dans le texte ? la situation fait-elle sentir le besoin de la notion ? le nombre de mots est-il respecté ?';
 const SIT_INTENT='"intention": en une phrase (non affichée), ce que les élèves vont observer, mesurer, comparer ou constater dans la situation et qui les mènera à la notion de la séance ;\n';
+const SIT_VERIFY=false;
 async function verifySituation(f,s,d,extra){
+  if(!SIT_VERIFY) return null;
   if(!d||!has(d.situation)) return null;
   const p=`Tu es inspecteur pédagogique très exigeant (${discLabel(f)}, ${f.classe||'collège'}). Voici la capacité visée par une séance, ses contenus et la situation d’apprentissage proposée, qui doit INTRODUIRE cette capacité avant le cours.
 Capacité : ${[s.capNum,s.capTitre].filter(has).join(' : ')}
@@ -1673,7 +1677,7 @@ function renderMes(){
     <div class="muted small" style="margin-top:8px">Ces coordonnées sont reprises dans toute nouvelle fiche.</div></section>`;
 }
 function renderSet(){
-  const k=aiKind(); const has_=!!(DB.ai&&DB.ai.key);
+  const k=aiKind(); const has_=geminiKeys().length>0;
   return `<section class="card"><h2>Rédaction automatique <small>Gemini (gratuit)</small></h2>
    <p class="small" style="margin:0 0 10px">L’application lit seule vos PDF et vos photos, relève la compétence, les capacités, les contenus et le nombre de séances, et répartit les capacités sur les séances. Pour <b>rédiger</b> la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices, elle a besoin d’un service d’IA :</p>
    <div class="note" style="margin-bottom:10px">Les services d’IA entièrement sans compte ne sont plus fiables (je les ai vérifiés : le texte y est limité ou payant). La solution gratuite et stable est une <b>clé Gemini</b> : elle s’obtient en une minute avec votre compte Gmail, sans carte bancaire.</div>
@@ -1682,6 +1686,7 @@ function renderSet(){
     <li>Appuyez sur « Create API key », puis copiez la clé. Pas de carte bancaire.</li>
     <li>Collez-la ci-dessous.</li></ol>
    ${[0,1,2].map(i=>`<label class="f" for="aiKey${i+1}" style="max-width:520px">Clé Gemini ${i+1} ${i===0?'(principale)':'(secours)'}<input type="password" id="aiKey${i+1}" autocomplete="off" value="${esc((DB.ai.keys||[])[i]|| (i===0?DB.ai.key:''))}" placeholder="AIza…"></label>`).join('')}
+   <label class="f" for="aiProxy" style="max-width:520px;margin-top:8px">Adresse du serveur <span class="hint">facultatif : si vous avez mis en place le serveur (Cloudflare), il garde les clés à la place de cet appareil</span><input type="url" id="aiProxy" autocomplete="off" value="${esc(DB.ai.proxy||'')}" placeholder="https://fiches.votre-nom.workers.dev"></label>
    <div class="row" style="margin-top:10px"><button class="btn" id="aiSave">Enregistrer les clés et tester</button>${has_?'<button class="btn danger" id="aiClear">Effacer la clé</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="muted small" style="margin-top:8px">État actuel : ${esc(diagText())}${DB.ai.model?' · modèle '+esc(DB.ai.model):''}</div>
@@ -1779,14 +1784,17 @@ root.addEventListener('click',async e=>{
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
   if(b.id==='aiSave'){
-    const vals=[1,2,3].map(i=>(document.getElementById('aiKey'+i).value||'').trim()); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; GEM.keyIndex=0; GEM.list=null; save();
-    const v=DB.ai.key; if(!v){setGen('Aucune clé saisie.',true);return}
+    const vals=[1,2,3].map(i=>(document.getElementById('aiKey'+i).value||'').trim()); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; DB.ai.proxy=(document.getElementById('aiProxy').value||'').trim().replace(/\/+$/,''); GEM.list=null;GEM.hot={};GEM.dead={};GEM.good=''; save();
+    if(!geminiKeys().length){setGen('Aucune clé saisie.',true);return}
     b.disabled=true; setGen('Test de la connexion à Gemini…');
-    try{const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen('Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.');render2()}
+    try{
+      const rep=[];
+      if(!DB.ai.proxy) for(let i=0;i<3;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
+      const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((DB.ai.proxy?'Serveur joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
     catch(e){DB.ai.model='';setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
-  if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=['','',''];DB.ai.model='';save();setGen('Clé effacée.');render2();return}
+  if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=['','',''];DB.ai.model='';DB.ai.proxy='';save();setGen('Clé effacée.');render2();return}
   if(b.id==='claudeSave'){
     const v=(document.getElementById('claudeKey').value||'').trim(); const m=(document.getElementById('claudeModel').value||'').trim()||'claude-sonnet-5-5';
     if(!v){setGen('Aucune clé Claude saisie.',true);return}
