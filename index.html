@@ -392,10 +392,12 @@ function buildDoc(f0){
   }
   /* --- Séances --- */
   sea.forEach((s,i)=>{
+    const startIdx=doc.length;
     const ord=ORD[i]||(i+1)+'e';
     const titre=A?('**'+ord+' séance : '+(has(s.capNum)?mk(s.capNum)+' : ':'')+'[[blue:'+mk(s.capTitre)+']]**')
                 :('**Séance '+(i+1)+' : '+(has(s.capNum)?mk(s.capNum)+' : ':'')+'[[blue:'+mk(s.capTitre)+']]**');
     if(A){
+      doc.push({t:'p',lines:[titre],keep:true,gap:6});
       doc.push({t:'p',lines:['__Situation d’apprentissage ('+ord.toLowerCase()+' séance)__'],keep:true,gap:4});
       if(has(s.situation)) doc.push({t:'p',lines:lines(s.situation),bold:true,just:true,gap:has(s.img)?2:8,keep:true});
       if(s.img) doc.push({t:'img',img:s.img,gap:8});
@@ -405,7 +407,7 @@ function buildDoc(f0){
     const head=[row([cell(['**Moments Didactiques et Durées**']),cell(['**Activités du professeur**']),cell([A?'**Activité des élèves (Tâches et modalités de travail des élèves)**':'**Activités de l’élève**'])])];
     if(!A) head[0]=row([cell(['**Moments didactiques**']),cell(['**Activités de l’enseignant**']),cell(['**Activités de l’élève**'])]);
     const rows=[];
-    rows.push(row([cell([titre],{span:3,shade:A?null:null})],{keep:true}));
+    if(!A) rows.push(row([cell([titre],{span:3})],{keep:true}));
     const mo=(k,opts)=>{const m=s.m[k]; const lab=[];
       const first=[]; if(has(m.label)) first.push(m.label); (m.duree?String(m.duree).split('\n'):[]).forEach(d=>first.push('**'+d+'**'));
       return row([cell(first,Object.assign({sm:true},opts?.c1||{})),cell(lines(m.prof)),cell(lines(m.eleve),{just:A})])};
@@ -747,25 +749,25 @@ function errCopy(e){
   return 'Échec : '+(e&&e.message?e.message:'réessayez');
 }
 const NO_IMG='La lecture de photos n’est pas disponible dans votre affichage actuel (Claude n’y reçoit pas les images). Importez plutôt le programme en PDF.';
-const NO_AI='La rédaction automatique n’est pas activée. Activez-la dans l’onglet Réglages avec une clé Gemini gratuite (1 minute, compte Gmail) ou une clé Claude (payante, meilleure qualité). La lecture des PDF et des photos fonctionne déjà sans clé.';
+const NO_AI='La rédaction automatique n’est pas activée. Activez-la dans l’onglet Réglages avec une clé gratuite (1 minute, compte Gmail) ou une clé Claude (payante, meilleure qualité). La lecture des PDF et des photos fonctionne déjà sans clé.';
 function setGen(msg,err){GEN.msg=msg;GEN.err=!!err;document.querySelectorAll('.genstatus').forEach(el=>{el.textContent=msg;el.className='status genstatus'+(err?' err':'')})}
 function geminiKeys(){if(DB.ai&&String(DB.ai.proxy||'').trim()) return ['proxy'];const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,3)}
 function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
-  const k=aiKind(); const nm={gemini:'Gemini',anthropic:'Claude (clé Anthropic)',claude:'Claude'}[k];
-  return 'Lecture du document : locale (PDF avec texte, photo par reconnaissance de texte)'+(nm?' + '+nm:'')+' · Rédaction des séances : '+(nm||(k==='free'?'service gratuit sans compte (expérimental)':'désactivée (voir Réglages)'));
+  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',claude:'Claude'}[k];
+  return 'Lecture du document : locale (PDF avec texte, photo par reconnaissance de texte)'+(k==='gemini'?' + lecture assistée':nm?' + '+nm:'')+' · Rédaction des séances : '+(nm||(k==='free'?'service gratuit sans compte (expérimental)':'désactivée (voir Réglages)'));
 }
 function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=()=>rej(new Error('Lecture du fichier impossible'));r.onload=()=>res(String(r.result).split(',')[1]);r.readAsDataURL(b)})}
 async function geminiCheck(r){
   if(r.ok) return r.json();
   let msg='',j=null; try{j=await r.json();msg=(j.error&&j.error.message)||''}catch(e){}
   const e={code:'http_'+r.status,message:msg,raw:JSON.stringify(j||{})};
-  if(r.status===400&&/api key/i.test(msg)) e.message='Clé Gemini invalide. Vérifiez qu’elle est copiée en entier dans les Réglages.';
-  else if(r.status===403) e.message='Clé Gemini refusée ou service non autorisé dans votre compte. '+msg;
-  else if(r.status===429) {e.code='rate_limited';e.message='Limite de requêtes Gemini atteinte. Patientez un peu puis recommencez : ce qui est déjà rédigé est conservé.'}
+  if(r.status===400&&/api key/i.test(msg)) e.message='Clé invalide. Vérifiez qu’elle est copiée en entier dans les Réglages.';
+  else if(r.status===403) e.message='Clé refusée ou service non autorisé dans votre compte. '+msg;
+  else if(r.status===429) {e.code='rate_limited';e.message='Limite de requêtes du service de rédaction atteinte. Patientez un peu puis recommencez : ce qui est déjà rédigé est conservé.'}
   else if(r.status===404) e.code='model_gone';
-  else if(r.status===503||r.status===500||r.status===502||r.status===504) {e.code='service_busy';e.message='Les serveurs Gemini sont temporairement surchargés (erreur '+r.status+'). Nouvelle tentative ou changement automatique de modèle…'}
-  else e.message=msg||('Erreur Gemini ('+r.status+')');
+  else if(r.status===503||r.status===500||r.status===502||r.status===504) {e.code='service_busy';e.message='Les serveurs du service de rédaction sont temporairement surchargés (erreur '+r.status+'). Nouvelle tentative ou changement automatique de modèle…'}
+  else e.message=msg||('Erreur du service de rédaction ('+r.status+')');
   throw e;
 }
 function geminiFetch(url,options,timeoutMs){
@@ -778,7 +780,7 @@ function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};
 async function geminiModelList(key){
   let r;
   try{r=await geminiFetch(gBase()+'/v1beta/models?pageSize=200',{headers:gHeaders(key||DB.ai.key)},12000)}
-  catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Gemini met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':'Connexion à Gemini impossible : vérifiez votre connexion Internet.'}}
+  catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Le service de rédaction met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}}
   const j=await geminiCheck(r);
   const list=(j.models||[])
     .filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
@@ -791,7 +793,7 @@ async function geminiModel(){
   if(DB.ai.model) return DB.ai.model;
   const list=await geminiModelList();
   const pick=list[0];
-  if(!pick) throw {message:'Aucun modèle Gemini compatible avec la rédaction n’est disponible pour cette clé.'};
+  if(!pick) throw {message:'Aucun modèle compatible avec la rédaction n’est disponible pour cette clé.'};
   DB.ai.model=pick; save(); return pick;
 }
 function geminiWait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
@@ -833,14 +835,14 @@ function cleanDeep(o){
 async function geminiJson(prompt,opts){
   opts=opts||{};
   const keys=geminiKeys();
-  if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé Gemini dans Réglages.'};
+  if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé gratuite dans Réglages.'};
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
   const isTest=!!opts.test;
   let waits=0,lastError=null,models;
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
-  catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'};throw e}
-  if(!models.length) throw {code:'rate_limited',message:'Aucun modèle Gemini disponible avec cette clé.'};
+  catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
+  if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
   const order=()=>{const k=GEM.good&&keys.includes(GEM.good)?[GEM.good,...keys.filter(x=>x!==GEM.good)]:keys.slice();const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
   for(let round=0;round<(isTest?1:7);round++){
     let soonest=0;
@@ -855,8 +857,8 @@ async function geminiJson(prompt,opts){
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
           body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.7,responseMimeType:'application/json'}})},isTest?15000:60000);
       }catch(e){
-        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Gemini met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
-        throw {code:'network',message:'Connexion à Gemini impossible : vérifiez votre connexion Internet.'}
+        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
+        throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}
       }
       let j;
       try{j=await geminiCheck(r)}catch(e){
@@ -875,17 +877,17 @@ async function geminiJson(prompt,opts){
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
       const tryParse=x=>{try{return JSON.parse(fixJsonText(x))}catch(e){return JSON.parse(x)}};
-      try{return cleanDeep(tryParse(txt))}catch(e){const m=/\{[\s\S]*\}/.exec(txt);if(m){try{return cleanDeep(tryParse(m[0]))}catch(e2){}}lastError={code:'invalid_json',message:'Réponse non exploitable de Gemini.'};continue}
+      try{return cleanDeep(tryParse(txt))}catch(e){const m=/\{[\s\S]*\}/.exec(txt);if(m){try{return cleanDeep(tryParse(m[0]))}catch(e2){}}lastError={code:'invalid_json',message:'Réponse non exploitable du service de rédaction.'};continue}
     }
     if(isTest) break;
     // toutes les clés et tous les modèles sont momentanément limités : pause automatique puis reprise
     if(!soonest||++waits>5) break;
     if(soonest>180) break;               // quota du jour épuisé partout
-    await gemPause(Math.min(75,Math.max(5,soonest)),'Les '+(keys.length>1?keys.length+' clés Gemini sont':'quotas Gemini sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
+    await gemPause(Math.min(75,Math.max(5,soonest)),'Les '+(keys.length>1?keys.length+' clés sont':'quotas sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
   }
   if(lastError&&lastError.code==='invalid_json') throw lastError;
-  if(lastError&&lastError.code==='rate_limited') throw {code:'rate_limited',message:'Le quota gratuit de Gemini est atteint sur '+(keys.length>1?'toutes vos clés':'votre clé')+' (limite par minute ou par jour). Ce qui est déjà rédigé est conservé : cliquez à nouveau sur « Préparer les séances » dans quelques minutes, ou demain si le quota du jour est épuisé.'};
-  throw {code:'service_busy',message:'Gemini est momentanément indisponible. Réessayez dans quelques minutes. Votre fiche et les textes déjà rédigés sont conservés.'};
+  if(lastError&&lastError.code==='rate_limited') throw {code:'rate_limited',message:'Le quota gratuit du service de rédaction est atteint sur '+(keys.length>1?'toutes vos clés':'votre clé')+' (limite par minute ou par jour). Ce qui est déjà rédigé est conservé : cliquez à nouveau sur « Préparer les séances » dans quelques minutes, ou demain si le quota du jour est épuisé.'};
+  throw {code:'service_busy',message:'Le service de rédaction est momentanément indisponible. Réessayez dans quelques minutes. Votre fiche et les textes déjà rédigés sont conservés.'};
 }
 async function claudeJson(prompt,opts){
   try{return await SAMPLE.json(prompt,Object.assign({modelTier:'default'},opts&&opts.images?{images:opts.images}:{}))}
@@ -955,7 +957,7 @@ async function freeJson(prompt){
     if(e&&e.name==='AbortError') throw {code:'timeout',message:'Le service IA ne répond pas après 45 secondes. La répartition locale va prendre le relais.'};
     throw {code:'network',message:'Le service gratuit est inaccessible : vérifiez votre connexion Internet.'};
   }
-  if(!r.ok){ clearTimeout(timer); if(r.status===429) throw {code:'rate_limited',message:'Le service gratuit est saturé. Patientez une minute puis recommencez : ce qui est déjà rédigé est conservé.'}; throw {code:'http_'+r.status,message:'Le service gratuit ne répond pas pour le moment (erreur '+r.status+'). Réessayez plus tard ou utilisez une clé Gemini.'} }
+  if(!r.ok){ clearTimeout(timer); if(r.status===429) throw {code:'rate_limited',message:'Le service gratuit est saturé. Patientez une minute puis recommencez : ce qui est déjà rédigé est conservé.'}; throw {code:'http_'+r.status,message:'Le service gratuit ne répond pas pour le moment (erreur '+r.status+'). Réessayez plus tard ou utilisez une clé gratuite.'} }
   let j; try{j=await r.json()}catch(e){clearTimeout(timer);if(e&&e.name==='AbortError')throw {code:'timeout',message:'Le service IA ne répond pas après 45 secondes. La répartition locale va prendre le relais.'};throw {code:'invalid_json',message:'Réponse illisible du service gratuit.'}}
   clearTimeout(timer);
   let txt=String((((j.choices||[])[0]||{}).message||{}).content||'').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
@@ -1055,10 +1057,10 @@ async function importGuide(file){
   const add=(txt,note)=>{f.guide=((f.guide?f.guide+'\n\n':'')+String(txt).trim()).slice(0,9000);touch();say(note);render()};
   if(aiKind()==='gemini'&&file.size<14e6){
     try{
-      say('Lecture du document par Gemini…');
+      say('Lecture du document…');
       const d=await ask('Transcris fidèlement, en français, le texte de ce document officiel d’accompagnement (programme éducatif, guide) '+(key?'en te limitant aux pages et sections qui concernent la leçon « '+key+' » (et le contexte indispensable)':'')+'. Si le document est un tableau en colonnes, transcris la ou les lignes de la leçon cellule par cellule sous la forme « [Colonne : titre de la colonne] contenu de la cellule », sans rien mélanger. Conserve les titres, les listes, les activités et expériences proposées (avec leurs réactifs, observations et résultats), le matériel, les consignes de dessin ou de schéma et les exemples. Repère chaque terme défini dans le document et écris-le sur une ligne « DÉFINITION : terme = définition recopiée mot pour mot ». Pour CHAQUE figure, dessin ou photo du document, écris une ligne « [FIGURE : objet représenté (ex. un objet), type de représentation (ex. perspective cavalière, vues de face/dessus/gauche), dimensions et cotes visibles, arêtes cachées en pointillés ou non, légendes] ». Ne résume pas, n’ajoute rien d’autre, ne commente pas. Si le document ne contient pas cette leçon, transcris les 2 premières pages utiles. Réponds uniquement par {"texte":"…"} (lignes séparées par \\n).',{images:[file]});
-      if(d&&has(d.texte)){add(d.texte,'Document lu par Gemini. Vérifiez le texte ci-dessous et retirez ce qui ne concerne pas la leçon.');return}
-    }catch(e){say('Lecture par Gemini impossible ('+(e&&e.message?e.message:'erreur')+') : lecture locale à la place…')}
+      if(d&&has(d.texte)){add(d.texte,'Document lu par la rédaction automatique. Vérifiez le texte ci-dessous et retirez ce qui ne concerne pas la leçon.');return}
+    }catch(e){say('Lecture automatique impossible ('+(e&&e.message?e.message:'erreur')+') : lecture locale à la place…')}
   }
   try{
     let pages=[];
@@ -1072,7 +1074,7 @@ async function importGuide(file){
     if(!pages.join('').trim()){say('Aucun texte lisible dans ce fichier. Prenez une photo plus nette (bien cadrée, de face) ou collez le texte à la main.');return}
     let keep=pages.map((t,i)=>({t,i,sc:words.reduce((a,w)=>a+(noAccent(t).toLowerCase().split(w).length-1),0)}));
     if(pages.length>4){keep=keep.sort((a,b)=>b.sc-a.sc).slice(0,4).sort((a,b)=>a.i-b.i); if(!keep[0]||keep.every(k=>!k.sc)) keep=pages.slice(0,4).map((t,i)=>({t,i}))}
-    add(keep.map(k=>k.t.trim()).join('\n\n'),(pages.length>4?'Les 4 pages les plus proches de la leçon ont été retenues. ':'Document ajouté. ')+(isPdf?'Attention : sans Gemini, seul le texte du PDF est lu, pas les figures ni les dessins. ':'La reconnaissance d’une photo peut contenir des erreurs : relisez et corrigez le texte ci-dessous (ou activez Gemini dans Réglages pour une lecture bien plus fidèle).'));
+    add(keep.map(k=>k.t.trim()).join('\n\n'),(pages.length>4?'Les 4 pages les plus proches de la leçon ont été retenues. ':'Document ajouté. ')+(isPdf?'Attention : sans la rédaction automatique, seul le texte du PDF est lu, pas les figures ni les dessins. ':'La reconnaissance d’une photo peut contenir des erreurs : relisez et corrigez le texte ci-dessous (ou activez la rédaction automatique dans Réglages pour une lecture bien plus fidèle).'));
   }catch(e){say('Lecture impossible : '+(e&&e.message?e.message:'réessayez')+' — vous pouvez aussi coller le texte à la main.')}
 }
 async function importFile(file){
@@ -1084,7 +1086,7 @@ async function importFile(file){
   try{
     const kind=aiKind();
     if(kind==='gemini'||kind==='anthropic'){
-      try{ setGen((kind==='gemini'?'Gemini':'Claude')+' lit le document…'); data=await extractProgramme(f,{images:[isPdf?file:await canvasBlob(file,2200)]},hint.trim()); how=kind==='gemini'?'gemini':'claude'}catch(e){aiErr=e}
+      try{ setGen('Lecture du document…'); data=await extractProgramme(f,{images:[isPdf?file:await canvasBlob(file,2200)]},hint.trim()); how=kind==='gemini'?'gemini':'claude'}catch(e){aiErr=e}
     } else if(kind==='claude'){
       try{
         if(isPdf){setGen('Lecture du PDF…');pdf=pdf||await pdfRead(file,40);
@@ -1402,11 +1404,11 @@ async function generateAll(f,o){
   if(GEN.running) return;
   if(!f.capacites.some(c=>has(c.cap))){setGen('Ajoutez d’abord les capacités et contenus (étape 2).',true);return}
   GEN.running=true;GEN.stop=false;GEN.figMissing=[];lockGen(true);await acquireGenWakeLock();
-  const n=f.seances.length;let failed=[];
+  const n=f.seances.length;let failed=[],failWhy='';
   try{
     if(!aiKind()){
       planLocal(f,o);rememberProgram(f);touch();
-      setGen('Capacités réparties sur les '+n+' séance(s). Pour que l’application rédige aussi les situations d’apprentissage, la résolution, l’essentiel à retenir et les exercices, activez la rédaction automatique dans Réglages (clé Gemini gratuite, 1 minute).');
+      setGen('Capacités réparties sur les '+n+' séance(s). Pour que l’application rédige aussi les situations d’apprentissage, la résolution, l’essentiel à retenir et les exercices, activez la rédaction automatique dans Réglages (clé gratuite, 1 minute).');
       step=3;openSeances=new Set([0]);return;
     }
     setGen('Répartition des capacités sur les '+n+' séance(s)…');
@@ -1428,10 +1430,10 @@ async function generateAll(f,o){
           if(attempt<2){setGen('La séance '+(i+1)+' est incomplète. Nouvelle tentative automatique…');await geminiWait(900)}
         }
       }
-      if(!ok){failed.push(i+1); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')) throw last;}
+      if(!ok){failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':''); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')) throw last;}
     }
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
-    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' : cliquez à nouveau sur « Préparer les séances » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.',failed.length>0);
+    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Cliquez à nouveau sur « Préparer les séances » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.',failed.length>0);
     if(!GEN.stop){step=3;openSeances=new Set([0])}
   }catch(e){setGen(errCopy(e),true)}
   finally{GEN.running=false;await releaseGenWakeLock();lockGen(false);if(view==='fiche'){render2();runPendingImageSearches(f)}}
@@ -1442,6 +1444,51 @@ async function fillSeance(i){
   if(!aiKind()){say(NO_AI,true);return}
   say('Rédaction de la séance en cours…');
   try{await genSeanceContent(f,i,{overwrite:false});touch();openSeances.add(i);render2();runPendingImageSearches(f)}catch(e){say(errCopy(e),true)}
+}
+
+const CORR_KEYS=['capTitre','contenus','situation','resolution','synthese','essentiel','exoApp','exoAppSol','exoMaison','exoMaisonSol','correction','consignes','trace','evalQ','evalR','recap'];
+async function applyCorrection(i){
+  const f=F(),s=f.seances[i],st=document.getElementById('ai-'+i),ta=document.getElementById('corr-'+i);
+  const say=(t,err)=>{if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
+  const ins=((ta&&ta.value)||'').trim();
+  if(!ins){say('Écrivez ou dictez d’abord l’instruction.',true);return}
+  if(!aiKind()){say(NO_AI,true);return}
+  const cur={};
+  for(const k of CORR_KEYS) if(has(s[k])) cur[k]=String(s[k]);
+  for(const k in (s.m||{})){const m=s.m[k]; if(has(m.prof)) cur['m.'+k+'.prof']=String(m.prof); if(has(m.eleve)) cur['m.'+k+'.eleve']=String(m.eleve)}
+  say('Application de l’instruction…');
+  const prompt='Tu aides un enseignant du Togo à corriger une séance de sa fiche pédagogique ('+discLabel(f)+', classe '+(f.classe||'collège')+', leçon « '+(f.titre||'')+' »).\n'+
+    'Voici le contenu actuel de la séance sous forme d’objet JSON (clé → texte) :\n'+JSON.stringify(cur)+'\n\n'+
+    'INSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\n'+
+    'Applique uniquement cette instruction. Réponds par un objet JSON qui contient SEULEMENT les clés à modifier (mêmes noms de clés), chacune avec son texte complet corrigé. N’inclus pas les clés inchangées. Conserve le balisage existant (**gras**, __souligné__, formules $...$ en LaTeX, [[blue:texte]], retours à la ligne \\n). Ne change rien d’autre. Si l’instruction ne concerne aucun texte, réponds {}.';
+  try{
+    const r=await ask(prompt);
+    let n=0;
+    if(r&&typeof r==='object') for(const k in r){
+      const v=r[k]; if(typeof v!=='string') continue;
+      const mm=/^m\.(\w+)\.(prof|eleve)$/.exec(k);
+      if(mm&&s.m&&s.m[mm[1]]){s.m[mm[1]][mm[2]]=v;n++}
+      else if(CORR_KEYS.includes(k)){s[k]=v;n++}
+    }
+    touch();
+    if(!n){say('Rien n’a été modifié : reformulez l’instruction en précisant la partie concernée.',true);return}
+    openSeances.add(i);render2();
+    const st2=document.getElementById('ai-'+i); if(st2){st2.textContent='Instruction appliquée ('+n+' partie(s) modifiée(s)). Relisez le résultat.';st2.className='status'}
+  }catch(e){say(errCopy(e),true)}
+}
+let REC=null;
+function toggleMic(i,btn){
+  const ta=document.getElementById('corr-'+i),st=document.getElementById('ai-'+i);
+  const say=(t,err)=>{if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){say('La dictée n’est pas disponible dans ce navigateur : appuyez dans la case puis utilisez l’icône micro du clavier de votre téléphone.',true);return}
+  if(REC){try{REC.stop()}catch(e){}return}
+  const r=new SR(); r.lang='fr-FR'; r.interimResults=true; r.continuous=true;
+  const base=ta.value.trim();
+  r.onresult=ev=>{let t='';for(let k=0;k<ev.results.length;k++)t+=ev.results[k][0].transcript+' ';ta.value=(base?base+' ':'')+t.trim()};
+  r.onerror=ev=>{say(ev.error==='not-allowed'?'Le micro est refusé : autorisez-le dans le navigateur, ou utilisez l’icône micro du clavier.':'Dictée interrompue ('+ev.error+'). Réessayez ou utilisez le micro du clavier.',true)};
+  r.onend=()=>{REC=null;if(btn)btn.textContent='🎤 Dicter'};
+  try{r.start();REC=r;if(btn)btn.textContent='⏹ Arrêter la dictée';say('Parlez maintenant…')}catch(e){REC=null;say('Impossible de démarrer la dictée.',true)}
 }
 
 /* =========================================================
@@ -1645,6 +1692,7 @@ function stepSeances(f){
       ${!A?imgBlock(f,s,i,'traceImg','Image pour la trace écrite (schéma, facultatif)'):''}
       <div class="grid">${tail}</div>
       <div class="moment"><h4>Chercher des définitions sur Internet (Wikipédia)</h4><div class="row"><input type="text" id="wq-${i}" placeholder="${esc((s.contenus||'').split(';')[0]||f.titre||'mot-clé')}" style="flex:1;min-width:180px" aria-label="Mot-clé"><button class="btn alt sm" data-wiki="${i}">Chercher</button></div><div id="wk-${i}" class="small" style="margin-top:8px"></div></div>
+      <div class="moment"><h4>Corriger cette séance avec une instruction</h4><textarea id="corr-${i}" rows="2" placeholder="Ex. : dans la situation, remplace le prénom par Ama ; rends l’exercice de maison plus facile ; corrige la solution de l’exercice 1" style="width:100%"></textarea><div class="row" style="margin-top:8px"><button class="btn alt sm" type="button" data-mic="${i}">🎤 Dicter</button><button class="btn sm" type="button" data-corr="${i}">Appliquer l’instruction</button></div></div>
       <div class="row"><button class="btn alt sm" data-ai="${i}">Rédiger cette séance automatiquement</button>${f.seances.length>1?`<button class="btn danger sm" data-delseance="${i}">Supprimer cette séance</button>`:''}</div>
       <div id="ai-${i}" class="status muted small">Seuls les champs vides sont remplis ; relisez toujours le résultat.</div>
     </div></details>`;
@@ -1678,14 +1726,14 @@ function renderMes(){
 }
 function renderSet(){
   const k=aiKind(); const has_=geminiKeys().length>0;
-  return `<section class="card"><h2>Rédaction automatique <small>Gemini (gratuit)</small></h2>
+  return `<section class="card"><h2>Rédaction automatique <small>gratuite</small></h2>
    <p class="small" style="margin:0 0 10px">L’application lit seule vos PDF et vos photos, relève la compétence, les capacités, les contenus et le nombre de séances, et répartit les capacités sur les séances. Pour <b>rédiger</b> la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices, elle a besoin d’un service d’IA :</p>
-   <div class="note" style="margin-bottom:10px">Les services d’IA entièrement sans compte ne sont plus fiables (je les ai vérifiés : le texte y est limité ou payant). La solution gratuite et stable est une <b>clé Gemini</b> : elle s’obtient en une minute avec votre compte Gmail, sans carte bancaire.</div>
+   <div class="note" style="margin-bottom:10px">Les services d’IA entièrement sans compte ne sont plus fiables (je les ai vérifiés : le texte y est limité ou payant). La solution gratuite et stable est une <b>clé gratuite</b> : elle s’obtient en une minute avec votre compte Gmail, sans carte bancaire.</div>
    <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
     <li>Ouvrez <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey ↗</a> avec votre compte Gmail (celui du téléphone suffit).</li>
     <li>Appuyez sur « Create API key », puis copiez la clé. Pas de carte bancaire.</li>
     <li>Collez-la ci-dessous.</li></ol>
-   ${[0,1,2].map(i=>`<label class="f" for="aiKey${i+1}" style="max-width:520px">Clé Gemini ${i+1} ${i===0?'(principale)':'(secours)'}<input type="password" id="aiKey${i+1}" autocomplete="off" value="${esc((DB.ai.keys||[])[i]|| (i===0?DB.ai.key:''))}" placeholder="AIza…"></label>`).join('')}
+   ${[0,1,2].map(i=>`<label class="f" for="aiKey${i+1}" style="max-width:520px">Clé ${i+1} ${i===0?'(principale)':'(secours)'}<input type="password" id="aiKey${i+1}" autocomplete="off" value="${esc((DB.ai.keys||[])[i]|| (i===0?DB.ai.key:''))}" placeholder="AIza…"></label>`).join('')}
    <label class="f" for="aiProxy" style="max-width:520px;margin-top:8px">Adresse du serveur <span class="hint">facultatif : si vous avez mis en place le serveur (Cloudflare), il garde les clés à la place de cet appareil</span><input type="url" id="aiProxy" autocomplete="off" value="${esc(DB.ai.proxy||'')}" placeholder="https://fiches.votre-nom.workers.dev"></label>
    <div class="row" style="margin-top:10px"><button class="btn" id="aiSave">Enregistrer les clés et tester</button>${has_?'<button class="btn danger" id="aiClear">Effacer la clé</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
@@ -1701,7 +1749,7 @@ function renderSet(){
    <label class="f" for="claudeKey" style="max-width:520px">Clé Claude<input type="password" id="claudeKey" autocomplete="off" value="${esc(DB.ai.ckey||'')}" placeholder="sk-ant-…"></label>
    <label class="f" for="claudeModel" style="max-width:520px;margin-top:8px">Modèle<input type="text" id="claudeModel" autocomplete="off" value="${esc(DB.ai.cmodel||'claude-sonnet-5-5')}" placeholder="claude-sonnet-5-5"></label>
    <div class="row" style="margin-top:10px"><button class="btn" id="claudeSave">Enregistrer et tester</button>${DB.ai.ckey?'<button class="btn danger" id="claudeClear">Effacer la clé Claude</button>':''}</div>
-   <div class="note" style="margin-top:12px">Le dernier service enregistré (Gemini ou Claude) est celui qui rédige. La clé reste dans ce navigateur, sur cet appareil : ne partagez pas un fichier contenant votre clé et n’utilisez pas cette fonction sur un ordinateur public. Les textes envoyés partent chez Anthropic.</div>
+   <div class="note" style="margin-top:12px">Le dernier service enregistré (rédaction gratuite ou Claude) est celui qui rédige. La clé reste dans ce navigateur, sur cet appareil : ne partagez pas un fichier contenant votre clé et n’utilisez pas cette fonction sur un ordinateur public. Les textes envoyés partent chez Anthropic.</div>
   </section>`;
 }
 function renderProg(){
@@ -1783,10 +1831,12 @@ root.addEventListener('click',async e=>{
   if(b.dataset.pick){const [i,key,n]=b.dataset.pick.split('|');pickImage(i,key,+n);return}
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
+  if(d.mic!==undefined){toggleMic(+d.mic,b);return}
+  if(d.corr!==undefined){b.disabled=true;await applyCorrection(+d.corr);b.disabled=false;return}
   if(b.id==='aiSave'){
     const vals=[1,2,3].map(i=>(document.getElementById('aiKey'+i).value||'').trim()); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; DB.ai.proxy=(document.getElementById('aiProxy').value||'').trim().replace(/\/+$/,''); GEM.list=null;GEM.hot={};GEM.dead={};GEM.good=''; save();
     if(!geminiKeys().length){setGen('Aucune clé saisie.',true);return}
-    b.disabled=true; setGen('Test de la connexion à Gemini…');
+    b.disabled=true; setGen('Test de la connexion…');
     try{
       const rep=[];
       if(!DB.ai.proxy) for(let i=0;i<3;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
