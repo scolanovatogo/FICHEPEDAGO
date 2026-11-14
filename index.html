@@ -331,6 +331,8 @@ function runsHTML(s,base){
 }
 const mk=(s,keepNL)=>{let t=String(s??'').replace(/\[\[[a-zA-Z]+[:|]/g,'').replace(/\[\[/g,'[').replace(/\]\]/g,']').replace(/\*+/g,'').replace(/__+/g,' ');return (keepNL?t.replace(/[ \t]+/g,' ').replace(/[ \t]*\n[ \t]*/g,'\n'):t.replace(/\s*\n+\s*/g,' ')).trim()};
 const lines=s=>String(s??'').split('\n');
+const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
+function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
 const has=s=>String(s??'').trim().length>0;
 
 /* =========================================================
@@ -453,6 +455,11 @@ function buildDoc(f0){
     }
     doc.push(tb({cols:A?[24,38,38]:[20,40,40],thick:true,head,rows,gap:12,seanceTable:true}));
   });
+  { const bl=ensureBilan(f).filter(x=>has(x.q)||has(x.s));
+    if(bl.length){
+      const hd=row([cell(['**Exercices de synthèse couvrant toute la leçon**'],{shade:'#4472C4',color:'#fff',align:'center'}),cell(['**Solutions**'],{shade:'#4472C4',color:'#fff',align:'center'})]);
+      doc.push(tb({thick:true,cols:[50,50],head:[hd],rows:bl.map(x=>row([cell(lines(x.q)),cell(lines(x.s))])),gap:12}));
+    } }
   if(!A&&(has(f.renfortQ)||has(f.renfortS))){
     doc.push(tb({thick:true,cols:[50,50],head:[row([cell(['**Exercice de renforcement**'],{shade:'#4472C4',color:'#fff',align:'center'}),cell(['**Solution**'],{shade:'#4472C4',color:'#fff',align:'center'})])],rows:[row([cell(lines(f.renfortQ)),cell(lines(f.renfortS))])],gap:12}));
   }
@@ -1432,8 +1439,13 @@ async function generateAll(f,o){
       }
       if(!ok){failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':''); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')) throw last;}
     }
+    let bilNote='';
+    if(!GEN.stop&&!failed.length){
+      setGen('Rédaction des exercices de synthèse de la leçon…');
+      try{await genBilan(f,o);touch()}catch(e){if(e&&e.code==='cancelled') throw e; bilNote=' Les exercices de synthèse n’ont pas pu être rédigés (bouton « Rédiger les exercices de synthèse »).'}
+    }
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
-    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Cliquez à nouveau sur « Préparer les séances » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.',failed.length>0);
+    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Cliquez à nouveau sur « Préparer les séances » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
     if(!GEN.stop){step=3;openSeances=new Set([0])}
   }catch(e){setGen(errCopy(e),true)}
   finally{GEN.running=false;await releaseGenWakeLock();lockGen(false);if(view==='fiche'){render2();runPendingImageSearches(f)}}
@@ -1446,6 +1458,22 @@ async function fillSeance(i){
   try{await genSeanceContent(f,i,{overwrite:false});touch();openSeances.add(i);render2();runPendingImageSearches(f)}catch(e){say(errCopy(e),true)}
 }
 
+async function genBilan(f,o){
+  const bl=ensureBilan(f);
+  if(!(o&&o.overwrite)&&bl.every(x=>has(x.q)&&has(x.s))) return false;
+  const sea=f.seances.map((x,k)=>(k+1)+'. '+(x.capTitre||'')+(has(x.contenus)?' — contenus : '+String(x.contenus).replace(/\s*\n\s*/g,' ; ').slice(0,260):'')+(has(x.essentiel)?' — à retenir : '+String(x.essentiel).replace(/\s*\n\s*/g,' ').slice(0,300):'')).join('\n');
+  const prompt='Tu es enseignant au Togo ('+discLabel(f)+', classe '+(f.classe||'collège')+'). Leçon : « '+(f.titre||'')+' »'+(has(f.competence)?'. Compétence : '+f.competence:'')+'.\nVoici les '+f.seances.length+' séances de la leçon, de la première à la dernière :\n'+sea+'\n\n'+
+  'Rédige les EXERCICES DE SYNTHÈSE de fin de leçon. Ils doivent couvrir TOUTE la leçon, de la première séance jusqu’à la dernière (pas seulement la dernière), avec un niveau, un vocabulaire et des notations adaptés à la classe, et un contexte local (Togo : prénoms, marchés, champs, ateliers…). N’introduis aucune notion qui n’a pas été vue.\n'+
+  'Réponds par un objet JSON de la forme :\n{"vf":{"q":"…","s":"…"},"mix":{"q":"…","s":"…"},"sp":[{"q":"…","s":"…"},{"q":"…","s":"…"},{"q":"…","s":"…"}]}\n'+
+  '- "vf" : exercice « Vrai ou faux » de 6 affirmations numérotées, une par ligne ; consigne : répondre par V ou F et corriger les affirmations fausses. La solution donne V ou F pour chacune avec la correction des fausses.\n'+
+  '- "mix" : exercice en trois parties : (a) 2 questions directes ; (b) 3 phrases à compléter (mets ……… à la place du mot manquant) ; (c) relier par des flèches : colonne de gauche numérotée 1, 2, 3, 4 et colonne de droite lettrée a, b, c, d dans un ordre mélangé. La solution donne les réponses de chaque partie (ex. 1→c).\n'+
+  '- "sp" : TROIS situations-problèmes différentes et progressives, chacune avec un contexte concret local et des consignes numérotées qui font mobiliser plusieurs séances de la leçon. La solution de chacune est une résolution détaillée et rédigée.\n'+
+  'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+LATEX_RULE;
+  const d=await ask(prompt);
+  const put=(k,v)=>{if(v&&typeof v==='object'){if(typeof v.q==='string'&&has(v.q)) bl[k].q=v.q; if(typeof v.s==='string'&&has(v.s)) bl[k].s=v.s}};
+  put(0,d&&d.vf);put(1,d&&d.mix);((d&&d.sp)||[]).slice(0,3).forEach((v,k)=>put(2+k,v));
+  return bl.some(x=>has(x.q));
+}
 const CORR_KEYS=['capTitre','contenus','situation','resolution','synthese','essentiel','exoApp','exoAppSol','exoMaison','exoMaisonSol','correction','consignes','trace','evalQ','evalR','recap'];
 async function applyCorrection(i){
   const f=F(),s=f.seances[i],st=document.getElementById('ai-'+i),ta=document.getElementById('corr-'+i);
@@ -1697,6 +1725,12 @@ function stepSeances(f){
       <div id="ai-${i}" class="status muted small">Seuls les champs vides sont remplis ; relisez toujours le résultat.</div>
     </div></details>`;
   }).join('');
+  ensureBilan(f);
+  const bilUI=`<section class="card"><h2>Exercices de synthèse de la leçon <small>après toutes les séances</small></h2>
+    <p class="muted small" style="margin:0 0 10px">Ils couvrent toute la leçon : un « vrai ou faux », des questions directes, des phrases à compléter et des liens à relier par des flèches, puis trois situations-problèmes.</p>
+    <div class="row" style="margin-bottom:10px"><button class="btn alt sm" type="button" data-bilan="1">Rédiger les exercices de synthèse</button></div>
+    <div id="bil-st" class="status muted small"></div>
+    <div class="grid">${BIL_T.map((t,i)=>fld(t+' : énoncé','bilan.'+i+'.q',{rows:4,wide:true})+fld(t+' : solution','bilan.'+i+'.s',{rows:4,wide:true})).join('')}</div></section>`;
   const fin=!A?`<section class="card"><h2>Fin de fiche</h2><div class="grid">
     ${fld('Exercice de renforcement','renfortQ',{rows:4})}${fld('Solution du renforcement','renfortS',{rows:4})}
     ${fld('Exercices proposés','proposes',{rows:5,wide:true,hint:'Une ligne par exercice'})}
@@ -1706,7 +1740,7 @@ function stepSeances(f){
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
-  return `${gen}${toolbar()}<div class="row" style="margin-bottom:12px"><button class="btn alt sm" data-addseance="1">Ajouter une séance</button><span class="muted small">${f.seances.length} séance(s)</span></div>${body}${fin}`;
+  return `${gen}${toolbar()}<div class="row" style="margin-bottom:12px"><button class="btn alt sm" data-addseance="1">Ajouter une séance</button><span class="muted small">${f.seances.length} séance(s)</span></div>${body}${bilUI}${fin}`;
 }
 function stepApercu(f){
   return `<section class="card"><h2>Télécharger la fiche</h2>
@@ -1832,6 +1866,13 @@ root.addEventListener('click',async e=>{
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
   if(d.mic!==undefined){toggleMic(+d.mic,b);return}
+  if(d.bilan!==undefined){
+    const st=document.getElementById('bil-st'); const say=(t,err)=>{if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
+    if(!aiKind()){say(NO_AI,true);return}
+    b.disabled=true; say('Rédaction des exercices de synthèse…');
+    try{const ok=await genBilan(f,{overwrite:true});touch();render2();const s2=document.getElementById('bil-st');if(s2){s2.textContent=ok?'Exercices de synthèse rédigés : relisez-les.':'Rien n’a été rédigé, réessayez.';s2.className='status small muted'}}
+    catch(e){say(errCopy(e),true)}
+    b.disabled=false;return}
   if(d.corr!==undefined){b.disabled=true;await applyCorrection(+d.corr);b.disabled=false;return}
   if(b.id==='aiSave'){
     const vals=[1,2,3].map(i=>(document.getElementById('aiKey'+i).value||'').trim()); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; DB.ai.proxy=(document.getElementById('aiProxy').value||'').trim().replace(/\/+$/,''); GEM.list=null;GEM.hot={};GEM.dead={};GEM.good=''; save();
