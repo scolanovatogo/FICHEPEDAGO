@@ -452,6 +452,7 @@ function buildDoc(f0){
       const add=(arr,o)=>arr.forEach(x=>g.push(row([cell([x],Object.assign({span:3,just:true},o||{}))])));
       if(has(s.synthese)){add(['__Synthèse__'],{align:'center',bold:true});add(lines(s.synthese))}
       if(has(s.essentiel)){add(['__Essentiel à retenir__'],{align:'center',bold:true});add(lines(s.essentiel))}
+      figsOf(s).forEach(im=>g.push(row([cell([],{span:3,img:im,align:'center'})])));
       if(has(s.exoApp)){add(['__Exercice d’application__'],{bold:true});add(lines(s.exoApp),{indentCell:true})}
       if(has(s.exoMaison)){add(['__Exercice de maison__ :'],{bold:true});add(lines(s.exoMaison),{indentCell:true})}
       rows.push(...grp(g));
@@ -477,6 +478,7 @@ function buildDoc(f0){
       for(;k<tl.length;k++) tr.push(row([cell([],{sm:true}),cell([tl[k]],{span:2})]));
       rows.push(...grp(tr));
       if(s.traceImg) rows.push(row([cell([],{sm:true}),cell([],{span:2,img:s.traceImg})]));
+      figsOf(s).forEach(im=>rows.push(row([cell([],{sm:true}),cell([],{span:2,img:im,align:'center'})])));
       rows.push(row([cell(['**[[red:EXERCICE D’APPLICATION]]**'],{span:2,align:'center'}),cell(['**[[red:SOLUTION]]**'],{align:'center'})]));
       rows.push(row([cell(lines(s.exoApp),{span:2}),cell(lines(s.exoAppSol))]));
       rows.push(row([cell(['Réinvestissement','**(5 min)**'],{sm:true}),cell(['**'+(s.recap||'Récapitulation (rappel de l’essentiel à retenir sur '+(f.titre?f.titre.toLowerCase():'la leçon')+')')+'**'],{span:2})]));
@@ -1367,6 +1369,29 @@ function shortSituation(value){
   return t;
 }
 const FIG_REF=/figure (suivante|ci-[a-zé]+)|sch[ée]ma (suivant|ci-[a-zé]+)|ci-contre|ci-dessous|ci-dessus/i;
+const AXIS_RE=/(demi-?droites?|droites?|axes?)\s+gradu|abscisse|gradu[ée]e?s?\b/i;
+function needsAxis(f,s,extra){return AXIS_RE.test([f.titre,s.capTitre,s.contenus,s.situation,s.essentiel,s.trace,extra||''].join(' '))}
+async function genCourseFigures(f,i,ins,asker){
+  const s=f.seances[i];
+  const prompt='Tu es un enseignant qui trace les figures du COURS au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+', leçon « '+(f.titre||'')+' »).\nCapacité de la séance : '+(s.capTitre||'')+'\nContenus de la séance : '+(s.contenus||'')+'\nEssentiel du cours : '+String(s.essentiel||s.trace||'').slice(0,700)+(ins?'\nDEMANDE DE L’ENSEIGNANT (trace exactement ce qui est demandé) : '+ins:'')+
+    '\nTrace AUTANT de figures que nécessaire pour illustrer les notions du cours (de 1 à 4 : une par notion ou par exemple important ; une seule si une seule suffit). Si une notion concerne une droite graduée, une demi-droite graduée, des abscisses ou un axe : utilise {"droiteGraduee":{…}} avec les points du cours placés à leurs abscisses (par exemple A, B, C) et "abscisses":true pour écrire l’abscisse à côté de chaque nom ; choisis min, max, pas et sous adaptés (entiers ou décimaux simples) et "demi":"droite" pour une demi-droite graduée (départ à min, souvent 0). Sinon trace une figure de géométrie.\n'+GEO_DOC+'\nRéponds uniquement par {"figures":[{"legende":"titre court de la figure (ex. Demi-droite graduée)","geo":{…}}]}.';
+  const d=await (asker?asker(prompt):ask(prompt))||{};
+  const arr=Array.isArray(d.figures)?d.figures:(d.geo?[{geo:d.geo}]:[]);
+  const out=[];
+  for(const x of arr.slice(0,4)){
+    if(!x||!x.geo||typeof x.geo!=='object') continue;
+    try{const im=await eprFig(x.geo,x.geo.droiteGraduee||x.geo.axe?420:380,false); if(has(x.legende)) im.credit=String(x.legende).trim(); out.push(im)}catch(e){}
+  }
+  return out;
+}
+const figsOf=s=>[...(Array.isArray(s.figs)?s.figs:[]),...(s.imgEss?[s.imgEss]:[])];
+function figsBlock(f,s,i){
+  const L=Array.isArray(s.figs)?s.figs:[];
+  return `<div class="moment"><h4>Figures du cours (autant que nécessaire)</h4>
+   ${L.map((im,k)=>`<div class="row" style="align-items:center;gap:10px"><img class="thumb" alt="Figure ${k+1}" src="${im.src}"><label class="f" for="fw_${i}_${k}" style="max-width:190px">Largeur (px)<input type="number" id="fw_${i}_${k}" data-p="seances.${i}.figs.${k}.dw" min="80" max="600" value="${im.dw||300}"></label><button class="btn danger sm" type="button" data-delfig="${i}|${k}">Retirer</button></div>`).join('')}
+   <label class="f" for="fd-${i}" style="margin-top:6px"><span class="hint">Décrivez la figure à tracer (facultatif) — ex. : demi-droite graduée de 0 à 6 avec A(1) et B(2,5)</span><input type="text" id="fd-${i}" placeholder="Laissez vide pour que l’application choisisse les figures du cours"></label>
+   <div class="row" style="margin-top:6px"><button class="btn alt sm" type="button" data-figadd="${i}">Ajouter des figures tracées automatiquement</button></div></div>`;
+}
 function needsFigure(f,s){
   const txt=[f.disc,f.sub,f.titre,s.contenus,s.capTitre,s.situation].join(' ');
   return /g[ée]om[ée]tr|phys|chim|techno|pct|svt/i.test([f.disc,f.sub].join(' '))||FIG_REF.test(s.situation||'')||/\b(figure|sch[ée]ma|croquis|triangle|cercle|losange|carr[ée]|rectangle|cube|circuit|plan)\b/i.test(txt);
@@ -1689,8 +1714,13 @@ ${desc}`;
    if(parts.length) d[k]=parts.join('\n')+'\n'+cur;}
   if(A){put(s.m.remob,'prof',d.remobProf);put(s.m.remob,'eleve',d.remobEleve);put(s.m.appro,'eleve',d.approEleve);put(s,'synthese',d.synthese);put(s,'essentiel',d.essentiel);put(s,'exoApp',d.exoApp);put(s,'exoMaison',d.exoMaison)}
   else{put(s.m.prereq,'prof',d.prereqProf);put(s.m.prereq,'eleve',d.prereqEleve);put(s,'consignes',d.consignes);put(s,'resolution',d.resolution);put(s,'trace',d.trace);put(s,'exoApp',d.exoApp);put(s,'exoAppSol',d.exoAppSol);put(s,'evalQ',d.evalQ);put(s,'evalR',d.evalR);put(s,'exoMaison',d.exoMaison);put(s,'exoMaisonSol',d.exoMaisonSol)}
+  let axisDone=false;
+  if(needsAxis(f,s)&&(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))){
+    try{const ims=await genCourseFigures(f,i); if(ims.length){s.figs=ims;axisDone=true}}
+    catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
+  }
   const imageField=A?'img':'traceImg';
-  if(needsFigure(f,s)&&(o.overwrite||!s[imageField])){
+  if(!(axisDone&&!A)&&needsFigure(f,s)&&(o.overwrite||!s[imageField])){
     let g=null; try{g=await genFigure(f,i)}catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
     let ok=false;
     if(g&&g.geo){try{const im=await eprFig(g.geo,380,true);if(im){s[imageField]=im;ok=true}}catch(e){}}
@@ -1721,7 +1751,7 @@ function resetGenerated(f){
   const b=newSeance(f.tpl);
   f.seances.forEach(s=>{
     if(has(s.situation)) s.prevSit=[String(s.situation).replace(/\s+/g,' ').slice(0,200)].concat(s.prevSit||[]).slice(0,3);
-    for(const k of ['capNum','capTitre','contenus','situation','img','imgKey','synthese','resolution','essentiel','exoApp','exoMaison','consignes','trace','traceImg','exoAppSol','evalQ','evalR','exoMaisonSol']) s[k]=b[k];
+    for(const k of ['capNum','capTitre','contenus','situation','img','imgKey','synthese','resolution','essentiel','exoApp','exoMaison','consignes','trace','traceImg','imgEss','figs','exoAppSol','evalQ','evalR','exoMaisonSol']) s[k]=b[k];
     delete s.autoImgSearch;
     const mm=A?[['remob',['prof','eleve']],['appro',['eleve']]]:[['prereq',['prof','eleve']]];
     mm.forEach(([m,ks])=>{if(s.m&&s.m[m]&&DEF[f.tpl]&&DEF[f.tpl][m]) ks.forEach(k=>{s.m[m][k]=DEF[f.tpl][m][k]})});
@@ -2057,7 +2087,7 @@ async function eprCorrect(E,ins){
   const C=E.content;
   const slim=p=>({titre:p.titre,bareme:p.bareme,enonce:p.enonce,corrige:p.corrige,type:p.type,gauche:p.gauche,droite:p.droite,liens:p.liens,groupes:p.groupes,solution:p.solution,fig:p.fig?'(figure existante)':undefined,figCorr:p.figCorr?'(figure existante)':undefined});
   const cur={situation:C.situation,consignes:C.consignes,ex2:(C.ex2||[]).map(slim),ex3:(C.ex3||[]).map(slim),corrSit:C.corrSit,figSit:C.figSit?'(figure existante)':undefined,figCorrSit:C.corrSitFig?'(figure existante)':undefined,grille:C.grille.map(g=>({critere:g.critere,nom:g.nom,lignes:parseGrille(g.txt)}))};
-  const figWords=/figure|sch[ée]ma|dessin|construi|constru|trac[ée]|triangle|cercle|droite|angle|sym[ée]trie/i.test(ins);
+  const figWords=/figure|sch[ée]ma|dessin|construi|constru|trac[ée]|triangle|cercle|droite|angle|sym[ée]trie|gradu|abscisse|\baxe\b/i.test(ins);
   const attempt=async(sc)=>{
   const cur2={}; for(const k in cur){ if(!sc||sc.has(k)||(k==='figSit'&&sc.has('situation'))||(k==='figCorrSit'&&sc.has('corrSit'))) cur2[k]=cur[k] }
   const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(sc?cur2:cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nCAPACITÉS ET CONTENUS ENSEIGNÉS (référence : toute question doit s’y limiter, au niveau de la classe, sans compliquer) :\n'+E.caps+'\n\n'+(sc?'Applique l’instruction uniquement aux parties fournies ci-dessus, rapidement, sans réécrire ce qui n’est pas demandé.':'Applique cette instruction aux parties concernées (situation, consignes, exercices 2 et 3, corrigés, grille), même si elle est générale (par exemple « reviens aux contenus déposés », « c’est trop difficile », « hors programme ») : dans ce cas, repère ce qui dépasse les contenus ou le niveau de la classe, puis simplifie-le ou remplace-le par des questions conformes aux contenus.')+' Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Garde les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+' Pour ajouter ou modifier une figure, donne les clés figSit, figCorrSit (situation et son corrigé) ou fig, figCorr dans la partie concernée, sous la forme ci-dessous ; les figures marquées « (figure existante) » sont conservées si tu n’y touches pas. '+(figWords?GEO_DOC:'')+' '+LATEX_RULE_EPR;
@@ -2102,6 +2132,7 @@ async function eprAct(a,b){
     catch(e){if(!E.content&&snapC){E.content=snapC;save();render()}eprSay(errCopy(e),true);b.disabled=false}
     await releaseGenWakeLock();return}
   if(a==='corr'){
+    if(REC){try{REC.stop()}catch(e){}}
     const ta=document.getElementById('corr-ep'),ins=((ta&&ta.value)||'').trim();
     if(!ins){eprSay('Écrivez ou dictez d’abord l’instruction.',true);return}
     if(!aiKind()){eprSay(NO_AI,true);return}
@@ -2219,7 +2250,7 @@ function eprScope(ins){
 function ficheScope(ins){
   const t=' '+String(ins||'').toLowerCase()+' ', S=new Set(), add=(...k)=>k.forEach(x=>S.add(x));
   if(/situation|contexte/.test(t)) add('situation');
-  if(/r[ée]solution|trac[ée]/.test(t)) add('resolution','trace');
+  if(/r[ée]solution|trace\s+[ée]crite/.test(t)) add('resolution','trace');
   if(/consigne/.test(t)) add('consignes');
   if(/synth[èe]se/.test(t)) add('synthese');
   if(/essentiel|retenir|r[ée]cap/.test(t)) add('essentiel','recap');
@@ -2235,6 +2266,7 @@ function ficheScope(ins){
 
 const CORR_KEYS=['capTitre','contenus','situation','resolution','synthese','essentiel','exoApp','exoAppSol','exoMaison','exoMaisonSol','correction','consignes','trace','evalQ','evalR','recap'];
 async function applyCorrection(i){
+  if(REC){try{REC.stop()}catch(e){}}
   const f=F(),s=f.seances[i],st=document.getElementById('ai-'+i),ta=document.getElementById('corr-'+i);
   const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
   const ins=((ta&&ta.value)||'').trim();
@@ -2263,8 +2295,17 @@ async function applyCorrection(i){
   };
   try{
     const sc=ficheScope(ins);
-    let n=await attempt(sc);
-    if(!n&&sc) n=await attempt(null);      // ciblage manqué : on relit toute la séance
+    const wantsFig=/trac[eéèêa]|dessin|figure|sch[ée]ma|gradu|abscisse|\baxe\b/i.test(ins);
+    let n=0;
+    if(wantsFig){
+      try{const ims=await genCourseFigures(f,i,ins,p=>corrAsk(p,st,'Tracé de la figure…'));
+        if(ims.length){ if(/remplace|refai|recommenc|corrige la figure|change la figure/i.test(ins)) s.figs=ims; else s.figs=(Array.isArray(s.figs)?s.figs:[]).concat(ims); n+=ims.length }}
+      catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
+    }
+    if(!(wantsFig&&!sc)){
+      n+=await attempt(sc);
+      if(!n&&sc) n+=await attempt(null);      // ciblage manqué : on relit toute la séance
+    }
     touch();
     if(!n){say('Rien n’a été modifié : reformulez l’instruction en précisant la partie concernée.',true);return}
     openSeances.add(i);render2();
@@ -2280,13 +2321,24 @@ function toggleMic(i,btn){
   if(!ta) return;
   if(REC){const r0=REC; try{r0.stop()}catch(e){} setTimeout(()=>{if(REC===r0){try{r0.abort()}catch(e){} REC=null;if(btn)btn.textContent='🎤 Dicter';flash('')}},1500); return}
   const r=new SR(); r.lang='fr-FR'; r.interimResults=true; r.continuous=true;
-  const base=ta.value.trim(); let fin='', got=false;
+  const base=ta.value.trim(); let heard='', got=false;
   const put=txt=>{ta.value=((base?base+' ':'')+txt).replace(/\s+/g,' ').trim();ta.dispatchEvent(new Event('input',{bubbles:true}))};
-  r.onresult=ev=>{
-    let interim=''; got=true;
-    for(let k=ev.resultIndex;k<ev.results.length;k++){const res=ev.results[k]; if(res.isFinal) fin+=res[0].transcript+' '; else interim+=res[0].transcript}
-    put(fin+interim);
+  /* Certains navigateurs mobiles renvoient, à chaque événement, tout le texte déjà dit (parfois plusieurs fois) :
+     on reconstruit donc le texte complet à chaque fois, sans jamais l'additionner. */
+  const lc=x=>x.toLowerCase().replace(/[.,;!?]/g,'').replace(/\s+/g,' ').trim();
+  const rebuild=ev=>{
+    const segs=[];
+    for(let k=0;k<ev.results.length;k++){
+      const t=String(ev.results[k][0].transcript||'').trim(); if(!t) continue;
+      const last=segs.length?segs[segs.length-1]:null;
+      if(last&&lc(t).startsWith(lc(last))) segs[segs.length-1]=t;       // version plus longue du même segment
+      else if(last&&lc(last).startsWith(lc(t))) continue;               // répétition plus courte : ignorée
+      else if(last&&lc(last)===lc(t)) continue;
+      else segs.push(t);
+    }
+    return segs.join(' ');
   };
+  r.onresult=ev=>{got=true;heard=rebuild(ev);put(heard)};
   r.onerror=ev=>{
     if(ev.error==='no-speech'||ev.error==='aborted') return;
     say(ev.error==='not-allowed'||ev.error==='service-not-allowed'?'Le micro est refusé : autorisez-le dans le navigateur, ou utilisez l’icône micro du clavier.':'Dictée interrompue ('+ev.error+'). Réessayez ou utilisez le micro du clavier.',true);
@@ -2294,7 +2346,7 @@ function toggleMic(i,btn){
   r.onend=()=>{
     if(REC===r) REC=null;
     if(btn) btn.textContent='🎤 Dicter';
-    if(fin.trim()) put(fin);
+    if(heard.trim()) put(heard);
     say(got?'Dictée terminée. Relisez le texte puis appuyez sur « Appliquer l’instruction ».':'Aucune parole reconnue. Réessayez en parlant près du micro.');
   };
   try{r.start();REC=r;if(btn)btn.textContent='⏹ Arrêter la dictée';say('Parlez maintenant. Touchez « Arrêter la dictée » quand vous avez fini.')}catch(e){REC=null;say('Impossible de démarrer la dictée.',true)}
@@ -2501,6 +2553,7 @@ function stepSeances(f){
       ${strat}
       <div style="font-weight:700">Déroulement de la séance</div>${moments}
       ${!A?imgBlock(f,s,i,'traceImg','Image pour la trace écrite (schéma, facultatif)'):''}
+      ${figsBlock(f,s,i)}
       <div class="grid">${tail}</div>
       <div class="moment"><h4>Chercher des définitions sur Internet (Wikipédia)</h4><div class="row"><input type="text" id="wq-${i}" placeholder="${esc((s.contenus||'').split(';')[0]||f.titre||'mot-clé')}" style="flex:1;min-width:180px" aria-label="Mot-clé"><button class="btn alt sm" data-wiki="${i}">Chercher</button></div><div id="wk-${i}" class="small" style="margin-top:8px"></div></div>
       <div class="moment"><h4>Corriger cette séance avec une instruction</h4><textarea id="corr-${i}" rows="2" placeholder="Ex. : dans la situation, remplace le prénom par Ama ; rends l’exercice de maison plus facile ; corrige la solution de l’exercice 1" style="width:100%"></textarea><div class="row" style="margin-top:8px"><button class="btn alt sm" type="button" data-mic="${i}">🎤 Dicter</button><button class="btn sm" type="button" data-corr="${i}">Appliquer l’instruction</button></div></div>
@@ -2652,6 +2705,14 @@ root.addEventListener('click',async e=>{
   if(d.wikiins){const [i,n]=d.wikiins.split('|');const p=(WIKIRES[i]||[])[+n];if(p){const s=f.seances[+i];const k=f.tpl==='A'?'essentiel':'trace';s[k]=(has(s[k])?s[k]+'\n':'')+'__Définition__\n'+p.extract.replace(/\n+/g,'\n')+'\n(Source : Wikipédia, « '+p.title+' »)';openSeances.add(+i);touch();render2()}return}
   if(d.imgsearch){const [i,key]=d.imgsearch.split('|');searchImages(i,key);return}
   if(b.dataset.pick){const [i,key,n]=b.dataset.pick.split('|');pickImage(i,key,+n);return}
+  if(d.figadd!==undefined){const i=+d.figadd,st=document.getElementById('ai-'+i),inp=document.getElementById('fd-'+i),ins=((inp&&inp.value)||'').trim();b.disabled=true;
+    try{if(!aiKind()){flash(NO_AI,true);b.disabled=false;return}
+      const ims=await genCourseFigures(f,i,ins,p=>corrAsk(p,st,'Tracé des figures…'));
+      if(ims.length){const s=f.seances[i];s.figs=(s.figs||[]).concat(ims);openSeances.add(i);touch();render2();flash(ims.length+' figure(s) ajoutée(s) : vérifiez-les dans la fiche.')}
+      else flash('Aucune figure n’a pu être tracée. Décrivez-la dans la case (ex. « demi-droite graduée de 0 à 6 avec A(1) et B(2,5) »).',true)
+    }catch(e){flash(errCopy(e),true)}
+    b.disabled=false;return}
+  if(d.delfig){const [i,k]=d.delfig.split('|');const s=f.seances[+i];if(Array.isArray(s.figs))s.figs.splice(+k,1);else if(s.imgEss)s.imgEss=null;touch();renderKeepOpen(+i);return}
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
   if(d.mic!==undefined){toggleMic(d.mic,b);return}
