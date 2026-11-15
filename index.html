@@ -860,7 +860,7 @@ function keyPrompt(why){
    +'<li>Ouvrez <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="font-weight:700">aistudio.google.com/apikey ↗</a> et connectez-vous avec votre compte Gmail.</li>'
    +'<li>Appuyez sur « Create API key » (ou « Créer une clé API »). Si on vous propose de choisir un projet, prenez « <b>nouveau projet</b> ».</li>'
    +'<li>Copiez la clé (elle commence par <b>AIza</b>) et collez-la ci-dessous.</li></ol>'
-   +'<textarea id="kpKeys" rows="3" autocomplete="off" spellcheck="false" placeholder="AIza…  (une clé par ligne)" style="width:100%;box-sizing:border-box;font:14px monospace;padding:8px;border:1px solid #9aa;border-radius:8px"></textarea>'
+   +'<textarea id="kpKeys" rows="3" autocomplete="off" spellcheck="false" placeholder="AIza…  (une clé par ligne)" style="width:100%;box-sizing:border-box;font:14px monospace;padding:8px;border:1px solid #9aa;border-radius:8px;-webkit-text-security:disc;text-security:disc"></textarea>'
    +'<div id="kpSt" role="status" style="min-height:20px;margin:8px 0;font-size:14px"></div>'
    +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" id="kpOk" style="padding:10px 16px;border:0;border-radius:8px;background:#1d4ed8;color:#fff;font:600 15px system-ui">Enregistrer et tester</button>'
    +'<button type="button" id="kpNo" style="padding:10px 16px;border:1px solid #9aa;border-radius:8px;background:#fff;font:15px system-ui">Plus tard</button></div>'
@@ -874,7 +874,7 @@ function keyPrompt(why){
     const add=[...new Set(String(d.querySelector('#kpKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))];
     if(!add.length){say('Collez d’abord votre clé.',true);return}
     b.disabled=true; say('Test de la clé…'); const good=[],bad=[];
-    for(const k of add){try{const r=await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=5',{headers:gHeaders(k)},12000);(r.ok?good:bad).push(k)}catch(e){bad.push(k)}}
+    await Promise.all(add.map(async k=>{try{const r=await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1',{headers:gHeaders(k)},8000);(r.ok||r.status===429?good:bad).push(k)}catch(e){bad.push(k)}}));
     if(!good.length){say(bad.length>1?'Aucune de ces clés n’est valide. Vérifiez qu’elles sont copiées en entier.':'Cette clé n’est pas valide. Vérifiez qu’elle est copiée en entier.',true);b.disabled=false;return}
     DB.ai.keys=[...new Set([...ownKeys(),...good])].slice(0,30); DB.ai.key=DB.ai.keys[0]; DB.ai.model=''; DB.ai.provider=''; GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
     say('Clé enregistrée'+(bad.length?' ('+bad.length+' clé(s) refusée(s))':'')+'. Vous pouvez relancer la préparation.'); flash('Clé enregistrée : relancez la préparation.');
@@ -912,6 +912,7 @@ function flash(t,err){
 }
 function setGen(msg,err){flash(msg,err);GEN.msg=msg;GEN.err=!!err;document.querySelectorAll('.genstatus').forEach(el=>{el.textContent=msg;el.className='status genstatus'+(err?' err':'')})}
 function ownKeys(){const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,30)}
+function maskKey(k){k=String(k||'');return k.length<=10?'••••••••':k.slice(0,4)+'••••••••••••'+k.slice(-4)}
 function usingProxy(){return !!(DB.ai&&String(DB.ai.proxy||'').trim())&&!ownKeys().length}
 function geminiKeys(){return usingProxy()?['proxy']:ownKeys()}
 function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
@@ -2453,9 +2454,11 @@ function renderSet(){
     <li>Ouvrez <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey ↗</a> avec votre compte Gmail (celui du téléphone suffit).</li>
     <li>Appuyez sur « Create API key », puis copiez la clé. Pas de carte bancaire.</li>
     <li>Collez-la ci-dessous.</li></ol>
-   <label class="f" for="aiKeys" style="max-width:520px">Clés gratuites <span class="hint">une clé par ligne, jusqu’à 30. L’application passe automatiquement à la suivante quand une clé est limitée. ${ownKeys().length?ownKeys().length+' clé(s) enregistrée(s).':''}</span><textarea id="aiKeys" rows="6" autocomplete="off" spellcheck="false" placeholder="AIza…&#10;AIza…" style="font-family:monospace">${esc(ownKeys().join('\n'))}</textarea></label>
+   <div class="f" style="max-width:520px"><span>Clés enregistrées <span class="hint">(masquées : seules les premières et les dernières lettres sont visibles)</span></span>
+     ${ownKeys().length?ownKeys().map((k,i)=>`<div class="row" style="align-items:center;gap:8px;margin-top:6px"><code style="flex:1;overflow-wrap:anywhere">${esc(maskKey(k))}</code><button class="btn danger" type="button" data-keydel="${i}">Retirer</button></div>`).join(''):'<div class="muted small" style="margin-top:6px">Aucune clé enregistrée.</div>'}</div>
+    <label class="f" for="aiKeys" style="max-width:520px;margin-top:10px">Ajouter une ou plusieurs clés <span class="hint">une clé par ligne, jusqu’à 30 au total. La saisie est masquée et la clé n’est plus affichée après l’enregistrement. L’application passe automatiquement à la suivante quand une clé est limitée.</span><textarea id="aiKeys" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Collez la clé ici (AIza…)" style="font-family:monospace;-webkit-text-security:disc;text-security:disc"></textarea></label>
    <div class="note small" style="margin-top:6px"><b>Important :</b> Google applique la limite gratuite <b>par projet</b>, pas par clé. Deux clés créées dans le même projet partagent le même quota. Sur aistudio.google.com/apikey, choisissez à chaque fois « Create API key in <b>new project</b> » (nouveau projet). Les clés saisies ici sont utilisées en priorité.</div>
-   <div class="row" style="margin-top:10px"><button class="btn" id="aiSave">Enregistrer les clés et tester</button>${has_?'<button class="btn danger" id="aiClear">Effacer la clé</button>':''}</div>
+   <div class="row" style="margin-top:10px"><button class="btn" id="aiSave">Ajouter et tester</button>${has_?'<button class="btn danger" id="aiClear">Effacer la clé</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="muted small" style="margin-top:8px">État actuel : ${esc(diagText())}${DB.ai.model?' · modèle '+esc(DB.ai.model):''}</div>
    <div class="note" style="margin-top:12px">La clé reste enregistrée dans ce navigateur, sur cet appareil. Les textes et documents envoyés pour lecture ou rédaction partent chez Google. L’offre gratuite a des limites quotidiennes : si elle est atteinte, attendez quelques minutes ou le lendemain ; la lecture locale et la saisie manuelle continuent de fonctionner.</div>
@@ -2466,7 +2469,7 @@ function renderSet(){
     <li>Ouvrez <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com ↗</a> et créez un compte.</li>
     <li>Dans « Billing », ajoutez un petit crédit.</li>
     <li>Dans « API keys », créez une clé, copiez-la (elle commence par sk-ant-) et collez-la ci-dessous.</li></ol>
-   <label class="f" for="claudeKey" style="max-width:520px">Clé Claude<input type="password" id="claudeKey" autocomplete="off" value="${esc(DB.ai.ckey||'')}" placeholder="sk-ant-…"></label>
+   <label class="f" for="claudeKey" style="max-width:520px">Clé Claude<input type="password" id="claudeKey" autocomplete="new-password" value="" placeholder="${DB.ai.ckey?esc('Clé enregistrée : '+maskKey(DB.ai.ckey)+' (laissez vide pour la conserver)'):'sk-ant-…'}"></label>
    <label class="f" for="claudeModel" style="max-width:520px;margin-top:8px">Modèle<input type="text" id="claudeModel" autocomplete="off" value="${esc(DB.ai.cmodel||'claude-sonnet-5-5')}" placeholder="claude-sonnet-5-5"></label>
    <div class="row" style="margin-top:10px"><button class="btn" id="claudeSave">Enregistrer et tester</button>${DB.ai.ckey?'<button class="btn danger" id="claudeClear">Effacer la clé Claude</button>':''}</div>
    <div class="note" style="margin-top:12px">Le dernier service enregistré (rédaction gratuite ou Claude) est celui qui rédige. La clé reste dans ce navigateur, sur cet appareil : ne partagez pas un fichier contenant votre clé et n’utilisez pas cette fonction sur un ordinateur public. Les textes envoyés partent chez Anthropic.</div>
@@ -2564,20 +2567,37 @@ root.addEventListener('click',async e=>{
     catch(e){say(errCopy(e),true)}
     b.disabled=false;return}
   if(d.corr!==undefined){b.disabled=true;await applyCorrection(+d.corr);b.disabled=false;return}
+  if(d.keydel!==undefined){const i=+d.keydel,ks=ownKeys();if(ks[i]!==undefined){ks.splice(i,1);DB.ai.keys=ks;DB.ai.key=ks[0]||'';DB.ai.model='';GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good='';save();setGen('Clé retirée.');render2()}return}
   if(b.id==='aiSave'){
-    const vals=[...new Set(String(document.getElementById('aiKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))].slice(0,30); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
-    if(!geminiKeys().length){setGen('Aucune clé saisie.',true);return}
+    const add=[...new Set(String(document.getElementById('aiKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))];
+    const known=ownKeys(),fresh=add.filter(k=>!known.includes(k));
+    if(!add.length&&!known.length&&!usingProxy()){setGen('Collez d’abord votre clé.',true);return}
     b.disabled=true; setGen('Test de la connexion…');
+    /* test rapide : toutes les clés en même temps, 8 secondes au plus, sans rédaction d'essai */
+    const probe=async k=>{try{const r=await geminiFetch((k==='proxy'?gBase():'https://generativelanguage.googleapis.com')+'/v1beta/models?pageSize=1',{headers:gHeaders(k)},8000);return {k,ok:r.ok||r.status===429,st:r.status}}catch(e){return {k,ok:false,st:0}}};
     try{
-      const rep=[];
-      if(!usingProxy()) for(let i=0;i<vals.length;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
-      const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((usingProxy()?'Service joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
-    catch(e){DB.ai.model='';setGen(errCopy(e),true)}
+      const toTest=fresh.length?fresh:(known.length?known:['proxy']);
+      const res=await Promise.all(toTest.map(probe));
+      const bad=res.filter(x=>!x.ok&&x.st>0),off=res.filter(x=>!x.ok&&x.st===0),good=res.filter(x=>x.ok);
+      if(fresh.length){
+        const keep=[...good,...off].map(x=>x.k);
+        if(keep.length){DB.ai.keys=[...known,...keep].slice(0,30);DB.ai.key=DB.ai.keys[0];DB.ai.model='';DB.ai.provider='';GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good='';save()}
+        const msg=[];
+        if(good.length) msg.push(good.length+' clé(s) ajoutée(s) et valide(s)');
+        if(off.length) msg.push(off.length+' clé(s) ajoutée(s) mais non testée(s) (connexion trop faible)');
+        if(bad.length) msg.push(bad.length+' clé(s) refusée(s), non enregistrée(s) : vérifiez qu’elle est copiée en entier');
+        setGen(msg.join(' · ')+'.'+(good.length||off.length?' La rédaction automatique est active.':''),!(good.length||off.length));
+      }else{
+        const nb=good.length,nbad=bad.length;
+        setGen(nbad?(nbad+' clé(s) enregistrée(s) refusée(s) par Google ; '+nb+' valide(s). Retirez celles qui sont refusées.'):(off.length?'Connexion impossible pour le moment : réessayez avec une meilleure connexion.':(usingProxy()?'Service joignable. ':'')+nb+' clé(s) valide(s). La rédaction automatique est active.'),nbad>0&&!nb||off.length>0&&!nb);
+      }
+      render2();
+    }catch(e){setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
   if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=[];DB.ai.model='';save();setGen('Clé effacée.');render2();return}
   if(b.id==='claudeSave'){
-    const v=(document.getElementById('claudeKey').value||'').trim(); const m=(document.getElementById('claudeModel').value||'').trim()||'claude-sonnet-5-5';
+    const v=(document.getElementById('claudeKey').value||'').trim()||DB.ai.ckey||''; const m=(document.getElementById('claudeModel').value||'').trim()||'claude-sonnet-5-5';
     if(!v){setGen('Aucune clé Claude saisie.',true);return}
     const before={ckey:DB.ai.ckey,cmodel:DB.ai.cmodel,provider:DB.ai.provider};
     DB.ai.ckey=v;DB.ai.cmodel=m;DB.ai.provider='anthropic';save();
