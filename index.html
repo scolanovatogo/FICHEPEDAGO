@@ -1008,7 +1008,7 @@ async function geminiJson(prompt,opts){
   if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé gratuite dans Réglages.'};
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
-  const isTest=!!opts.test;
+  const isTest=!!opts.test, fast=!!opts.fast, t0=Date.now(), stopped=()=>GEN.stop||(opts.cancel&&opts.cancel.stop);
   const thinkCfg=m=>{if(GEM.noThink&&GEM.noThink[m]||/pro/.test(m)) return {};const v=/gemini-(\d+)/.exec(m);return (v&&+v[1]>=3)?{thinkingConfig:{thinkingLevel:'low'}}:{thinkingConfig:{thinkingBudget:0}}};
   let redo=false;
   let waits=0,lastError=null,models;
@@ -1016,18 +1016,19 @@ async function geminiJson(prompt,opts){
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
   const order=()=>{const k=GEM.good&&keys.includes(GEM.good)?[GEM.good,...keys.filter(x=>x!==GEM.good)]:keys.slice();const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
-  for(let round=0;round<(isTest?1:7);round++){
+  for(let round=0;round<(isTest?1:(fast?2:7));round++){
     let soonest=0;
     for(const [key,model] of order()){
       const hk=key+'|'+model;
       if(GEM.hot[hk]>Date.now()){const w=Math.ceil((GEM.hot[hk]-Date.now())/1000);soonest=soonest?Math.min(soonest,w):w;continue}
       const gap=(GEM.klast[key]||0)+GEM.gap-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
-      if(GEN.stop&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
+      if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
+      if(fast&&Date.now()-t0>80000) throw {code:'fatal',message:'Le service met trop de temps à répondre. Rien n’a été modifié : réessayez dans un instant.'};
       GEM.klast[key]=Date.now();
       let r;
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.7,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:90000);
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.7,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
       }catch(e){
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
         throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}
@@ -1055,8 +1056,8 @@ async function geminiJson(prompt,opts){
     if(redo){redo=false;round--;continue}
     if(isTest) break;
     // toutes les clés et tous les modèles sont momentanément limités : pause automatique puis reprise
-    if(!soonest||++waits>12) break;
-    if(soonest>180) break;               // quota du jour épuisé partout
+    if(!soonest||++waits>(fast?1:12)) break;
+    if(soonest>(fast?25:180)) break;               // quota du jour épuisé partout
     await gemPause(Math.min(75,Math.max(5,soonest)),lastError&&lastError.code==='service_busy'?'Les serveurs de Google sont surchargés en ce moment (ce n’est pas un problème de clé).':'Les '+(keys.length>1?keys.length+' clés sont':'quotas sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
   }
   if(lastError&&lastError.code==='invalid_json') throw lastError;
@@ -2018,8 +2019,11 @@ async function eprCorrect(E,ins){
   const C=E.content;
   const slim=p=>({titre:p.titre,bareme:p.bareme,enonce:p.enonce,corrige:p.corrige,type:p.type,gauche:p.gauche,droite:p.droite,liens:p.liens,groupes:p.groupes,solution:p.solution,fig:p.fig?'(figure existante)':undefined,figCorr:p.figCorr?'(figure existante)':undefined});
   const cur={situation:C.situation,consignes:C.consignes,ex2:(C.ex2||[]).map(slim),ex3:(C.ex3||[]).map(slim),corrSit:C.corrSit,figSit:C.figSit?'(figure existante)':undefined,figCorrSit:C.corrSitFig?'(figure existante)':undefined,grille:C.grille.map(g=>({critere:g.critere,nom:g.nom,lignes:parseGrille(g.txt)}))};
-  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nCAPACITÉS ET CONTENUS ENSEIGNÉS (référence : toute question doit s’y limiter, au niveau de la classe, sans compliquer) :\n'+E.caps+'\n\nApplique cette instruction à TOUTES les parties concernées (situation, consignes, exercices 2 et 3, corrigés, grille), même si elle est générale (par exemple « reviens aux contenus déposés », « c’est trop difficile », « hors programme ») : dans ce cas, relis chaque partie, repère ce qui dépasse les contenus ou le niveau de la classe, puis simplifie-le ou remplace-le par des questions conformes aux contenus. Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Garde les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+' Pour ajouter ou modifier une figure, donne les clés figSit, figCorrSit (situation et son corrigé) ou fig, figCorr dans la partie concernée, sous la forme ci-dessous ; les figures marquées « (figure existante) » sont conservées si tu n’y touches pas. '+GEO_DOC+' '+LATEX_RULE_EPR;
-  const r=await ask(prompt); let n=0;
+  const figWords=/figure|sch[ée]ma|dessin|construi|constru|trac[ée]|triangle|cercle|droite|angle|sym[ée]trie/i.test(ins);
+  const attempt=async(sc)=>{
+  const cur2={}; for(const k in cur){ if(!sc||sc.has(k)||(k==='figSit'&&sc.has('situation'))||(k==='figCorrSit'&&sc.has('corrSit'))) cur2[k]=cur[k] }
+  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(sc?cur2:cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nCAPACITÉS ET CONTENUS ENSEIGNÉS (référence : toute question doit s’y limiter, au niveau de la classe, sans compliquer) :\n'+E.caps+'\n\n'+(sc?'Applique l’instruction uniquement aux parties fournies ci-dessus, rapidement, sans réécrire ce qui n’est pas demandé.':'Applique cette instruction aux parties concernées (situation, consignes, exercices 2 et 3, corrigés, grille), même si elle est générale (par exemple « reviens aux contenus déposés », « c’est trop difficile », « hors programme ») : dans ce cas, repère ce qui dépasse les contenus ou le niveau de la classe, puis simplifie-le ou remplace-le par des questions conformes aux contenus.')+' Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Garde les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+' Pour ajouter ou modifier une figure, donne les clés figSit, figCorrSit (situation et son corrigé) ou fig, figCorr dans la partie concernée, sous la forme ci-dessous ; les figures marquées « (figure existante) » sont conservées si tu n’y touches pas. '+(figWords?GEO_DOC:'')+' '+LATEX_RULE_EPR;
+  const r=await corrAsk(prompt,document.getElementById('ep-st'),sc?'Application de l’instruction…':'Application de l’instruction à toute l’épreuve…'); let n=0;
   if(r&&typeof r==='object'){
     if(r.situation!==undefined){C.situation=eprS(r.situation);n++}
     if(Array.isArray(r.consignes)&&r.consignes.length){C.consignes=r.consignes.map(eprS);n++}
@@ -2030,6 +2034,11 @@ async function eprCorrect(E,ins){
     if(r.corrSit!==undefined){C.corrSit=eprS(r.corrSit);n++}
     if(Array.isArray(r.grille)&&r.grille.length){C.grille=r.grille.slice(0,4).map(normGrille);n++}
   }
+  return n;
+  };
+  const sc=eprScope(ins);
+  let n=await attempt(sc);
+  if(!n&&sc) n=await attempt(null);
   return n;
 }
 function eprSay(t,err){flash(t,err);const el=document.getElementById('ep-st');if(el){el.textContent=t;el.className='status genstatus'+(err?' err':' muted')}}
@@ -2145,6 +2154,47 @@ function eprAfter(){
   eprPreview();
 }
 
+
+/* ---------- corrections : rapides, ciblées, avec compteur et bouton Arrêter ---------- */
+async function corrAsk(prompt,stEl,label){
+  const cancel={stop:false}, t0=Date.now();
+  const btn=document.createElement('button'); btn.type='button'; btn.className='btn alt sm'; btn.textContent='Arrêter'; btn.style.marginLeft='8px';
+  const tick=()=>{if(stEl){stEl.textContent=label+' '+Math.round((Date.now()-t0)/1000)+' s';stEl.className='status muted'}};
+  if(stEl&&stEl.parentNode) stEl.parentNode.insertBefore(btn,stEl.nextSibling);
+  const iv=setInterval(tick,1000); tick();
+  let hardT;
+  const stopP=new Promise((_,rj)=>{btn.onclick=()=>{cancel.stop=true;rj({code:'cancelled',message:'Arrêté.'})}});
+  const hardP=new Promise((_,rj)=>{hardT=setTimeout(()=>{cancel.stop=true;rj({code:'fatal',message:'C’est trop long (plus de 100 secondes) : rien n’a été modifié. Réessayez, ou précisez la partie à corriger pour une réponse plus rapide.'})},100000)});
+  try{return await Promise.race([ask(prompt,{fast:true,cancel}),stopP,hardP])}
+  finally{clearInterval(iv);clearTimeout(hardT);btn.remove()}
+}
+function eprScope(ins){
+  const t=' '+String(ins||'').toLowerCase()+' ', S=new Set(), add=(...k)=>k.forEach(x=>S.add(x));
+  if(/situation|contexte/.test(t)) add('situation','corrSit');
+  if(/consigne/.test(t)) add('consignes','corrSit');
+  if(/exercice\s*2|objectives?|vrai|faux|qcm|choisis|relie|relier|r[ée]arrange|compl[èe]te/.test(t)) add('ex2');
+  if(/exercice\s*3|traditionnelles?/.test(t)) add('ex3');
+  if(/grille|bar[èe]me|crit[èe]re|indicateur/.test(t)) add('grille');
+  if(/corrig/.test(t)) add('corrSit','ex2','ex3');
+  return S.size?S:null;
+}
+function ficheScope(ins){
+  const t=' '+String(ins||'').toLowerCase()+' ', S=new Set(), add=(...k)=>k.forEach(x=>S.add(x));
+  if(/situation|contexte/.test(t)) add('situation');
+  if(/r[ée]solution|trac[ée]/.test(t)) add('resolution','trace');
+  if(/consigne/.test(t)) add('consignes');
+  if(/synth[èe]se/.test(t)) add('synthese');
+  if(/essentiel|retenir|r[ée]cap/.test(t)) add('essentiel','recap');
+  if(/application/.test(t)) add('exoApp','exoAppSol');
+  if(/maison/.test(t)) add('exoMaison','exoMaisonSol');
+  if(/exercice/.test(t)&&!/application|maison/.test(t)) add('exoApp','exoAppSol','exoMaison','exoMaisonSol','evalQ','evalR');
+  if(/[ée]valuation|question/.test(t)) add('evalQ','evalR');
+  if(/corrig|solution|r[ée]ponse/.test(t)) add('correction','exoAppSol','exoMaisonSol','evalR');
+  if(/capacit[ée]/.test(t)) add('capTitre');
+  if(/activit|d[ée]roulement|professeur|\bprof\b|[ée]l[èe]ve|moment|phase|dialogue/.test(t)) add('@m');
+  return S.size?S:null;
+}
+
 const CORR_KEYS=['capTitre','contenus','situation','resolution','synthese','essentiel','exoApp','exoAppSol','exoMaison','exoMaisonSol','correction','consignes','trace','evalQ','evalR','recap'];
 async function applyCorrection(i){
   const f=F(),s=f.seances[i],st=document.getElementById('ai-'+i),ta=document.getElementById('corr-'+i);
@@ -2152,16 +2202,18 @@ async function applyCorrection(i){
   const ins=((ta&&ta.value)||'').trim();
   if(!ins){say('Écrivez ou dictez d’abord l’instruction.',true);return}
   if(!aiKind()){say(NO_AI,true);return}
-  const cur={};
-  for(const k of CORR_KEYS) if(has(s[k])) cur[k]=String(s[k]);
-  for(const k in (s.m||{})){const m=s.m[k]; if(has(m.prof)) cur['m.'+k+'.prof']=String(m.prof); if(has(m.eleve)) cur['m.'+k+'.eleve']=String(m.eleve)}
-  say('Application de l’instruction…');
-  const prompt='Tu aides un enseignant du Togo à corriger une séance de sa fiche pédagogique ('+discLabel(f)+', classe '+(f.classe||'collège')+', leçon « '+(f.titre||'')+' »).\n'+
-    'Voici le contenu actuel de la séance sous forme d’objet JSON (clé → texte) :\n'+JSON.stringify(cur)+'\n\n'+
-    'INSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\n'+
-    'Capacité de la séance : '+(s.capTitre||'')+'\nContenus enseignés dans cette séance : '+(s.contenus||'')+'\n\nApplique cette instruction à TOUTES les parties concernées de la séance, même si elle est générale (par exemple « reviens aux contenus », « c’est trop difficile », « hors niveau ») : relis chaque partie, repère ce qui dépasse les contenus ou le niveau de la classe et simplifie-le. Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Réponds par un objet JSON qui contient SEULEMENT les clés à modifier (mêmes noms de clés), chacune avec son texte complet corrigé. N’inclus pas les clés inchangées. Conserve le balisage existant (**gras**, __souligné__, formules $...$ en LaTeX, [[blue:texte]], retours à la ligne \\n). Ne change rien d’autre. Si l’instruction ne concerne aucun texte, réponds {}.';
-  try{
-    const r=await ask(prompt);
+  const all={};
+  for(const k of CORR_KEYS) if(has(s[k])) all[k]=String(s[k]);
+  for(const k in (s.m||{})){const m=s.m[k]; if(has(m.prof)) all['m.'+k+'.prof']=String(m.prof); if(has(m.eleve)) all['m.'+k+'.eleve']=String(m.eleve)}
+  const attempt=async(sc)=>{
+    const cur={}; for(const k in all){ if(!sc||sc.has(k)||(sc.has('@m')&&k.startsWith('m.'))) cur[k]=all[k] }
+    const prompt='Tu aides un enseignant du Togo à corriger une séance de sa fiche pédagogique ('+discLabel(f)+', classe '+(f.classe||'collège')+', leçon « '+(f.titre||'')+' »).\n'+
+      'Voici '+(sc?'les parties concernées de la séance':'le contenu actuel de la séance')+' sous forme d’objet JSON (clé → texte) :\n'+JSON.stringify(cur)+'\n\n'+
+      'INSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\n'+
+      'Capacité de la séance : '+(s.capTitre||'')+'\nContenus enseignés dans cette séance : '+(s.contenus||'')+'\n\n'+
+      (sc?'Applique l’instruction à ces parties, rapidement, sans réécrire ce qui n’est pas demandé. ':'Applique cette instruction aux parties concernées de la séance, même si elle est générale (par exemple « reviens aux contenus », « c’est trop difficile », « hors niveau ») : repère ce qui dépasse les contenus ou le niveau de la classe et simplifie-le. ')+
+      'Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Réponds par un objet JSON qui contient SEULEMENT les clés à modifier (mêmes noms de clés), chacune avec son texte complet corrigé. N’inclus pas les clés inchangées. Conserve le balisage existant (**gras**, __souligné__, formules $...$ en LaTeX, [[blue:texte]], retours à la ligne \\n). Ne change rien d’autre. Si l’instruction ne concerne aucun texte, réponds {}.';
+    const r=await corrAsk(prompt,st,sc?'Application de l’instruction…':'Application de l’instruction à toute la séance…');
     let n=0;
     if(r&&typeof r==='object') for(const k in r){
       const v=r[k]; if(typeof v!=='string') continue;
@@ -2169,6 +2221,12 @@ async function applyCorrection(i){
       if(mm&&s.m&&s.m[mm[1]]){s.m[mm[1]][mm[2]]=v;n++}
       else if(CORR_KEYS.includes(k)){s[k]=v;n++}
     }
+    return n;
+  };
+  try{
+    const sc=ficheScope(ins);
+    let n=await attempt(sc);
+    if(!n&&sc) n=await attempt(null);      // ciblage manqué : on relit toute la séance
     touch();
     if(!n){say('Rien n’a été modifié : reformulez l’instruction en précisant la partie concernée.',true);return}
     openSeances.add(i);render2();
