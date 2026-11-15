@@ -367,7 +367,7 @@ const L=(label,val,valFmt)=>has(val)?'__'+label+'__ : '+(valFmt?valFmt(val):'**'
 
 function tb(o){return Object.assign({t:'tbl',cols:[100],head:[],rows:[],thick:false,gap:10},o)}
 function figPct(img){const wide=!!(img&&img.w&&img.h&&img.w/img.h>2.2);return {pct:35,ok:!wide}}
-const capFig=im=>im?Object.assign({},im,{dw:Math.min(im.dw||300,250)}):im;
+const capFig=im=>im?Object.assign({},im,{dw:Math.min(im.dw||300,(im.w&&im.h&&im.w/im.h>2.2)?420:250)}):im;
 function figSide(lines,img,o){o=o||{};
   const W=o.W||698, pct=figPct(img).pct, cw=Math.floor(W*pct/100)-12;
   const im=img?Object.assign({},img,{dw:Math.min(img.dw||300,cw)}):img;
@@ -1440,9 +1440,47 @@ function cavalierSvg(sp){
 /* =========================================================
    Figures géométriques : l'IA décrit la figure (points, segments, cercles, angles) et l'application la trace exactement
    ========================================================= */
-const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
-const GEO_RULE='00) GÉOMÉTRIE PLANE : pour toute figure faite de points, segments, droites, cercles, angles, triangles, quadrilatères, symétries, configurations… ne dessine PAS en SVG : réponds {"geo":{…}} avec la description géométrique de la figure, que l’application trace exactement. '+GEO_DOC;
+const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). DROITE GRADUÉE, DEMI-DROITE GRADUÉE ou AXE (nombres relatifs, abscisses, fractions, décimaux) : utilise {"droiteGraduee":{"min":-3,"max":5,"pas":1,"sous":2,"demi":"droite","origine":true,"points":{"A":2.5,"B":-1},"abscisses":false,"masque":[2,3]}} où « min » et « max » sont les valeurs des extrémités, « pas » l’écart entre deux graduations numérotées, « sous » le nombre de subdivisions par pas (2 = demi-graduations, 10 = dixièmes), « demi » = "droite" (demi-droite graduée vers la droite, départ à « min ») ou "gauche", à omettre pour une droite complète, « origine » écrit O au-dessus de 0, « points » = nom → abscisse (un nom commençant par _ n’est pas écrit), « abscisses »:true écrit l’abscisse à côté du nom, « masque » liste les valeurs dont le nombre n’est pas écrit, « etiq »:"aucune" n’écrit aucun nombre. Dans l’énoncé où l’élève doit placer des points, ne mets PAS « points » (ou mets les points à lire sans leur abscisse) ; dans le corrigé, ajoute les points placés. Cette forme remplace toute autre clé (n’y mets ni « points » de géométrie ni « segments »). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
+const GEO_RULE='00) GÉOMÉTRIE PLANE : pour toute figure faite de points, segments, droites, cercles, angles, triangles, quadrilatères, symétries, configurations… ET pour toute droite graduée, demi-droite graduée ou axe avec des points d’abscisse donnée (nombres relatifs, fractions, décimaux) ne dessine PAS en SVG : réponds {"geo":{…}} avec la description géométrique de la figure, que l’application trace exactement. '+GEO_DOC;
+function axeSvg(o){
+  o=o||{}; const W=480,H=130,M=34,Y=74;
+  let mn=+o.min,mx=+o.max; if(!Number.isFinite(mn))mn=0; if(!Number.isFinite(mx)||mx<=mn)mx=mn+5;
+  let pas=+o.pas; if(!(pas>0))pas=1;
+  const sous=Math.max(1,Math.min(10,Math.round(+o.sous||1)));
+  const X=t=>String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const fmt=v=>String(+(+v).toFixed(4)).replace('.',',').replace('-','−');
+  const x=v=>M+(v-mn)/(mx-mn)*(W-2*M);
+  const f1=v=>v.toFixed(1);
+  const text=(a,b,t,anc,sz,w)=>`<text x="${f1(a)}" y="${f1(b)}" font-size="${sz||15}" font-family="Arial" text-anchor="${anc||'middle'}"${w?` font-weight="${w}"`:''}>${X(t)}</text>`;
+  const out=[], demi=String(o.demi||o.demiDroite||'').toLowerCase();
+  const x0=x(mn),x1=x(mx), ex0=demi==='gauche'?x0-6:x0, ex1=demi==='droite'?x1+6:x1;
+  const left=demi!=='droite', right=demi!=='gauche';
+  const arrR=right?`<polygon points="${f1(W-6)},${Y} ${f1(W-20)},${Y-6} ${f1(W-20)},${Y+6}" fill="#000"/>`:'';
+  const arrL=left?`<polygon points="6,${Y} 20,${Y-6} 20,${Y+6}" fill="#000"/>`:'';
+  out.push(`<line x1="${left?6:f1(x0)}" y1="${Y}" x2="${right?W-6:f1(x1)}" y2="${Y}" stroke="#000" stroke-width="2"/>`,arrR,arrL);
+  const nmaj=Math.floor((mx-mn)/pas+1e-9);
+  const every=nmaj>16?Math.ceil(nmaj/16):1;
+  const hide=new Set((Array.isArray(o.masque)?o.masque:[]).map(v=>+(+v).toFixed(6)));
+  const etiq=String(o.etiq||o.etiquettes||'tous').toLowerCase();
+  for(let i=0;i<=nmaj*sous;i++){
+    const v=mn+i*pas/sous, xv=x(v), major=i%sous===0;
+    if(xv>W-8||xv<8) continue;
+    out.push(`<line x1="${f1(xv)}" y1="${Y-(major?9:5)}" x2="${f1(xv)}" y2="${Y+(major?9:5)}" stroke="#000" stroke-width="${major?2:1.4}"/>`);
+    if(major&&etiq!=='aucune'&&(i/sous)%every===0&&!hide.has(+v.toFixed(6))) out.push(text(xv,Y+27,fmt(v),'middle',15));
+  }
+  const pts=o.points&&typeof o.points==='object'?Object.keys(o.points).map(k=>[k,+o.points[k]]).filter(a=>Number.isFinite(a[1])&&a[1]>=mn-1e-9&&a[1]<=mx+1e-9).sort((a,b)=>a[1]-b[1]):[];
+  if(o.origine&&mn<=0&&mx>=0&&!pts.some(a=>Math.abs(x(a[1])-x(0))<34)) out.push(text(x(0),Y-16,'O','middle',17,'bold'));
+  let lastX=-1e9,up=0;
+  for(const [k,v] of pts){
+    const xv=x(v); out.push(`<line x1="${f1(xv)}" y1="${Y-13}" x2="${f1(xv)}" y2="${Y+13}" stroke="#000" stroke-width="2.4"/>`,`<circle cx="${f1(xv)}" cy="${Y}" r="3.4" fill="#000"/>`);
+    up=(xv-lastX<44)?(up+1)%3:0; lastX=xv;
+    const nm=/^_/.test(k)?'':k+(o.abscisses?'('+fmt(v)+')':'');
+    if(nm) out.push(text(xv,Y-20-up*18,nm,'middle',17,'bold'));
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${out.join('')}</svg>`;
+}
 function geoSvg(spec){
+  if(spec&&(spec.droiteGraduee||spec.axe)) return axeSvg(spec.droiteGraduee||spec.axe);
   const W=480,H=340,M=42;
   const A=(...k)=>{for(const x of k) if(Array.isArray(spec&&spec[x])) return spec[x]; return []};
   const X=t=>String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1508,7 +1546,7 @@ function geoSvg(spec){
 }
 async function eprFig(spec,dw,keepCredit){
   const im=await svgToPngImage(geoSvg(spec));
-  im.dw=dw||320; if(!keepCredit) im.credit=''; im.geo=spec; return im;
+  im.dw=(spec&&(spec.droiteGraduee||spec.axe))?Math.max(dw||0,420):(dw||320); if(!keepCredit) im.credit=''; im.geo=spec; return im;
 }
 async function eprFigOf(spec,dw){ if(!spec||typeof spec!=='object') return null; try{return await eprFig(spec,dw,false)}catch(e){return null} }
 async function eprMergeParts(old,arr){
