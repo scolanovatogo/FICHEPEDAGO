@@ -76,6 +76,11 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .list-item:last-child{border-bottom:none}
 .list-item .t{font-weight:600}
 .status{min-height:22px;font-size:13.5px}
+#topflash{position:fixed;top:0;left:0;right:0;z-index:9999;display:none;align-items:center;gap:10px;padding:11px 16px;background:#1d4ed8;color:#fff;font:600 15px/1.3 system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.35);cursor:pointer}
+#topflash.err{background:#b91c1c}
+#topflash .sp{flex:none;width:16px;height:16px;border:3px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:tfspin .8s linear infinite}
+#topflash.done .sp,#topflash.err .sp{display:none}
+@keyframes tfspin{to{transform:rotate(360deg)}}
 .status.err{color:var(--danger)}
 .welcome{max-width:520px;margin:6vh auto 0}
 .welcome h1{font-size:26px;margin-bottom:6px}
@@ -92,7 +97,7 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .paper .tb.nb td{border:none}
 .paper .tb td.sm{font-size:16px;line-height:1.27}
 .paper .tb td.just .ln{text-align:justify}
-.paper u{text-decoration:none;border-bottom:1.3px solid currentColor;padding-bottom:2px;font-weight:700}
+.paper u{text-decoration:none;background-image:linear-gradient(currentColor,currentColor);background-repeat:no-repeat;background-size:100% 1.3px;background-position:0 94%;padding-bottom:0;font-weight:700;-webkit-box-decoration-break:clone;box-decoration-break:clone}
 .paper .box{border:1px solid #000;padding:0 4px}
 .paper img{display:block;margin:4px auto}
 .paper .katex{font-size:1.02em}
@@ -706,9 +711,11 @@ async function exportPDF(onProgress,ctx){
   const els=[...st.querySelectorAll('.paper')];
   for(let i=0;i<els.length;i++){
     onProgress&&onProgress(i+1,els.length);
-    let cv; try{cv=await window.html2canvas(els[i],{scale:2,backgroundColor:'#ffffff',logging:false})}catch(e){cv=await window.html2canvas(els[i],{scale:1.5,backgroundColor:'#ffffff',logging:false})}
+    const opt=sc=>({scale:sc,backgroundColor:'#ffffff',logging:false,imageTimeout:0,onclone:d=>{const ps=[...d.querySelectorAll('.paper')];ps.forEach((pp,k)=>{if(k!==i) pp.remove()})}});
+    let cv; try{cv=await window.html2canvas(els[i],opt(1.6))}catch(e){cv=await window.html2canvas(els[i],opt(1.3))}
     if(i>0) pdf.addPage();
-    pdf.addImage(cv.toDataURL('image/jpeg',0.92),'JPEG',0,0,595.28,841.89,undefined,'FAST');
+    pdf.addImage(cv.toDataURL('image/jpeg',0.85),'JPEG',0,0,595.28,841.89,undefined,'FAST');
+    await new Promise(r=>setTimeout(r,0));
     cv.width=cv.height=0;
   }
   st.innerHTML='';
@@ -763,7 +770,20 @@ function errCopy(e){
 }
 const NO_IMG='La lecture de photos n’est pas disponible dans votre affichage actuel (Claude n’y reçoit pas les images). Importez plutôt le programme en PDF.';
 const NO_AI='La rédaction automatique n’est pas activée. Activez-la dans l’onglet Réglages avec une clé gratuite (1 minute, compte Gmail) ou une clé Claude (payante, meilleure qualité). La lecture des PDF et des photos fonctionne déjà sans clé.';
-function setGen(msg,err){GEN.msg=msg;GEN.err=!!err;document.querySelectorAll('.genstatus').forEach(el=>{el.textContent=msg;el.className='status genstatus'+(err?' err':'')})}
+let _flT=null;
+function flash(t,err){
+  let el=document.getElementById('topflash');
+  if(!el){el=document.createElement('div');el.id='topflash';el.setAttribute('role','status');el.innerHTML='<span class="sp"></span><span class="tx"></span>';el.addEventListener('click',()=>{el.style.display='none'});document.body.appendChild(el)}
+  clearTimeout(_flT);
+  t=String(t||'').trim();
+  if(!t){el.style.display='none';return}
+  const busy=!err&&/…|\.\.\./.test(t);
+  el.className=err?'err':(busy?'':'done');
+  el.querySelector('.tx').textContent=t;
+  el.style.display='flex';
+  if(!busy&&!err) _flT=setTimeout(()=>{el.style.display='none'},8000);
+}
+function setGen(msg,err){flash(msg,err);GEN.msg=msg;GEN.err=!!err;document.querySelectorAll('.genstatus').forEach(el=>{el.textContent=msg;el.className='status genstatus'+(err?' err':'')})}
 function geminiKeys(){if(DB.ai&&String(DB.ai.proxy||'').trim()) return ['proxy'];const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,3)}
 function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
@@ -1064,7 +1084,7 @@ async function enhanceForOcr(file){
 }
 let GUIDE_MSG='';
 async function importGuide(file){
-  const f=F(); const say=t=>{GUIDE_MSG=t;const st=document.getElementById('guideStatus');if(st)st.textContent=t};
+  const f=F(); const say=t=>{flash(t);GUIDE_MSG=t;const st=document.getElementById('guideStatus');if(st)st.textContent=t};
   const key=(f.titre||((document.getElementById('lessonHint')||{}).value)||'');
   const words=noAccent(key).toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4);
   const isPdf=/pdf$/i.test(file.type)||/\.pdf$/i.test(file.name);
@@ -1508,17 +1528,33 @@ let genWakeLock=null;
 async function acquireGenWakeLock(){try{if('wakeLock' in navigator && document.visibilityState==='visible') genWakeLock=await navigator.wakeLock.request('screen')}catch(e){genWakeLock=null}}
 async function releaseGenWakeLock(){try{if(genWakeLock){await genWakeLock.release();genWakeLock=null}}catch(e){genWakeLock=null}}
 document.addEventListener('visibilitychange',()=>{if(GEN.running&&document.visibilityState==='visible') acquireGenWakeLock()});
+function resetGenerated(f){
+  const A=f.tpl==='A';
+  const b=newSeance(f.tpl);
+  f.seances.forEach(s=>{
+    for(const k of ['capNum','capTitre','contenus','situation','img','imgKey','synthese','resolution','essentiel','exoApp','exoMaison','consignes','trace','traceImg','exoAppSol','evalQ','evalR','exoMaisonSol']) s[k]=b[k];
+    delete s.autoImgSearch;
+    const mm=A?[['remob',['prof','eleve']],['appro',['eleve']]]:[['prereq',['prof','eleve']]];
+    mm.forEach(([m,ks])=>{if(s.m&&s.m[m]&&DEF[f.tpl]&&DEF[f.tpl][m]) ks.forEach(k=>{s.m[m][k]=DEF[f.tpl][m][k]})});
+  });
+  f.bilan=BIL_T.map(()=>({q:'',s:''}));
+}
 async function generateAll(f,o){
   if(GEN.running) return;
   if(!f.capacites.some(c=>has(c.cap))){setGen('Ajoutez d’abord les capacités et contenus (étape 2).',true);return}
   GEN.running=true;GEN.stop=false;GEN.figMissing=[];lockGen(true);await acquireGenWakeLock();
-  const n=f.seances.length;let failed=[],failWhy='';
+  const n=f.seances.length;let failed=[],failWhy='',snap=null;
   try{
     if(!aiKind()){
       planLocal(f,o);rememberProgram(f);touch();
       setGen('Capacités réparties sur les '+n+' séance(s). Pour que l’application rédige aussi les situations d’apprentissage, la résolution, l’essentiel à retenir et les exercices, activez la rédaction automatique dans Réglages (clé gratuite, 1 minute).');
       step=3;openSeances=new Set([0]);return;
     }
+    setGen('Réinitialisation de la fiche avant la nouvelle rédaction…');
+    snap={s:JSON.parse(JSON.stringify(f.seances)),b:JSON.parse(JSON.stringify(f.bilan||[]))};
+    resetGenerated(f);o=Object.assign({},o,{overwrite:true});touch();
+    {const sh=document.getElementById('sheets');if(sh) sh.innerHTML='';}
+    if(view==='fiche'){render2();lockGen(true)}
     setGen('Répartition des capacités sur les '+n+' séance(s)…');
     try{await planSeances(f,o)}
     catch(e){
@@ -1541,22 +1577,32 @@ async function generateAll(f,o){
       if(!ok){failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':''); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')) throw last;}
     }
     let bilNote='';
-    if(!GEN.stop&&!failed.length){
+    if(!GEN.stop){
       setGen('Rédaction des exercices de synthèse de la leçon…');
       try{await genBilan(f,o);touch()}catch(e){if(e&&e.code==='cancelled') throw e; bilNote=' Les exercices de synthèse n’ont pas pu être rédigés (bouton « Rédiger les exercices de synthèse »).'}
+      if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets (bouton « Rédiger les exercices de synthèse »).';
     }
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
-    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Cliquez à nouveau sur « Préparer les séances » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
+    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Ouvrez cette séance à l’étape 3 et cliquez sur « Rédiger cette séance automatiquement » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
     if(!GEN.stop){step=3;openSeances=new Set([0])}
   }catch(e){setGen(errCopy(e),true)}
-  finally{GEN.running=false;await releaseGenWakeLock();lockGen(false);if(view==='fiche'){render2();runPendingImageSearches(f)}}
+  finally{
+    if(snap&&!GEN.stop){
+      /* en cas d'échec, on remet l'ancien contenu des séances que la nouvelle rédaction n'a pas pu produire */
+      f.seances.forEach((x,i)=>{if(!has(x.situation)&&snap.s[i]&&has(snap.s[i].situation)) f.seances[i]=snap.s[i]});
+      if(!(f.bilan||[]).some(x=>has(x.q))&&snap.b.some(x=>has(x.q))) f.bilan=snap.b;
+      touch();
+    }
+    GEN.running=false;await releaseGenWakeLock();lockGen(false);if(view==='fiche'){render2();runPendingImageSearches(f)}}
 }
 async function fillSeance(i){
   const f=F(); const st=document.getElementById('ai-'+i);
-  const say=(t,err)=>{if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
+  const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
   if(!aiKind()){say(NO_AI,true);return}
   say('Rédaction de la séance en cours…');
-  try{await genSeanceContent(f,i,{overwrite:false});touch();openSeances.add(i);render2();runPendingImageSearches(f)}catch(e){say(errCopy(e),true)}
+  try{await genSeanceContent(f,i,{overwrite:false});touch();
+    if(f.seances.every(x=>has(x.situation)&&has(x.exoApp))&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))){say('Rédaction des exercices de synthèse de la leçon…');try{await genBilan(f,{overwrite:false});touch()}catch(e){if(e&&e.code==='cancelled') throw e}}
+    openSeances.add(i);render2();runPendingImageSearches(f)}catch(e){say(errCopy(e),true)}
 }
 
 async function genBilan(f,o){
@@ -1569,10 +1615,16 @@ async function genBilan(f,o){
   '- "vf" : exercice « Vrai ou faux » de 6 affirmations numérotées, une par ligne ; consigne : répondre par V ou F et corriger les affirmations fausses. La solution donne V ou F pour chacune avec la correction des fausses.\n'+
   '- "mix" : exercice en trois parties : (a) 2 questions directes ; (b) 3 phrases à compléter (mets ……… à la place du mot manquant) ; (c) relier par des flèches : colonne de gauche numérotée 1, 2, 3, 4 et colonne de droite lettrée a, b, c, d dans un ordre mélangé. La solution donne les réponses de chaque partie (ex. 1→c).\n'+
   '- "sp" : TROIS situations-problèmes différentes et progressives, chacune avec un contexte concret local et des consignes numérotées qui font mobiliser plusieurs séances de la leçon. La solution de chacune est une résolution détaillée et rédigée.\n'+
-  'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+(f.tpl==='B'?'Discipline expérimentale : les situations-problèmes s’appuient sur une expérience, un montage, des mesures ou un objet technique du quotidien, avec des données chiffrées ; les questions peuvent demander de légender, de schématiser ou d’interpréter un montage décrit par écrit. ':'')+LATEX_RULE;
-  const d=await ask(prompt);
-  const put=(k,v)=>{if(v&&typeof v==='object'){if(typeof v.q==='string'&&has(v.q)) bl[k].q=v.q; if(typeof v.s==='string'&&has(v.s)) bl[k].s=v.s}};
-  put(0,d&&d.vf);put(1,d&&d.mix);((d&&d.sp)||[]).slice(0,3).forEach((v,k)=>put(2+k,v));
+  'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+(f.tpl==='B'?'DISCIPLINE EXPÉRIMENTALE (physique, chimie, technologie) : les cinq exercices sont OBLIGATOIRES, comme en mathématiques. « vf » : 6 affirmations vrai/faux sur les notions, grandeurs, unités, appareils et règles de sécurité de la leçon. « mix » : 2 questions directes (définition, formule, unité ou appareil), 3 phrases à compléter avec les mots-clés de la leçon, puis 4 éléments à relier par des flèches (grandeurs, unités, appareils ou symboles). Les trois situations-problèmes s’appuient sur une expérience, un montage, des mesures ou un objet technique du quotidien (appareil électrique, facture, ustensile, réaction courante…) avec des données chiffrées ; les questions demandent de calculer (formule, application numérique et unité), d’interpréter, de légender ou de schématiser un montage décrit par écrit. Les solutions donnent les formules, les calculs et les unités. ':'')+LATEX_RULE;
+  const tx=v=>Array.isArray(v)?v.map(tx).join('\n'):(v&&typeof v==='object')?Object.values(v).map(tx).join('\n'):String(v==null?'':v);
+  const complete=()=>bl.every(x=>has(x.q)&&has(x.s));
+  const over=!!(o&&o.overwrite);
+  for(let attempt=1;attempt<=2&&!complete();attempt++){
+    const d=await ask(attempt===1?prompt:prompt+'\nATTENTION : la réponse précédente était incomplète. Renvoie les CINQ éléments (vf, mix et les trois situations-problèmes de « sp »), chacun avec « q » (énoncé) ET « s » (solution) en texte.');
+    const put=(k,v)=>{if(!v||typeof v!=='object') return; const q=tx(v.q!==undefined?v.q:(v.enonce!==undefined?v.enonce:v.question)),s=tx(v.s!==undefined?v.s:(v.solution!==undefined?v.solution:v.reponse));
+      if(has(q)&&(over&&attempt===1||!has(bl[k].q))) bl[k].q=q; if(has(s)&&(over&&attempt===1||!has(bl[k].s))) bl[k].s=s};
+    put(0,d&&d.vf);put(1,d&&d.mix);((d&&d.sp)||[]).slice(0,3).forEach((v,k)=>put(2+k,v));
+  }
   return bl.some(x=>has(x.q));
 }
 /* =========================================================
@@ -1743,7 +1795,7 @@ async function eprCorrect(E,ins){
   }
   return n;
 }
-function eprSay(t,err){const el=document.getElementById('ep-st');if(el){el.textContent=t;el.className='status genstatus'+(err?' err':' muted')}}
+function eprSay(t,err){flash(t,err);const el=document.getElementById('ep-st');if(el){el.textContent=t;el.className='status genstatus'+(err?' err':' muted')}}
 async function eprAct(a,b){
   const E=eprInit();
   if(a==='raw'){EPR_RAW=!EPR_RAW;render2();return}
@@ -1756,6 +1808,7 @@ async function eprAct(a,b){
     E.caps=[...String(E.caps).split('\n').filter(has),...add.filter(x=>!have.has(x))].join('\n'); save();render();return}
   if(a==='gen'){
     if(!aiKind()){eprSay(NO_AI,true);return}
+    E.content=null; save(); render(); b=document.querySelector('[data-epact="gen"]')||b;
     b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;
     await acquireGenWakeLock();
     try{await genEpreuve(E);save();render();eprSay('Épreuve préparée : relisez le sujet, le corrigé et la grille, puis téléchargez-la.')}
@@ -1834,7 +1887,7 @@ function renderEpr(){
   const iS=edit.indexOf('<section class="card"><h2>Sujet</h2>'),iI=edit.indexOf('<section class="card"><h2>Corriger avec'),iT=edit.indexOf('<section class="card"><h2>Télécharger'),iP=edit.indexOf('<div class="sheet-wrap" id="eprSheets"');
   const rawPart=edit.slice(iS,iI),instrPart=edit.slice(iI,iT),dlPart=edit.slice(iT,iP),prevPart=edit.slice(iP);
   const toggle=`<section class="card"><div class="row"><button class="btn alt" type="button" data-epact="raw" aria-expanded="${EPR_RAW}">${EPR_RAW?'Masquer le texte brut':'Afficher le texte brut (modifier à la main)'}</button></div><div class="muted small" style="margin-top:6px">Le texte brut contient les formules sous forme de code (par exemple $\\frac{3}{4}$). L’aperçu ci-dessus montre le résultat tel qu’il sera imprimé.</div></section>`;
-  return head+prevPart+dlPart+instrPart+toggle+(EPR_RAW?rawPart:'');
+  return toggle+head+prevPart+dlPart+instrPart+(EPR_RAW?rawPart:'');
 }
 let eprPrevT=null;
 let EPR_RAW=false;
@@ -1852,7 +1905,7 @@ function eprAfter(){
 const CORR_KEYS=['capTitre','contenus','situation','resolution','synthese','essentiel','exoApp','exoAppSol','exoMaison','exoMaisonSol','correction','consignes','trace','evalQ','evalR','recap'];
 async function applyCorrection(i){
   const f=F(),s=f.seances[i],st=document.getElementById('ai-'+i),ta=document.getElementById('corr-'+i);
-  const say=(t,err)=>{if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
+  const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
   const ins=((ta&&ta.value)||'').trim();
   if(!ins){say('Écrivez ou dictez d’abord l’instruction.',true);return}
   if(!aiKind()){say(NO_AI,true);return}
@@ -1882,7 +1935,7 @@ async function applyCorrection(i){
 let REC=null;
 function toggleMic(i,btn){
   const ta=document.getElementById('corr-'+i),st=document.getElementById('ai-'+i);
-  const say=(t,err)=>{if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
+  const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){say('La dictée n’est pas disponible dans ce navigateur : appuyez dans la case puis utilisez l’icône micro du clavier de votre téléphone.',true);return}
   if(REC){try{REC.stop()}catch(e){}return}
@@ -2113,7 +2166,7 @@ function stepSeances(f){
     ${fld('Exercices proposés','proposes',{rows:5,wide:true,hint:'Une ligne par exercice'})}
     ${fld('Stratégie pédagogique','strategie',{rows:2,wide:true})}</div></section>`:'';
   const gen=`<section class="card"><h2>Préparation automatique <small>${f.seances.length} séance(s)</small></h2>
-   <p class="muted small" style="margin:0 0 10px">À partir du tableau des capacités et contenus, L’application répartit les capacités sur les séances puis rédige pour chacune la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Seuls les champs vides sont remplis.</p>
+   <p class="muted small" style="margin:0 0 10px">À partir du tableau des capacités et contenus, L’application répartit les capacités sur les séances puis rédige pour chacune la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier.</p>
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
@@ -2247,7 +2300,7 @@ root.addEventListener('click',async e=>{
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
   if(d.mic!==undefined){toggleMic(d.mic,b);return}
   if(d.bilan!==undefined){
-    const st=document.getElementById('bil-st'); const say=(t,err)=>{if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
+    const st=document.getElementById('bil-st'); const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
     if(!aiKind()){say(NO_AI,true);return}
     b.disabled=true; say('Rédaction des exercices de synthèse…');
     try{const ok=await genBilan(f,{overwrite:true});touch();render2();const s2=document.getElementById('bil-st');if(s2){s2.textContent=ok?'Exercices de synthèse rédigés : relisez-les.':'Rien n’a été rédigé, réessayez.';s2.className='status small muted'}}
