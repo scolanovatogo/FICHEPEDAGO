@@ -361,6 +361,7 @@ function figPct(img){const W=698,dw=(img&&img.dw)||320;
   const shrink=(W*pct/100-14)/dw;
   const wide=!!(img&&img.w&&img.h&&img.w/img.h>2.2);
   return {pct,ok:shrink>=0.8&&!wide}}
+const capFig=im=>im?Object.assign({},im,{dw:Math.min(im.dw||300,250)}):im;
 function figSide(lines,img,o){o=o||{};
   const W=698, pct=figPct(img).pct;
   return tb({nb:true,cols:[100-pct,pct],gap:o.gap==null?8:o.gap,rows:[row([cell(lines,Object.assign({nb:true,just:true},o.lc||{})),cell([],{nb:true,img:img,imgMax:Math.floor(W*pct/100)-14,mid:true,align:'center'})],{bt:false,bb:false})]});
@@ -809,7 +810,48 @@ async function initSample(){
     if(SAMPLE){try{LIM=await SAMPLE.limits();SAMPLE_IMG=!!(LIM&&LIM.images)}catch(e){LIM=null;SAMPLE_IMG=false}} }catch(e){SAMPLE=null}
   if(DB.profile) render();
 }
+let KP={open:false,skip:0};
+function keyPromptMaybe(e){
+  const c=e&&e.code; if(KP.open) return;
+  if(c==='rate_limited'){ if(aiKind()==='anthropic'||/Claude/.test(String(e.message||''))) return; if(Date.now()<KP.skip) return; setTimeout(()=>keyPrompt(/JOUR/.test(String(e.message||''))?'day':'minute'),0) }
+  else if(c==='no_ai'){ setTimeout(()=>keyPrompt('none'),0) }
+}
+function keyPrompt(why){
+  if(KP.open||typeof document==='undefined') return; KP.open=true;
+  const head=why==='none'?'Activez la rédaction automatique avec votre propre clé gratuite':why==='day'?'Le quota gratuit du jour est atteint':'Le service gratuit est très sollicité en ce moment';
+  const sub=why==='none'?'Pour rédiger les séances et les épreuves, l’application a besoin d’une clé gratuite Google. Elle s’obtient en une minute avec un compte Gmail, sans carte bancaire.'
+    :'Pour continuer sans attendre, créez votre propre clé gratuite Google : vous aurez votre propre quota, indépendant des autres utilisateurs. Ce qui est déjà rédigé est conservé.';
+  const d=document.createElement('div'); d.id='kpBox'; d.setAttribute('role','dialog'); d.setAttribute('aria-modal','true');
+  d.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:14px';
+  d.innerHTML='<div style="background:#fff;color:#111;max-width:520px;width:100%;max-height:92vh;overflow:auto;border-radius:14px;padding:18px;font:15px/1.45 system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.4)">'
+   +'<h2 style="margin:0 0 6px;font-size:19px">'+esc(head)+'</h2><p style="margin:0 0 10px">'+esc(sub)+'</p>'
+   +'<ol style="margin:0 0 12px;padding-left:20px;display:grid;gap:5px;font-size:14px">'
+   +'<li>Ouvrez <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="font-weight:700">aistudio.google.com/apikey ↗</a> et connectez-vous avec votre compte Gmail.</li>'
+   +'<li>Appuyez sur « Create API key » (ou « Créer une clé API »). Si on vous propose de choisir un projet, prenez « <b>nouveau projet</b> ».</li>'
+   +'<li>Copiez la clé (elle commence par <b>AIza</b>) et collez-la ci-dessous.</li></ol>'
+   +'<textarea id="kpKeys" rows="3" autocomplete="off" spellcheck="false" placeholder="AIza…  (une clé par ligne)" style="width:100%;box-sizing:border-box;font:14px monospace;padding:8px;border:1px solid #9aa;border-radius:8px"></textarea>'
+   +'<div id="kpSt" role="status" style="min-height:20px;margin:8px 0;font-size:14px"></div>'
+   +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" id="kpOk" style="padding:10px 16px;border:0;border-radius:8px;background:#1d4ed8;color:#fff;font:600 15px system-ui">Enregistrer et tester</button>'
+   +'<button type="button" id="kpNo" style="padding:10px 16px;border:1px solid #9aa;border-radius:8px;background:#fff;font:15px system-ui">Plus tard</button></div>'
+   +'<p style="margin:10px 0 0;font-size:12px;color:#555">Votre clé reste enregistrée sur votre appareil seulement. Elle sert uniquement à contacter Google pour rédiger vos documents.</p></div>';
+  document.body.appendChild(d);
+  const st=d.querySelector('#kpSt'), close=()=>{d.remove();KP.open=false};
+  const say=(t,bad)=>{st.textContent=t;st.style.color=bad?'#b91c1c':'#166534'};
+  d.querySelector('#kpNo').onclick=()=>{KP.skip=Date.now()+10*60000;close()};
+  d.querySelector('#kpOk').onclick=async()=>{
+    const b=d.querySelector('#kpOk');
+    const add=[...new Set(String(d.querySelector('#kpKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))];
+    if(!add.length){say('Collez d’abord votre clé.',true);return}
+    b.disabled=true; say('Test de la clé…'); const good=[],bad=[];
+    for(const k of add){try{const r=await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=5',{headers:gHeaders(k)},12000);(r.ok?good:bad).push(k)}catch(e){bad.push(k)}}
+    if(!good.length){say(bad.length>1?'Aucune de ces clés n’est valide. Vérifiez qu’elles sont copiées en entier.':'Cette clé n’est pas valide. Vérifiez qu’elle est copiée en entier.',true);b.disabled=false;return}
+    DB.ai.keys=[...new Set([...ownKeys(),...good])].slice(0,30); DB.ai.key=DB.ai.keys[0]; DB.ai.model=''; DB.ai.provider=''; GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
+    say('Clé enregistrée'+(bad.length?' ('+bad.length+' clé(s) refusée(s))':'')+'. Vous pouvez relancer la préparation.'); flash('Clé enregistrée : relancez la préparation.');
+    setTimeout(()=>{close();try{render()}catch(e){}},900);
+  };
+}
 function errCopy(e){
+  try{keyPromptMaybe(e)}catch(_){}
   const c=e&&e.code;
   if(c==='not_granted') return 'Autorisation refusée : Claude n’a pas pu être utilisé. Acceptez la demande d’autorisation puis recommencez.';
   if(c==='rate_limited') return (e&&e.message)||'Trop de demandes. Patientez quelques minutes puis cliquez à nouveau : ce qui est déjà rédigé est conservé.';
@@ -1785,8 +1827,9 @@ function repartTable(E){
 function eprFitK(doc){
   const cut=doc.findIndex(b=>b.pb); const suj=cut>0?doc.slice(0,cut):doc;
   const cnt=k=>paginate(suj,k).length;
-  for(const k of [1,.94,.88,.83]) if(cnt(k)<=1) return k;
-  for(const k of [1,.94,.88,.83,.78,.74,.7]) if(cnt(k)<=2) return k;
+  /* police de l'épreuve : 10,5 pt (k=.875) en priorité, puis 10 / 9,5 / 9 pt pour tenir sur UNE page */
+  for(const k of [.875,.83,.79,.75]) if(cnt(k)<=1) return k;
+  for(const k of [.875,.83,.79,.75,.7]) if(cnt(k)<=2) return k;
   return .7;
 }
 const OPT_RE=/^\s*(?:[-•–]\s*)?(?:\*\*)?\(?([A-Da-d])\s*[).:]\s*\S/;
@@ -1820,18 +1863,18 @@ function eprPartBlocks(p,corr){
     if(corr)out.push({t:'p',lines:['**'+String(p.solution||'')+'**'],gap:6,indent:true});
     else{out.push({t:'p',lines:[eprLines(p.groupes).join(' / ')],gap:4,indent:true});out.push({t:'p',lines:['…………………………………………………………………………………………………………………………'],gap:6,indent:true})}
   }else{
-    const fg=corr?p.figCorr:p.fig, ls=(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(p.enonce):String(corr?p.corrige:p.enonce).split('\n');
+    const fg=capFig(corr?p.figCorr:p.fig), ls=(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(p.enonce):String(corr?p.corrige:p.enonce).split('\n');
     if(fg){figFlow(ls,fg,{gap:6,lc:{just:false},p:{just:false,indent:true}}).forEach(b=>out.push(b));return out}
     out.push({t:'p',lines:ls,gap:6,indent:true});
   }
-  if(corr?p.figCorr:p.fig)out.push({t:'img',img:corr?p.figCorr:p.fig,gap:6});
+  if(corr?p.figCorr:p.fig)out.push({t:'img',img:capFig(corr?p.figCorr:p.fig),gap:6});
   return out;
 }
 function buildEprDoc(E){
   const doc=[eprHead(E)], C0=E.content; if(!C0) return doc; const C=cleanUl(C0);
   const exT=(n,t,p)=>({t:'p',lines:['**__Exercice '+n+'__ : '+t+'** *('+fmtN(parseN(p))+' pts)*'],keep:true,gap:4});
   doc.push(exT(1,'Situation d’évaluation',E.p1));
-  if(C.figSit) figFlow(String(C.situation).split('\n'),C.figSit,{gap:6}).forEach(b=>doc.push(b));
+  if(C.figSit) figFlow(String(C.situation).split('\n'),capFig(C.figSit),{gap:6}).forEach(b=>doc.push(b));
   else doc.push({t:'p',lines:String(C.situation).split('\n'),just:true,gap:6});
   (C.consignes||[]).forEach((c,i)=>doc.push({t:'p',lines:['**Consigne'+(C.consignes.length>1?' '+(i+1):'')+'** : '+c],just:true,gap:4}));
   const rt=repartTable(E); if(rt) doc.push(rt);
@@ -1841,7 +1884,7 @@ function buildEprDoc(E){
   (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});eprPartBlocks(p,false).forEach(b=>doc.push(b))});
   doc.push({t:'p',lines:['**__Proposition de corrigé type__**'],align:'center',gap:10,pb:true});
   doc.push({t:'p',lines:['**__Exercice 1__**'],keep:true,gap:4});
-  if(C.corrSitFig) figFlow(String(C.corrSit).split('\n'),C.corrSitFig,{gap:8,lc:{just:false},p:{just:false}}).forEach(b=>doc.push(b));
+  if(C.corrSitFig) figFlow(String(C.corrSit).split('\n'),capFig(C.corrSitFig),{gap:8,lc:{just:false},p:{just:false}}).forEach(b=>doc.push(b));
   else doc.push({t:'p',lines:String(C.corrSit).split('\n'),gap:8});
   const gr=grilleRows(E);
   if(gr.length){
