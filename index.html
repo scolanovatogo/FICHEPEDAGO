@@ -339,7 +339,8 @@ function runsHTML(s,base){
   }).join('');
 }
 const mk=(s,keepNL)=>{let t=String(s??'').replace(/\[\[[a-zA-Z]+[:|]/g,'').replace(/\[\[/g,'[').replace(/\]\]/g,']').replace(/\*+/g,'').replace(/__+/g,' ');return (keepNL?t.replace(/[ \t]+/g,' ').replace(/[ \t]*\n[ \t]*/g,'\n'):t.replace(/\s*\n+\s*/g,' ')).trim()};
-function isAdmin(){try{if(location.hash==='#admin'&&DB&&DB.ai&&!DB.ai.admin){DB.ai.admin=true;save()}}catch(e){}return !!(DB&&DB.ai&&DB.ai.admin)}
+function isAdmin(){try{if(DB&&DB.ai&&DB.ai.admin){DB.ai.admin=false;save()}return location.hash==='#admin'}catch(e){return false}}
+try{window.addEventListener('hashchange',()=>{try{if(location.hash!=='#admin'&&typeof view!=='undefined'&&view==='set')view='fiche';render()}catch(e){}})}catch(e){}
 const lines=s=>String(s??'').split('\n');
 const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
 function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
@@ -2324,8 +2325,7 @@ function renderSet(){
     <li>Appuyez sur « Create API key », puis copiez la clé. Pas de carte bancaire.</li>
     <li>Collez-la ci-dessous.</li></ol>
    <label class="f" for="aiKeys" style="max-width:520px">Clés gratuites <span class="hint">une clé par ligne, jusqu’à 30. L’application passe automatiquement à la suivante quand une clé est limitée. ${ownKeys().length?ownKeys().length+' clé(s) enregistrée(s).':''}</span><textarea id="aiKeys" rows="6" autocomplete="off" spellcheck="false" placeholder="AIza…&#10;AIza…" style="font-family:monospace">${esc(ownKeys().join('\n'))}</textarea></label>
-   <div class="note small" style="margin-top:6px"><b>Important :</b> Google applique la limite gratuite <b>par projet</b>, pas par clé. Deux clés créées dans le même projet partagent le même quota. Sur aistudio.google.com/apikey, choisissez à chaque fois « Create API key in <b>new project</b> » (nouveau projet). Quand des clés personnelles sont saisies ici, elles sont utilisées à la place du serveur ci-dessous.</div>
-   <label class="f" for="aiProxy" style="max-width:520px;margin-top:8px">Adresse du serveur <span class="hint">facultatif : si vous avez mis en place le serveur (Cloudflare), il garde les clés à la place de cet appareil</span><input type="url" id="aiProxy" autocomplete="off" value="${esc(DB.ai.proxy||'')}" placeholder="https://fiches.votre-nom.workers.dev"></label>
+   <div class="note small" style="margin-top:6px"><b>Important :</b> Google applique la limite gratuite <b>par projet</b>, pas par clé. Deux clés créées dans le même projet partagent le même quota. Sur aistudio.google.com/apikey, choisissez à chaque fois « Create API key in <b>new project</b> » (nouveau projet). Les clés saisies ici sont utilisées en priorité.</div>
    <div class="row" style="margin-top:10px"><button class="btn" id="aiSave">Enregistrer les clés et tester</button>${has_?'<button class="btn danger" id="aiClear">Effacer la clé</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="muted small" style="margin-top:8px">État actuel : ${esc(diagText())}${DB.ai.model?' · modèle '+esc(DB.ai.model):''}</div>
@@ -2436,17 +2436,17 @@ root.addEventListener('click',async e=>{
     b.disabled=false;return}
   if(d.corr!==undefined){b.disabled=true;await applyCorrection(+d.corr);b.disabled=false;return}
   if(b.id==='aiSave'){
-    const vals=[...new Set(String(document.getElementById('aiKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))].slice(0,30); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; DB.ai.proxy=(document.getElementById('aiProxy').value||'').trim().replace(/\/+$/,''); GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
+    const vals=[...new Set(String(document.getElementById('aiKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))].slice(0,30); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
     if(!geminiKeys().length){setGen('Aucune clé saisie.',true);return}
     b.disabled=true; setGen('Test de la connexion…');
     try{
       const rep=[];
       if(!usingProxy()) for(let i=0;i<vals.length;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
-      const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((usingProxy()?'Serveur joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
+      const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((usingProxy()?'Service joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
     catch(e){DB.ai.model='';setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
-  if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=[];DB.ai.model='';DB.ai.proxy='';save();setGen('Clé effacée.');render2();return}
+  if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=[];DB.ai.model='';save();setGen('Clé effacée.');render2();return}
   if(b.id==='claudeSave'){
     const v=(document.getElementById('claudeKey').value||'').trim(); const m=(document.getElementById('claudeModel').value||'').trim()||'claude-sonnet-5-5';
     if(!v){setGen('Aucune clé Claude saisie.',true);return}
