@@ -799,7 +799,7 @@ async function geminiCheck(r){
   else if(r.status===403) e.message='Clé refusée ou service non autorisé dans votre compte. '+msg;
   else if(r.status===429) {e.code='rate_limited';e.message='Limite de requêtes du service de rédaction atteinte. Patientez un peu puis recommencez : ce qui est déjà rédigé est conservé.'}
   else if(r.status===404) e.code='model_gone';
-  else if(r.status===503||r.status===500||r.status===502||r.status===504) {e.code='service_busy';e.message='Les serveurs du service de rédaction sont temporairement surchargés (erreur '+r.status+'). Nouvelle tentative ou changement automatique de modèle…'}
+  else if([500,502,503,504,520,521,522,523,524,529].includes(r.status)) {e.code='service_busy';e.message='Les serveurs du service de rédaction sont temporairement surchargés (erreur '+r.status+'). Nouvelle tentative ou changement automatique de modèle…'}
   else e.message=msg||('Erreur du service de rédaction ('+r.status+')');
   throw e;
 }
@@ -872,6 +872,8 @@ async function geminiJson(prompt,opts){
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
   const isTest=!!opts.test;
+  const thinkCfg=m=>{if(GEM.noThink&&GEM.noThink[m]||/pro/.test(m)) return {};const v=/gemini-(\d+)/.exec(m);return (v&&+v[1]>=3)?{thinkingConfig:{thinkingLevel:'low'}}:{thinkingConfig:{thinkingBudget:0}}};
+  let redo=false;
   let waits=0,lastError=null,models;
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
@@ -888,7 +890,7 @@ async function geminiJson(prompt,opts){
       let r;
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0.7,responseMimeType:'application/json'}})},isTest?15000:60000);
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:0.7,responseMimeType:'application/json'},thinkCfg(model))})},isTest?15000:90000);
       }catch(e){
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
         throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}
@@ -902,6 +904,7 @@ async function geminiJson(prompt,opts){
           GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);
           continue;                      // clé ou modèle suivant, sans attendre
         }
+        if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
         if(e.code==='service_busy'){GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;GEM.hot[hk]=Date.now()+Math.min(60,8*nb)*1000;continue}
         if(e.code==='model_gone'){GEM.dead[model]=Date.now()+24*3600e3;continue}
         throw e;
@@ -912,6 +915,7 @@ async function geminiJson(prompt,opts){
       const tryParse=x=>{try{return JSON.parse(fixJsonText(x))}catch(e){return JSON.parse(x)}};
       try{return cleanDeep(tryParse(txt))}catch(e){const m=/\{[\s\S]*\}/.exec(txt);if(m){try{return cleanDeep(tryParse(m[0]))}catch(e2){}}lastError={code:'invalid_json',message:'Réponse non exploitable du service de rédaction.'};continue}
     }
+    if(redo){redo=false;round--;continue}
     if(isTest) break;
     // toutes les clés et tous les modèles sont momentanément limités : pause automatique puis reprise
     if(!soonest||++waits>12) break;
