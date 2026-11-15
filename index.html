@@ -111,7 +111,8 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .paper-measure .box{border:1px solid #000;padding:0 4px}
 .paper-measure img{display:block;margin:4px auto}
 .paper-measure .katex{font-size:1.02em}
-.paper,.paper-measure{font-size:calc(16px*var(--k,1))}
+.paper,.paper-measure{font-size:calc(16px*var(--k,1));line-height:var(--lh,1.27)}
+.paper img,.paper-measure img{zoom:var(--k,1)}
 .paper .tb td.sm,.paper-measure .tb td.sm{font-size:calc(16px*var(--k,1))}
 .paper .blk,.paper-measure .blk{padding-bottom:calc(var(--gap,8px)*var(--k,1))}
 .export-stage{position:fixed;left:-12000px;top:0}
@@ -341,7 +342,16 @@ function runsHTML(s,base){
 const mk=(s,keepNL)=>{let t=String(s??'').replace(/\[\[[a-zA-Z]+[:|]/g,'').replace(/\[\[/g,'[').replace(/\]\]/g,']').replace(/\*+/g,'').replace(/__+/g,' ');return (keepNL?t.replace(/[ \t]+/g,' ').replace(/[ \t]*\n[ \t]*/g,'\n'):t.replace(/\s*\n+\s*/g,' ')).trim()};
 function isAdmin(){try{if(DB&&DB.ai&&DB.ai.admin){DB.ai.admin=false;save()}return location.hash==='#admin'}catch(e){return false}}
 try{window.addEventListener('hashchange',()=>{try{if(location.hash!=='#admin'&&typeof view!=='undefined'&&view==='set')view='fiche';render()}catch(e){}})}catch(e){}
-const lines=s=>String(s??'').split('\n');
+const lines=s=>{
+  const a=String(s??'').split('\n'),o=[];
+  const isT=x=>(/^\s*(?:\*{1,3})?(?:\[\[[a-zA-Z]+[:|])?\s*(?:\*{1,3})?__[^_]+__/.test(x)&&x.length<150)||/^\s*\*\*[^*]{1,90}\*\*\s*:?\s*$/.test(x);
+  for(const x of a){
+    if(!x.trim()){ if(!o.length||!o[o.length-1].trim()||isT(o[o.length-1])) continue; }
+    o.push(x);
+  }
+  while(o.length&&!o[o.length-1].trim()) o.pop();
+  return o.length?o:[''];
+};
 const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
 function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
 const has=s=>String(s??'').trim().length>0;
@@ -356,15 +366,12 @@ const H=t=>'**__'+t+'__**';
 const L=(label,val,valFmt)=>has(val)?'__'+label+'__ : '+(valFmt?valFmt(val):'**'+val+'**'):null;
 
 function tb(o){return Object.assign({t:'tbl',cols:[100],head:[],rows:[],thick:false,gap:10},o)}
-function figPct(img){const W=698,dw=(img&&img.dw)||320;
-  const pct=Math.min(45,Math.max(36,Math.ceil((dw+14)/W*100)));
-  const shrink=(W*pct/100-14)/dw;
-  const wide=!!(img&&img.w&&img.h&&img.w/img.h>2.2);
-  return {pct,ok:shrink>=0.8&&!wide}}
+function figPct(img){const wide=!!(img&&img.w&&img.h&&img.w/img.h>2.2);return {pct:35,ok:!wide}}
 const capFig=im=>im?Object.assign({},im,{dw:Math.min(im.dw||300,250)}):im;
 function figSide(lines,img,o){o=o||{};
-  const W=698, pct=figPct(img).pct;
-  return tb({nb:true,cols:[100-pct,pct],gap:o.gap==null?8:o.gap,rows:[row([cell(lines,Object.assign({nb:true,just:true},o.lc||{})),cell([],{nb:true,img:img,imgMax:Math.floor(W*pct/100)-14,mid:true,align:'center'})],{bt:false,bb:false})]});
+  const W=o.W||698, pct=figPct(img).pct, cw=Math.floor(W*pct/100)-12;
+  const im=img?Object.assign({},img,{dw:Math.min(img.dw||300,cw)}):img;
+  return tb({nb:true,cols:[100-pct,pct],gap:o.gap==null?8:o.gap,rows:[row([cell(lines,Object.assign({nb:true,just:true},o.lc||{})),cell([],{nb:true,img:im,imgMax:cw,mid:true,align:'left'})],{bt:false,bb:false})]});
 }
 function figFlow(lines,img,o){o=o||{};
   if(img&&!figPct(img).ok) return [Object.assign({t:'p',lines:lines,gap:6,just:true},o.p||{}),{t:'img',img:img,gap:o.gap==null?8:o.gap}];
@@ -456,7 +463,7 @@ function buildDoc(f0){
       /* présentation + appropriation de la situation */
       const sa=[ '**__[[red:Situation d’apprentissage '+(i+1)+']]__**' ,...lines(s.situation).map(x=>x)];
       const m0=s.m.salit;
-      rows.push(row([cell(['Présentation et appropriation de la situation d’apprentissage','**(7 min)**'],{sm:true}),(s.img?cell([],{span:2,sub:figSide(sa,s.img,{gap:0})}):cell(sa,{span:2}))]));
+      rows.push(row([cell(['Présentation et appropriation de la situation d’apprentissage','**(7 min)**'],{sm:true}),(s.img?cell([],{span:2,sub:figSide(sa,s.img,{gap:0,W:Math.round(698*0.8)})}):cell(sa,{span:2}))]));
       rows.push(row([cell([],{sm:true}),cell(lines(m0.prof)),cell(lines(m0.eleve))]));
       rows.push(mo('orga'));
       rows.push(mo('commun'));
@@ -533,8 +540,24 @@ function blockHTML(b){
    Pagination (A4) : découpe les blocs et les lignes de tableau
    ========================================================= */
 const PAGE_H=1123,CONTENT_H=1123-36-62;
+function lhOf(k){return (!k||k>=.95)?1.27:(k>=.85?1.2:1.14)}
+function rowSplittable(r){return r.cells&&r.cells.length&&r.cells.every(c=>!c.img&&!c.sub&&!(c.rs>1)&&!c.vm)&&r.cells.some(c=>c.lines&&c.lines.length>=4)}
+function splitRowFit(b,r,room,M){
+  const mr=rr=>{M.innerHTML=tblHTML(b,[rr],false);const tr=M.querySelector('tr');return tr?tr.getBoundingClientRect().height:0};
+  const build=t=>{const a=[],z=[];let ok=true;
+    for(const c of r.cells){const n=c.lines.length;
+      if(n>=4){const q=Math.max(2,Math.floor(n*t)); if(n-q<2) ok=false; a.push(Object.assign({},c,{lines:c.lines.slice(0,q)})); z.push(Object.assign({},c,{lines:c.lines.slice(q)}))}
+      else{a.push(c); z.push(Object.assign({},c,{lines:['']}))}}
+    return ok?[Object.assign({},r,{cells:a,bb:false}),Object.assign({},r,{cells:z,bt:false})]:null};
+  let lo=.1,hi=.92,best=null;
+  for(let it=0;it<7;it++){const mid=(lo+hi)/2,parts=build(mid);
+    if(!parts){hi=mid;continue}
+    if(mr(parts[0])<=room-1){best=parts;lo=mid}else hi=mid}
+  if(!best) return null;
+  return [{row:best[0],h:mr(best[0])},{row:best[1],h:mr(best[1])}];
+}
 function paginate(doc,k){
-  const M=document.getElementById('measure'); M.style.setProperty('--k',k||1);
+  const M=document.getElementById('measure'); M.style.setProperty('--k',k||1); M.style.setProperty('--lh',lhOf(k));
   const meas=doc.map(b=>{
     if(b.t==='tbl'){
       M.innerHTML=tblHTML(b,b.rows,true);
@@ -561,15 +584,23 @@ function paginate(doc,k){
       if(used+need>CONTENT_H&&used>0) np();
       cur().push({html:blockHTML(b)}); used+=m.h; return;
     }
+    const rows=b.rows.slice(), rowH=m.rowH.slice();
     let chunk=null;
-    for(let i=0;i<b.rows.length;){
-      let e=i; while(b.rows[e].grp&&b.rows[e+1]&&b.rows[e+1].grp===b.rows[e].grp) e++;
-      let h=0; for(let k=i;k<=e;k++) h+=m.rowH[k];
-      const kp=(b.rows[e].keep&&e+1<b.rows.length)?m.rowH[e+1]:0;
+    for(let i=0;i<rows.length;){
+      let e=i; while(rows[e].grp&&rows[e+1]&&rows[e+1].grp===rows[e].grp) e++;
+      let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
+      const kp=(rows[e].keep&&e+1<rows.length)?rowH[e+1]:0;
       let need=h+kp+(chunk?0:m.headH);
+      if(i===e&&!kp&&used>0&&used+need>CONTENT_H){
+        const room=CONTENT_H-used-(chunk?0:m.headH);
+        if(room>=90&&rowSplittable(rows[i])){
+          const sp=splitRowFit(b,rows[i],room,M);
+          if(sp){rows.splice(i,1,sp[0].row,sp[1].row);rowH.splice(i,1,sp[0].h,sp[1].h);h=rowH[i];need=h+(chunk?0:m.headH)}
+        }
+      }
       if(used+need>CONTENT_H&&used>0){np();chunk=null;need=h+kp+m.headH}
       if(!chunk){chunk={b,rows:[]};cur().push(chunk);used+=m.headH}
-      for(let k=i;k<=e;k++) chunk.rows.push(b.rows[k]); used+=h;
+      for(let k=i;k<=e;k++) chunk.rows.push(rows[k]); used+=h;
       i=e+1;
     }
     used+=m.gap;
@@ -583,7 +614,7 @@ function footerLeft(f){
 }
 function pagesHTML(f,pages,k){
   const fl=footerLeft(f);
-  return pages.map((p,i)=>'<section class="paper"'+(k&&k<1?' style="--k:'+k+'"':'')+'><div class="pbody">'+p+'</div><div class="foot"><span>'+(fl.who?'<b>'+esc(fl.who)+' || '+esc(fl.rest)+'</b>':'<b>'+esc(fl.rest)+'</b>')+esc(fl.titre)+'</span><span class="pg">Page '+(i+1)+' sur '+pages.length+'</span></div></section>').join('');
+  return pages.map((p,i)=>'<section class="paper"'+(k&&k<1?' style="--k:'+k+';--lh:'+lhOf(k)+'"':'')+'><div class="pbody">'+p+'</div><div class="foot"><span>'+(fl.who?'<b>'+esc(fl.who)+' || '+esc(fl.rest)+'</b>':'<b>'+esc(fl.rest)+'</b>')+esc(fl.titre)+'</span><span class="pg">Page '+(i+1)+' sur '+pages.length+'</span></div></section>').join('');
 }
 
 /* =========================================================
@@ -686,7 +717,7 @@ function buildDocx(f,docModel,kScale){
   function tableOf(b,W){
     const TW=W||FULL;
     const widths=b.cols.map(p=>Math.round(TW*p/100));
-    const mk=(r,isHead)=>new D.TableRow({cantSplit:true,tableHeader:isHead,children:(()=>{
+    const mk=(r,isHead)=>new D.TableRow({cantSplit:!(r.cells.some(c=>c.lines&&c.lines.length>=6)),tableHeader:isHead,children:(()=>{
       const cs=[];let col=0;
       for(const c of r.cells){
         const span=c.span||1; let w=0; for(let k=0;k<span;k++)w+=widths[col+k]||0; col+=span;
@@ -1828,7 +1859,7 @@ function eprFitK(doc){
   const cut=doc.findIndex(b=>b.pb); const suj=cut>0?doc.slice(0,cut):doc;
   const cnt=k=>paginate(suj,k).length;
   /* police de l'épreuve : 10,5 pt (k=.875) en priorité, puis 10 / 9,5 / 9 pt pour tenir sur UNE page */
-  for(const k of [.875,.83,.79,.75]) if(cnt(k)<=1) return k;
+  for(const k of [.875,.83,.79,.75,.72]) if(cnt(k)<=1) return k;
   for(const k of [.875,.83,.79,.75,.7]) if(cnt(k)<=2) return k;
   return .7;
 }
@@ -1934,7 +1965,7 @@ async function genEpreuve(E){
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (partie de type « relier » : 4 éléments numérotés r), s), t), v) dans « gauche » et 4 réponses a), b), c), d) EN DÉSORDRE dans « droite », SANS aucun lien dans l’énoncé ; les liens n’apparaissent que dans « liens », 0,5 pt chacune) ; D) « Réarrange les groupes de mots pour obtenir une propriété ou une définition correcte du cours » (partie de type « reordre », 1 pt) ; E) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
   'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+caps.map(l=>{const o=eprCapParse(l);return '- Capacité : '+o.cap+(o.conts.length?'\n    Contenus enseignés : '+o.conts.join(' ; '):'')}).join('\n')+
-  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé.'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd.'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
@@ -1986,7 +2017,7 @@ async function eprCorrect(E,ins){
   const C=E.content;
   const slim=p=>({titre:p.titre,bareme:p.bareme,enonce:p.enonce,corrige:p.corrige,type:p.type,gauche:p.gauche,droite:p.droite,liens:p.liens,groupes:p.groupes,solution:p.solution,fig:p.fig?'(figure existante)':undefined,figCorr:p.figCorr?'(figure existante)':undefined});
   const cur={situation:C.situation,consignes:C.consignes,ex2:(C.ex2||[]).map(slim),ex3:(C.ex3||[]).map(slim),corrSit:C.corrSit,figSit:C.figSit?'(figure existante)':undefined,figCorrSit:C.corrSitFig?'(figure existante)':undefined,grille:C.grille.map(g=>({critere:g.critere,nom:g.nom,lignes:parseGrille(g.txt)}))};
-  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nApplique uniquement cette instruction, en gardant les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+' Pour ajouter ou modifier une figure, donne les clés figSit, figCorrSit (situation et son corrigé) ou fig, figCorr dans la partie concernée, sous la forme ci-dessous ; les figures marquées « (figure existante) » sont conservées si tu n’y touches pas. '+GEO_DOC+' '+LATEX_RULE_EPR;
+  const prompt='Tu aides un enseignant du Togo à corriger une épreuve de '+eprDiscNom(E)+' (classe '+E.classe+').\nContenu actuel (JSON) :\n'+JSON.stringify(cur)+'\n\nINSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\nCAPACITÉS ET CONTENUS ENSEIGNÉS (référence : toute question doit s’y limiter, au niveau de la classe, sans compliquer) :\n'+E.caps+'\n\nApplique cette instruction à TOUTES les parties concernées (situation, consignes, exercices 2 et 3, corrigés, grille), même si elle est générale (par exemple « reviens aux contenus déposés », « c’est trop difficile », « hors programme ») : dans ce cas, relis chaque partie, repère ce qui dépasse les contenus ou le niveau de la classe, puis simplifie-le ou remplace-le par des questions conformes aux contenus. Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Garde les barèmes cohérents (la somme de chaque exercice doit rester égale à son total, la grille de la situation totalise '+fmtN(parseN(E.p1))+' pts). Réponds par un objet JSON contenant SEULEMENT les clés modifiées, parmi situation, consignes, ex2, ex3, corrSit, grille, avec la même forme que ci-dessus et le contenu complet de chaque clé modifiée. Conserve le balisage. Si l’instruction ne concerne rien, réponds {}. '+' Pour ajouter ou modifier une figure, donne les clés figSit, figCorrSit (situation et son corrigé) ou fig, figCorr dans la partie concernée, sous la forme ci-dessous ; les figures marquées « (figure existante) » sont conservées si tu n’y touches pas. '+GEO_DOC+' '+LATEX_RULE_EPR;
   const r=await ask(prompt); let n=0;
   if(r&&typeof r==='object'){
     if(r.situation!==undefined){C.situation=eprS(r.situation);n++}
@@ -2127,7 +2158,7 @@ async function applyCorrection(i){
   const prompt='Tu aides un enseignant du Togo à corriger une séance de sa fiche pédagogique ('+discLabel(f)+', classe '+(f.classe||'collège')+', leçon « '+(f.titre||'')+' »).\n'+
     'Voici le contenu actuel de la séance sous forme d’objet JSON (clé → texte) :\n'+JSON.stringify(cur)+'\n\n'+
     'INSTRUCTION DE L’ENSEIGNANT : « '+ins+' »\n\n'+
-    'Applique uniquement cette instruction. Réponds par un objet JSON qui contient SEULEMENT les clés à modifier (mêmes noms de clés), chacune avec son texte complet corrigé. N’inclus pas les clés inchangées. Conserve le balisage existant (**gras**, __souligné__, formules $...$ en LaTeX, [[blue:texte]], retours à la ligne \\n). Ne change rien d’autre. Si l’instruction ne concerne aucun texte, réponds {}.';
+    'Capacité de la séance : '+(s.capTitre||'')+'\nContenus enseignés dans cette séance : '+(s.contenus||'')+'\n\nApplique cette instruction à TOUTES les parties concernées de la séance, même si elle est générale (par exemple « reviens aux contenus », « c’est trop difficile », « hors niveau ») : relis chaque partie, repère ce qui dépasse les contenus ou le niveau de la classe et simplifie-le. Ne demande JAMAIS de précision : fais la modification la plus raisonnable. Réponds par un objet JSON qui contient SEULEMENT les clés à modifier (mêmes noms de clés), chacune avec son texte complet corrigé. N’inclus pas les clés inchangées. Conserve le balisage existant (**gras**, __souligné__, formules $...$ en LaTeX, [[blue:texte]], retours à la ligne \\n). Ne change rien d’autre. Si l’instruction ne concerne aucun texte, réponds {}.';
   try{
     const r=await ask(prompt);
     let n=0;
