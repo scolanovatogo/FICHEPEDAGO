@@ -286,7 +286,7 @@ let memOnly=false;
 function loadDB(){
   try{const r=localStorage.getItem(KEY); if(r) DB=Object.assign(DB,JSON.parse(r));}catch(e){memOnly=true}
   if(!DB.progs) DB.progs=JSON.parse(JSON.stringify(SEED_PROGS));
-  if(!DB.ai) DB.ai={key:'',model:''}; if(!Array.isArray(DB.ai.keys)) DB.ai.keys=[DB.ai.key||'','','']; DB.ai.keys=[0,1,2].map(i=>String(DB.ai.keys[i]||'')); if(!DB.ai.key) DB.ai.key=DB.ai.keys.find(Boolean)||''; if(DB.ai.proxy===undefined) DB.ai.proxy=DEFAULT_PROXY; if(DB.ai.provider===undefined) DB.ai.provider=''; if(DB.ai.ckey===undefined){DB.ai.ckey='';DB.ai.cmodel=''}
+  if(!DB.ai) DB.ai={key:'',model:''}; if(!Array.isArray(DB.ai.keys)) DB.ai.keys=[DB.ai.key||'']; DB.ai.keys=DB.ai.keys.map(x=>String(x||'').trim()).filter(Boolean).slice(0,30); if(!DB.ai.key) DB.ai.key=DB.ai.keys.find(Boolean)||''; if(DB.ai.proxy===undefined) DB.ai.proxy=DEFAULT_PROXY; if(DB.ai.provider===undefined) DB.ai.provider=''; if(DB.ai.ckey===undefined){DB.ai.ckey='';DB.ai.cmodel=''}
   for(const f of DB.fiches) for(const s of f.seances) ensureSeance(s,f.tpl);
 }
 let saveT=null;
@@ -820,7 +820,9 @@ function flash(t,err){
   if(!busy&&!err) _flT=setTimeout(()=>{el.style.display='none'},8000);
 }
 function setGen(msg,err){flash(msg,err);GEN.msg=msg;GEN.err=!!err;document.querySelectorAll('.genstatus').forEach(el=>{el.textContent=msg;el.className='status genstatus'+(err?' err':'')})}
-function geminiKeys(){if(DB.ai&&String(DB.ai.proxy||'').trim()) return ['proxy'];const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,3)}
+function ownKeys(){const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return [...new Set([...(a||[]),DB.ai&&DB.ai.key].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,30)}
+function usingProxy(){return !!(DB.ai&&String(DB.ai.proxy||'').trim())&&!ownKeys().length}
+function geminiKeys(){return usingProxy()?['proxy']:ownKeys()}
 function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
   const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',claude:'Claude'}[k];
@@ -844,7 +846,7 @@ function geminiFetch(url,options,timeoutMs){
   const timer=setTimeout(()=>controller.abort(),timeoutMs||12000);
   return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>clearTimeout(timer));
 }
-function gBase(){return String((DB.ai&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
+function gBase(){return String((usingProxy()&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
 function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};if(key&&key!=='proxy')h['x-goog-api-key']=key;return h}
 async function geminiModelList(key){
   let r;
@@ -871,6 +873,13 @@ function retryDelayOf(e){
   const m=/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(e&&e.raw||'')||/retry in (\d+(?:\.\d+)?)s/i.exec(e&&e.message||'');
   return m?Math.ceil(parseFloat(m[1])):0;
 }
+function pacificResetText(){
+  try{const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',minute:'numeric',hour12:false});
+    const p=f.formatToParts(new Date());const h=+p.find(x=>x.type==='hour').value%24,m=+p.find(x=>x.type==='minute').value;
+    const mins=24*60-(h*60+m);const t=new Date(Date.now()+mins*60000);
+    return 'vers '+t.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' (heure de votre appareil)'}catch(e){return 'à minuit, heure du Pacifique (Californie)'}
+}
+function gemAllDay(keys,models){const arr=[];for(const m of models||[])for(const k of keys)arr.push(k+'|'+m);return arr.length>0&&arr.every(h=>GEM.hot[h]>Date.now()&&GEM.day&&GEM.day[h])}
 async function gemPause(sec,why){
   for(let t=sec;t>0;t--){
     if(GEN.stop) throw {code:'cancelled',message:'Arrêté.'};
@@ -937,7 +946,7 @@ async function geminiJson(prompt,opts){
         if(e.code==='rate_limited'){
           const perDay=/PerDay|per day|daily/i.test(e.raw||'')||/limit:\s*0\b/.test(e.raw||'');
           const d=retryDelayOf(e)||65;
-          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);
+          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;
           continue;                      // clé ou modèle suivant, sans attendre
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
@@ -959,7 +968,12 @@ async function geminiJson(prompt,opts){
     await gemPause(Math.min(75,Math.max(5,soonest)),lastError&&lastError.code==='service_busy'?'Les serveurs de Google sont surchargés en ce moment (ce n’est pas un problème de clé).':'Les '+(keys.length>1?keys.length+' clés sont':'quotas sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
   }
   if(lastError&&lastError.code==='invalid_json') throw lastError;
-  if(lastError&&lastError.code==='rate_limited') throw {code:'rate_limited',message:'Le quota gratuit du service de rédaction est atteint sur '+(keys.length>1?'toutes vos clés':'votre clé')+' (limite par minute ou par jour). Ce qui est déjà rédigé est conservé : cliquez à nouveau sur « Préparer les séances » dans quelques minutes, ou demain si le quota du jour est épuisé.'};
+  if(lastError&&lastError.code==='rate_limited'){
+    const day=gemAllDay(keys,models), n=keys.length;
+    throw {code:'rate_limited',message:(day
+      ?'Le quota du JOUR est épuisé sur '+(n>1?'les '+n+' clés':'la clé')+'. Il se remet à zéro '+pacificResetText()+'. Ce qui est déjà rédigé est conservé : reprenez à ce moment-là, ou ajoutez des clés créées dans d’AUTRES projets Google (les clés d’un même projet partagent le même quota).'
+      :'Le quota par minute reste atteint sur '+(n>1?'les '+n+' clés':'la clé')+' malgré les pauses automatiques. Ce qui est déjà rédigé est conservé : recliquez dans quelques minutes. Si cela se répète, vos clés partagent probablement le même projet Google (même quota) : créez chaque clé dans un NOUVEAU projet.')};
+  }
   const why=lastError?(' [Détail : '+(lastError.code||'?')+(lastError.message?' – '+String(lastError.message).slice(0,150):'')+']'):'';
   throw {code:'service_busy',message:'Les serveurs de Google (service gratuit) sont surchargés et n’ont pas répondu, même après plusieurs tentatives sur '+keys.length+' clé(s). Vos clés ne sont pas en cause. Réessayez dans quelques minutes (tôt le matin ou tard le soir, c’est plus fluide). Votre fiche et les textes déjà rédigés sont conservés.'+why};
 }
@@ -2309,7 +2323,8 @@ function renderSet(){
     <li>Ouvrez <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey ↗</a> avec votre compte Gmail (celui du téléphone suffit).</li>
     <li>Appuyez sur « Create API key », puis copiez la clé. Pas de carte bancaire.</li>
     <li>Collez-la ci-dessous.</li></ol>
-   ${[0,1,2].map(i=>`<label class="f" for="aiKey${i+1}" style="max-width:520px">Clé ${i+1} ${i===0?'(principale)':'(secours)'}<input type="password" id="aiKey${i+1}" autocomplete="off" value="${esc((DB.ai.keys||[])[i]|| (i===0?DB.ai.key:''))}" placeholder="AIza…"></label>`).join('')}
+   <label class="f" for="aiKeys" style="max-width:520px">Clés gratuites <span class="hint">une clé par ligne, jusqu’à 30. L’application passe automatiquement à la suivante quand une clé est limitée. ${ownKeys().length?ownKeys().length+' clé(s) enregistrée(s).':''}</span><textarea id="aiKeys" rows="6" autocomplete="off" spellcheck="false" placeholder="AIza…&#10;AIza…" style="font-family:monospace">${esc(ownKeys().join('\n'))}</textarea></label>
+   <div class="note small" style="margin-top:6px"><b>Important :</b> Google applique la limite gratuite <b>par projet</b>, pas par clé. Deux clés créées dans le même projet partagent le même quota. Sur aistudio.google.com/apikey, choisissez à chaque fois « Create API key in <b>new project</b> » (nouveau projet). Quand des clés personnelles sont saisies ici, elles sont utilisées à la place du serveur ci-dessous.</div>
    <label class="f" for="aiProxy" style="max-width:520px;margin-top:8px">Adresse du serveur <span class="hint">facultatif : si vous avez mis en place le serveur (Cloudflare), il garde les clés à la place de cet appareil</span><input type="url" id="aiProxy" autocomplete="off" value="${esc(DB.ai.proxy||'')}" placeholder="https://fiches.votre-nom.workers.dev"></label>
    <div class="row" style="margin-top:10px"><button class="btn" id="aiSave">Enregistrer les clés et tester</button>${has_?'<button class="btn danger" id="aiClear">Effacer la clé</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
@@ -2421,17 +2436,17 @@ root.addEventListener('click',async e=>{
     b.disabled=false;return}
   if(d.corr!==undefined){b.disabled=true;await applyCorrection(+d.corr);b.disabled=false;return}
   if(b.id==='aiSave'){
-    const vals=[1,2,3].map(i=>(document.getElementById('aiKey'+i).value||'').trim()); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; DB.ai.proxy=(document.getElementById('aiProxy').value||'').trim().replace(/\/+$/,''); GEM.list=null;GEM.hot={};GEM.dead={};GEM.good=''; save();
+    const vals=[...new Set(String(document.getElementById('aiKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))].slice(0,30); DB.ai.keys=vals; DB.ai.key=vals.find(Boolean)||''; DB.ai.model=''; DB.ai.provider=''; DB.ai.proxy=(document.getElementById('aiProxy').value||'').trim().replace(/\/+$/,''); GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
     if(!geminiKeys().length){setGen('Aucune clé saisie.',true);return}
     b.disabled=true; setGen('Test de la connexion…');
     try{
       const rep=[];
-      if(!DB.ai.proxy) for(let i=0;i<3;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
-      const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((DB.ai.proxy?'Serveur joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
+      if(!usingProxy()) for(let i=0;i<vals.length;i++){if(!vals[i]) continue; try{const rr=await geminiFetch(gBase()+'/v1beta/models?pageSize=5',{headers:gHeaders(vals[i])},12000);rep.push('Clé '+(i+1)+' : '+(rr.ok?'valide':'refusée ('+rr.status+')'))}catch(e){rep.push('Clé '+(i+1)+' : connexion impossible')}}
+      const r=await geminiJson('Réponds uniquement par {"ok":true}',{test:true});setGen((usingProxy()?'Serveur joignable. ':'')+'Connexion réussie (modèle '+DB.ai.model+'). La rédaction automatique est active.'+(rep.length?' '+rep.join(' · '):''));render2()}
     catch(e){DB.ai.model='';setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
-  if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=['','',''];DB.ai.model='';DB.ai.proxy='';save();setGen('Clé effacée.');render2();return}
+  if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=[];DB.ai.model='';DB.ai.proxy='';save();setGen('Clé effacée.');render2();return}
   if(b.id==='claudeSave'){
     const v=(document.getElementById('claudeKey').value||'').trim(); const m=(document.getElementById('claudeModel').value||'').trim()||'claude-sonnet-5-5';
     if(!v){setGen('Aucune clé Claude saisie.',true);return}
