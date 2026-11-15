@@ -356,6 +356,19 @@ const H=t=>'**__'+t+'__**';
 const L=(label,val,valFmt)=>has(val)?'__'+label+'__ : '+(valFmt?valFmt(val):'**'+val+'**'):null;
 
 function tb(o){return Object.assign({t:'tbl',cols:[100],head:[],rows:[],thick:false,gap:10},o)}
+function figPct(img){const W=698,dw=(img&&img.dw)||320;
+  const pct=Math.min(45,Math.max(36,Math.ceil((dw+14)/W*100)));
+  const shrink=(W*pct/100-14)/dw;
+  const wide=!!(img&&img.w&&img.h&&img.w/img.h>2.2);
+  return {pct,ok:shrink>=0.8&&!wide}}
+function figSide(lines,img,o){o=o||{};
+  const W=698, pct=figPct(img).pct;
+  return tb({nb:true,cols:[100-pct,pct],gap:o.gap==null?8:o.gap,rows:[row([cell(lines,Object.assign({nb:true,just:true},o.lc||{})),cell([],{nb:true,img:img,imgMax:Math.floor(W*pct/100)-14,mid:true,align:'center'})],{bt:false,bb:false})]});
+}
+function figFlow(lines,img,o){o=o||{};
+  if(img&&!figPct(img).ok) return [Object.assign({t:'p',lines:lines,gap:6,just:true},o.p||{}),{t:'img',img:img,gap:o.gap==null?8:o.gap}];
+  return [figSide(lines,img,o)];
+}
 function cell(lines,o){return Object.assign({lines:Array.isArray(lines)?lines:lines==null?[]:String(lines).split('\n'),span:1},o||{})}
 function row(cells,o){return Object.assign({cells,bt:true,bb:true},o||{})}
 /* ajoute les lignes d'un champ comme une suite de lignes de tableau fusionnées en un seul bloc visuel */
@@ -412,8 +425,9 @@ function buildDoc(f0){
     if(A){
       doc.push({t:'p',lines:[titre],keep:true,gap:6});
       doc.push({t:'p',lines:['__Situation d’apprentissage ('+ord.toLowerCase()+' séance)__'],keep:true,gap:4});
-      if(has(s.situation)) doc.push({t:'p',lines:lines(s.situation),bold:true,just:true,gap:has(s.img)?2:8,keep:true});
-      if(s.img) doc.push({t:'img',img:s.img,gap:8});
+      if(s.img&&has(s.situation)) figFlow(lines(s.situation),s.img,{gap:8,lc:{bold:true},p:{bold:true,keep:true}}).forEach(b=>doc.push(b));
+      else{ if(has(s.situation)) doc.push({t:'p',lines:lines(s.situation),bold:true,just:true,gap:has(s.img)?2:8,keep:true});
+      if(s.img) doc.push({t:'img',img:s.img,gap:8}); }
       doc.push({t:'p',lines:['__Stratégie d’apprentissage et choix pédagogique__'],keep:true,gap:2});
       doc.push({t:'p',lines:(s.strat||[]).map(x=>'-   '+x),gap:8,indent:true,keep:true});
     }
@@ -441,7 +455,7 @@ function buildDoc(f0){
       /* présentation + appropriation de la situation */
       const sa=[ '**__[[red:Situation d’apprentissage '+(i+1)+']]__**' ,...lines(s.situation).map(x=>x)];
       const m0=s.m.salit;
-      rows.push(row([cell(['Présentation et appropriation de la situation d’apprentissage','**(7 min)**'],{sm:true}),cell(sa,{span:2,img:s.img})]));
+      rows.push(row([cell(['Présentation et appropriation de la situation d’apprentissage','**(7 min)**'],{sm:true}),(s.img?cell([],{span:2,sub:figSide(sa,s.img,{gap:0})}):cell(sa,{span:2}))]));
       rows.push(row([cell([],{sm:true}),cell(lines(m0.prof)),cell(lines(m0.eleve))]));
       rows.push(mo('orga'));
       rows.push(mo('commun'));
@@ -498,6 +512,7 @@ function cellHTML(c,r){
     const pad=(c.indentCell?' style="padding-left:22px"':'')||(c.center1&&i===0?' style="text-align:center"':'');
     return '<div class="ln"'+pad+'>'+(t||'&nbsp;')+'</div>'}).join('');
   if(c.img) inner+=imgHTML(c.img);
+  if(c.sub) inner+='<table class="tb nb"><colgroup>'+c.sub.cols.map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>'+rowsHTML(c.sub.rows)+'</table>';
   return '<td'+(c.span>1?' colspan="'+c.span+'"':'')+(c.rs>1?' rowspan="'+c.rs+'"':'')+(cls?' class="'+cls+'"':'')+(st.length?' style="'+st.join(';')+'"':'')+'>'+inner+'</td>';
 }
 function rowsHTML(rows){return rows.map(r=>'<tr>'+r.cells.map(c=>cellHTML(c,r)).join('')+'</tr>').join('')}
@@ -651,23 +666,25 @@ function buildDocx(f,docModel,kScale){
   const sizeSm=Math.round(24*(kScale||1)), sizeN=sizeSm;
   const children=[];
   const al=a=>a==='center'?D.AlignmentType.CENTER:a==='right'?D.AlignmentType.RIGHT:a==='justify'?D.AlignmentType.JUSTIFIED:D.AlignmentType.LEFT;
-  function paras(c,r){
+  function paras(c,r,W){
     const out=[];
     c.lines.forEach((x,i)=>{
       const al_=c.center1&&i===0?'center':(c.align||(c.just?'justify':'left'));
       out.push(new D.Paragraph({alignment:al(al_),spacing:{before:0,after:0,line:240},keepNext:!!r.keep,indent:c.indentCell?{left:300}:undefined,
         children:runsDocx(x,{bold:c.bold,color:c.color?hex6(c.color):undefined,size:c.sm?sizeSm:sizeN})}));
     });
-    if(c.img){out.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{before:60,after:60},children:[imgRun(c.img)]}));if(c.img.credit)out.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,children:[new D.TextRun({text:(/^(Sch|Repr)/.test(c.img.credit)?'':'Source : ')+c.img.credit,italics:true,size:18,font:'Bookman Old Style'})]}))}
+    if(c.sub){out.push(tableOf(c.sub,Math.max(1000,(W||FULL)-160)));out.push(new D.Paragraph({spacing:{before:0,after:0,line:20},children:[]}))}
+    if(c.img){out.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{before:60,after:60},children:[imgRun(c.img,c.imgMax)]}));if(c.img.credit)out.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,children:[new D.TextRun({text:(/^(Sch|Repr)/.test(c.img.credit)?'':'Source : ')+c.img.credit,italics:true,size:18,font:'Bookman Old Style'})]}))}
     if(!out.length) out.push(new D.Paragraph({children:[]}));
     return out;
   }
-  function imgRun(im){
-    const w=Math.min(im.dw||300,560),h=Math.round(w*(im.h/im.w));
+  function imgRun(im,mx){
+    const w=Math.min(im.dw||300,mx||560),h=Math.round(w*(im.h/im.w));
     return new D.ImageRun({type:/^data:image\/png/.test(im.src)?'png':'jpg',data:dataToU8(im.src),transformation:{width:w,height:h}});
   }
-  function tableOf(b){
-    const widths=b.cols.map(p=>Math.round(FULL*p/100));
+  function tableOf(b,W){
+    const TW=W||FULL;
+    const widths=b.cols.map(p=>Math.round(TW*p/100));
     const mk=(r,isHead)=>new D.TableRow({cantSplit:true,tableHeader:isHead,children:(()=>{
       const cs=[];let col=0;
       for(const c of r.cells){
@@ -679,12 +696,12 @@ function buildDocx(f,docModel,kScale){
           verticalAlign:c.mid?D.VerticalAlign.CENTER:undefined,
           margins:{top:30,bottom:30,left:80,right:80},
           borders:c.nb||b.nb?{top:NONE,bottom:NONE,left:NONE,right:NONE}:{top:bt?ONE:NONE,bottom:bb?ONE:NONE,left:ONE,right:ONE},
-          children:paras(c,r)}));
+          children:paras(c,r,w)}));
       }
       return cs})()});
     const rows=[...b.head.map(r=>mk(r,true)),...b.rows.map(r=>mk(r,false))];
     const T=b.thick?{style:D.BorderStyle.SINGLE,size:12,color:'000000'}:ONE;
-    return new D.Table({width:{size:FULL,type:D.WidthType.DXA},columnWidths:widths,layout:D.TableLayoutType.FIXED,
+    return new D.Table({width:{size:TW,type:D.WidthType.DXA},columnWidths:widths,layout:D.TableLayoutType.FIXED,
       borders:b.nb?{top:NONE,bottom:NONE,left:NONE,right:NONE,insideHorizontal:NONE,insideVertical:NONE}:{top:T,bottom:T,left:T,right:T,insideHorizontal:ONE,insideVertical:ONE},rows});
   }
   for(const b of docModel){
@@ -1803,7 +1820,9 @@ function eprPartBlocks(p,corr){
     if(corr)out.push({t:'p',lines:['**'+String(p.solution||'')+'**'],gap:6,indent:true});
     else{out.push({t:'p',lines:[eprLines(p.groupes).join(' / ')],gap:4,indent:true});out.push({t:'p',lines:['…………………………………………………………………………………………………………………………'],gap:6,indent:true})}
   }else{
-    out.push({t:'p',lines:(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(p.enonce):String(corr?p.corrige:p.enonce).split('\n'),gap:6,indent:true});
+    const fg=corr?p.figCorr:p.fig, ls=(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(p.enonce):String(corr?p.corrige:p.enonce).split('\n');
+    if(fg){figFlow(ls,fg,{gap:6,lc:{just:false},p:{just:false,indent:true}}).forEach(b=>out.push(b));return out}
+    out.push({t:'p',lines:ls,gap:6,indent:true});
   }
   if(corr?p.figCorr:p.fig)out.push({t:'img',img:corr?p.figCorr:p.fig,gap:6});
   return out;
@@ -1812,8 +1831,8 @@ function buildEprDoc(E){
   const doc=[eprHead(E)], C0=E.content; if(!C0) return doc; const C=cleanUl(C0);
   const exT=(n,t,p)=>({t:'p',lines:['**__Exercice '+n+'__ : '+t+'** *('+fmtN(parseN(p))+' pts)*'],keep:true,gap:4});
   doc.push(exT(1,'Situation d’évaluation',E.p1));
-  doc.push({t:'p',lines:String(C.situation).split('\n'),just:true,gap:6});
-  if(C.figSit) doc.push({t:'img',img:C.figSit,gap:6});
+  if(C.figSit) figFlow(String(C.situation).split('\n'),C.figSit,{gap:6}).forEach(b=>doc.push(b));
+  else doc.push({t:'p',lines:String(C.situation).split('\n'),just:true,gap:6});
   (C.consignes||[]).forEach((c,i)=>doc.push({t:'p',lines:['**Consigne'+(C.consignes.length>1?' '+(i+1):'')+'** : '+c],just:true,gap:4}));
   const rt=repartTable(E); if(rt) doc.push(rt);
   doc.push(exT(2,'Questions objectives',E.p2));
@@ -1822,8 +1841,8 @@ function buildEprDoc(E){
   (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});eprPartBlocks(p,false).forEach(b=>doc.push(b))});
   doc.push({t:'p',lines:['**__Proposition de corrigé type__**'],align:'center',gap:10,pb:true});
   doc.push({t:'p',lines:['**__Exercice 1__**'],keep:true,gap:4});
-  doc.push({t:'p',lines:String(C.corrSit).split('\n'),gap:8});
-  if(C.corrSitFig) doc.push({t:'img',img:C.corrSitFig,gap:6});
+  if(C.corrSitFig) figFlow(String(C.corrSit).split('\n'),C.corrSitFig,{gap:8,lc:{just:false},p:{just:false}}).forEach(b=>doc.push(b));
+  else doc.push({t:'p',lines:String(C.corrSit).split('\n'),gap:8});
   const gr=grilleRows(E);
   if(gr.length){
     const hd=t=>cell(['**'+t+'**'],{shade:'#4472C4',color:'#fff',align:'center'});
