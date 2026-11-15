@@ -1816,7 +1816,7 @@ async function genEpreuve(E){
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (partie de type « relier » : 4 éléments numérotés r), s), t), v) dans « gauche » et 4 réponses a), b), c), d) EN DÉSORDRE dans « droite », SANS aucun lien dans l’énoncé ; les liens n’apparaissent que dans « liens », 0,5 pt chacune) ; D) « Réarrange les groupes de mots pour obtenir une propriété ou une définition correcte du cours » (partie de type « reordre », 1 pt) ; E) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
   'CAPACITÉS À ÉVALUER :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
-  'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces cinq types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche. Privilégie vrai ou faux, choisis la bonne réponse et complète. N’utilise « relier » ou « réarranger » que rarement (au plus un de ces deux types, et seulement s’il est vraiment pertinent), car les tableaux prennent trop de place. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
+  'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les capacités ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
   'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
@@ -1832,6 +1832,29 @@ async function genEpreuve(E){
   {const C=E.content;
    C.figSit=await eprFigOf(d.figSit,320); C.corrSitFig=await eprFigOf(d.figCorrSit,320);
    for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}}
+}
+async function eprImportCaps(files){
+  const E=eprInit(); const st=document.getElementById('ep-capst');
+  const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
+  const k=aiKind(), useAI=(k==='gemini'||k==='anthropic');
+  const have=new Set(String(E.caps).split('\n').map(x=>x.trim().toLowerCase()).filter(Boolean));
+  const added=[]; let fails=0;
+  for(let i=0;i<files.length;i++){
+    say('Lecture de l’image '+(i+1)+' sur '+files.length+'…');
+    try{
+      let d;
+      if(useAI) d=await extractProgramme({},{images:[await canvasBlob(files[i],2200)]},'');
+      else d=localData(await ocrItems(await enhanceForOcr(files[i]).catch(()=>files[i])));
+      for(const c of ((d&&d.capacites)||[])){
+        const t=String(c.capacite||c.cap||'').replace(/\*/g,'').replace(/\s+/g,' ').trim();
+        if(t&&!have.has(t.toLowerCase())){have.add(t.toLowerCase());added.push(t)}
+      }
+    }catch(e){fails++; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
+  }
+  if(added.length){E.caps=[...String(E.caps).split('\n').filter(has),...added].join('\n');save();render();
+    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(useAI?'':' (lecture locale : relisez attentivement)');
+    flash(m); if(st2){st2.textContent=m;st2.className='status small muted'}}
+  else say('Aucune capacité trouvée. Prenez une capture plus nette du tableau « Capacités | Contenus », ou saisissez-les à la main.',true);
 }
 async function eprCorrect(E,ins){
   const C=E.content;
@@ -1918,6 +1941,8 @@ function renderEpr(){
     ${eprFld('Coefficient','coef',{ph:'1'})}${eprFld('Durée','duree',{ph:'1h 30'})}</div></section>
    <section class="card"><h2>Capacités à évaluer</h2>
     <div class="grid">${eprFld('Capacités à évaluer (une par ligne)','caps',{rows:4,wide:true,ph:'Ex. : Calculer la somme de nombres entiers naturels',hint:'Saisissez-les ou reprenez celles d’une leçon déjà préparée'})}</div>
+    <div class="row" style="margin:8px 0"><label class="btn alt" for="epCapImg" style="cursor:pointer">Ajouter des capacités par photo ou capture d’écran</label><input type="file" id="epCapImg" accept="image/*" multiple hidden></div>
+    <div class="muted small">Vous pouvez choisir plusieurs images à la fois (tableaux « Capacités | Contenus »). Les capacités lues sont ajoutées à la liste ci-dessus : vérifiez-les.</div><div id="ep-capst" class="status small muted" role="status"></div>
     ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre les capacités d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités</button></div>`:''}
     <div class="grid">${eprFld('Précisions (facultatif)','ctx',{rows:2,wide:true,ph:'Ex. : contexte du marché, éviter les fractions, situation sur la construction d’un jardin…'})}
     ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
@@ -2317,6 +2342,7 @@ root.addEventListener('change',e=>{
   if(t.id==='jsonIn'&&t.files[0]){const fl=t.files[0];t.value='';fl.text().then(x=>{try{const o=JSON.parse(x);if(!o||!Array.isArray(o.seances)||!Array.isArray(o.capacites))throw new Error('format');o.id=uid();o.updated=Date.now();o.seances.forEach(s=>ensureSeance(s,o.tpl||'A'));DB.fiches.push(o);DB.cur=o.id;view='fiche';step=3;save();render()}catch(e){alert&&0;setGen('Ce fichier n’est pas une fiche valide.',true)}});return}
   if(t.id==='autoGen'){autoGen=t.checked;return}
   if((t.id==='guideImg'||t.id==='guidePdf'||t.id==='guideAny')&&t.files[0]){const fl=t.files[0];t.value='';importGuide(fl);return}
+  if(t.id==='epCapImg'&&t.files&&t.files.length){const fl=[...t.files];t.value='';eprImportCaps(fl);return}
   if((t.id==='photoIn'||t.id==='pdfIn')&&t.files[0]){const fl=t.files[0];t.value='';importFile(fl);return}
   if(t.dataset.img&&t.files[0]){
     const [i,key]=t.dataset.img.split('|');
