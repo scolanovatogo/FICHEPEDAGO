@@ -1903,6 +1903,26 @@ const EPR_SEP=' — ';
 function eprContList(v){return (Array.isArray(v)?v:String(v==null?'':v).split(/\n|;/)).map(x=>String(x).replace(/\*/g,'').replace(/^\s*[-•]\s*/,'').replace(/\s+/g,' ').trim()).filter(Boolean)}
 function eprCapLine(cap,conts){cap=String(cap||'').replace(/\*/g,'').replace(/\s+/g,' ').trim();const c=eprContList(conts);return c.length?(cap||'Capacité')+EPR_SEP+c.join(' ; '):cap}
 function eprCapParse(l){const i=l.indexOf(EPR_SEP);return i<0?{cap:l.trim(),conts:[]}:{cap:l.slice(0,i).trim(),conts:eprContList(l.slice(i+EPR_SEP.length))}}
+function eprDigest(C){
+  const cut=(t,n)=>String(t||'').replace(/\s+/g,' ').trim().slice(0,n);
+  return 'Situation : '+cut(C.situation,200)+' | Exercice 2 : '+(C.ex2||[]).map(p=>cut(p.titre,50)+' : '+cut(p.enonce,110)).join(' / ')+' | Exercice 3 : '+(C.ex3||[]).map(p=>cut(p.enonce,110)).join(' / ');
+}
+const EPR_CTXS=['un marché de Lomé','une coopérative agricole près de Kara','un atelier de couture','un cybercafé','un port de pêche à Aného','un chantier de construction','une école de village','une boutique de transfert d’argent mobile','un atelier de menuiserie','une ferme avicole','une fête de quartier','un club de football','un jardin potager scolaire','un camion de livraison','une pharmacie','un garage de réparation','une plantation de café à Kpalimé','une pâtisserie','un transport en taxi-moto','un forage avec château d’eau','une imprimerie','un atelier de soudure','une centrale solaire de village','une cantine scolaire'];
+function eprPickEx2(last){
+  const W={vf:3,qcm:3,comp:3,reord:1.2,rel:.7};
+  const NAME={vf:'Réponds par vrai ou faux',qcm:'Choisis la bonne réponse',comp:'Complète les phrases',reord:'Réarrange les groupes de mots',rel:'Relie par une flèche (appariement)'};
+  let best=[];
+  for(let t=0;t<6;t++){
+    let pool=Object.keys(W),pick=[];
+    while(pick.length<3&&pool.length){
+      const tot=pool.reduce((a,k)=>a+W[k],0); let r=Math.random()*tot,c=pool[0];
+      for(const k of pool){r-=W[k];if(r<=0){c=k;break}}
+      pick.push(c); pool=pool.filter(k=>k!==c&&!(c==='rel'&&k==='qcm')&&!(c==='qcm'&&k==='rel'));
+    }
+    best=pick; if(pick.slice().sort().join()!==last) break;
+  }
+  return {keys:best,text:best.map(k=>NAME[k]).join(' ; ')};
+}
 async function genEpreuve(E){
   const m=eprModel(E);
   const caps=String(E.caps).split('\n').map(x=>x.trim()).filter(Boolean);
@@ -1929,7 +1949,9 @@ async function genEpreuve(E){
   'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…","fig":facultatif,"figCorr":facultatif}],"figSit":facultatif,"figCorrSit":facultatif,"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
   (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+'MISE EN PAGE : l’énoncé de l’épreuve (sans le corrigé) doit tenir sur UNE page, DEUX au maximum, jamais trois : situation brève (6 à 8 lignes), consignes courtes, questions concises, pas de texte inutile. Pour « Choisis la bonne réponse », écris chaque question sur sa ligne, puis toutes ses propositions a), b), c) (et d) si nécessaire, par exemple « Aucune réponse ») sur UNE SEULE ligne, sans retour à la ligne entre les propositions. Pour « relier par des flèches », donne seulement les deux colonnes (gauche numérotée, droite lettrée en désordre).\n'+LATEX_RULE_EPR;
   const hist=Array.isArray(E.hist)?E.hist:[];
-  const variante='\n\nVARIANTE n°'+((E.nGen||0)+1)+' (graine '+Math.random().toString(36).slice(2,8)+') : compose une épreuve ORIGINALE, différente à chaque génération. '+(hist.length?'Épreuves déjà générées pour ces mêmes capacités, à NE PAS reprendre : change totalement le contexte de la situation (lieu, personnages, objets, activité), les données numériques, les affirmations vrai ou faux, les questions à choix et les exemples. Anciennes situations : '+hist.map((h,i)=>(i+1)+') '+h).join(' ; ')+'.':'Choisis un contexte précis et peu banal de la vie au Togo.');
+  const ex2=eprPickEx2(E.lastEx2||''); E.lastEx2=ex2.keys.slice().sort().join();
+  const ctxS=EPR_CTXS[Math.floor(Math.random()*EPR_CTXS.length)];
+  const variante='\n\nVARIANTE n°'+((E.nGen||0)+1)+' (graine '+Math.random().toString(36).slice(2,8)+') : compose une épreuve ENTIÈREMENT NOUVELLE. Parties imposées pour l’exercice 2, dans cet ordre : '+ex2.text+' (les titres des parties reprennent ces consignes). Contexte imposé pour la situation (adapte-le à la discipline et aux contenus) : '+ctxS+'.'+(hist.length?' Des épreuves ont déjà été générées pour ces mêmes capacités : AUCUNE question, affirmation, phrase à compléter, proposition, valeur numérique ni exemple ne doit être repris, même reformulé. Pose d’AUTRES questions sur les mêmes contenus (autres définitions, autres propriétés, autres nombres, autres cas, autres démarches pour l’exercice 3). Résumés des anciennes épreuves à ne pas reproduire : '+hist.map((h,k)=>(k+1)+') '+h).join(' || ')+'.':'');
   const d=await ask(prompt+variante,{temp:1});
   if(!d||!has(eprS(d.situation))||!Array.isArray(d.consignes)||!d.consignes.length||!Array.isArray(d.grille)||!d.grille.length) throw {code:'invalid_json',message:'L’épreuve reçue est incomplète. Relancez la préparation.'};
   E.content={situation:eprS(d.situation),consignes:d.consignes.map(eprS),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,4).map(normGrille)};
@@ -1992,7 +2014,7 @@ async function eprAct(a,b){
   if(a==='gen'){
     if(!aiKind()){eprSay(NO_AI,true);return}
     const snapC=E.content;
-    if(snapC&&snapC.situation){E.hist=[String(snapC.situation).replace(/\s+/g,' ').slice(0,260)].concat(E.hist||[]).slice(0,4)}
+    if(snapC&&snapC.situation){E.hist=[eprDigest(snapC)].concat(E.hist||[]).slice(0,3)}
     E.nGen=(E.nGen||0)+1;
     E.content=null; save(); render(); b=document.querySelector('[data-epact="gen"]')||b;
     b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;
@@ -2127,13 +2149,27 @@ function toggleMic(i,btn){
   const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){say('La dictée n’est pas disponible dans ce navigateur : appuyez dans la case puis utilisez l’icône micro du clavier de votre téléphone.',true);return}
-  if(REC){try{REC.stop()}catch(e){}return}
+  if(!ta) return;
+  if(REC){const r0=REC; try{r0.stop()}catch(e){} setTimeout(()=>{if(REC===r0){try{r0.abort()}catch(e){} REC=null;if(btn)btn.textContent='🎤 Dicter';flash('')}},1500); return}
   const r=new SR(); r.lang='fr-FR'; r.interimResults=true; r.continuous=true;
-  const base=ta.value.trim();
-  r.onresult=ev=>{let t='';for(let k=0;k<ev.results.length;k++)t+=ev.results[k][0].transcript+' ';ta.value=(base?base+' ':'')+t.trim()};
-  r.onerror=ev=>{say(ev.error==='not-allowed'?'Le micro est refusé : autorisez-le dans le navigateur, ou utilisez l’icône micro du clavier.':'Dictée interrompue ('+ev.error+'). Réessayez ou utilisez le micro du clavier.',true)};
-  r.onend=()=>{REC=null;if(btn)btn.textContent='🎤 Dicter'};
-  try{r.start();REC=r;if(btn)btn.textContent='⏹ Arrêter la dictée';say('Parlez maintenant…')}catch(e){REC=null;say('Impossible de démarrer la dictée.',true)}
+  const base=ta.value.trim(); let fin='', got=false;
+  const put=txt=>{ta.value=((base?base+' ':'')+txt).replace(/\s+/g,' ').trim();ta.dispatchEvent(new Event('input',{bubbles:true}))};
+  r.onresult=ev=>{
+    let interim=''; got=true;
+    for(let k=ev.resultIndex;k<ev.results.length;k++){const res=ev.results[k]; if(res.isFinal) fin+=res[0].transcript+' '; else interim+=res[0].transcript}
+    put(fin+interim);
+  };
+  r.onerror=ev=>{
+    if(ev.error==='no-speech'||ev.error==='aborted') return;
+    say(ev.error==='not-allowed'||ev.error==='service-not-allowed'?'Le micro est refusé : autorisez-le dans le navigateur, ou utilisez l’icône micro du clavier.':'Dictée interrompue ('+ev.error+'). Réessayez ou utilisez le micro du clavier.',true);
+  };
+  r.onend=()=>{
+    if(REC===r) REC=null;
+    if(btn) btn.textContent='🎤 Dicter';
+    if(fin.trim()) put(fin);
+    say(got?'Dictée terminée. Relisez le texte puis appuyez sur « Appliquer l’instruction ».':'Aucune parole reconnue. Réessayez en parlant près du micro.');
+  };
+  try{r.start();REC=r;if(btn)btn.textContent='⏹ Arrêter la dictée';say('Parlez maintenant. Touchez « Arrêter la dictée » quand vous avez fini.')}catch(e){REC=null;say('Impossible de démarrer la dictée.',true)}
 }
 
 /* =========================================================
