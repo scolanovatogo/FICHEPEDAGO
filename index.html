@@ -705,6 +705,23 @@ async function exportWord(ctx){
   const blob=await window.docx.Packer.toBlob(buildDocx(f,ctx?ctx.doc:buildDoc(f),ctx&&ctx.k));
   await saveFile((ctx?ctx.base:fileBase(f))+'.docx',blob);
 }
+async function paperCanvasNative(el,sc){
+  const W=794,H=1123;
+  const css=[...document.querySelectorAll('style')].map(x=>x.textContent).join('\n').replace(/\]\]>/g,']]]]><![CDATA[>');
+  const cl=el.cloneNode(true); cl.style.zoom=''; cl.style.margin='0'; cl.style.boxShadow='none';
+  const xhtml=new XMLSerializer().serializeToString(cl);
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'"><foreignObject x="0" y="0" width="'+W+'" height="'+H+'"><div xmlns="http://www.w3.org/1999/xhtml" style="width:'+W+'px;height:'+H+'px;background:#fff"><style><![CDATA['+css+']]></style>'+xhtml+'</div></foreignObject></svg>';
+  const img=new Image();
+  await new Promise((res,rej)=>{img.onload=res;img.onerror=()=>rej(new Error('rendu natif impossible'));img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)});
+  const cv=document.createElement('canvas'); cv.width=Math.round(W*sc); cv.height=Math.round(H*sc);
+  const g=cv.getContext('2d');
+  const paint=()=>{g.fillStyle='#fff';g.fillRect(0,0,cv.width,cv.height);g.drawImage(img,0,0,cv.width,cv.height)};
+  paint(); await new Promise(r=>setTimeout(r,80)); paint();
+  const d=g.getImageData(0,0,cv.width,cv.height).data; let dark=0;
+  for(let i=0;i<d.length;i+=4*97){if(d[i]<120) dark++}
+  if(dark<20) throw new Error('rendu natif vide');
+  return cv;
+}
 async function exportPDF(onProgress,ctx){
   const f=ctx?ctx.f:F(); if(!window.html2canvas||!window.jspdf) throw new Error('Le module PDF n’est pas chargé (connexion nécessaire).');
   await ensureFonts();
@@ -722,8 +739,9 @@ async function exportPDF(onProgress,ctx){
         if(mode==='border'){u.style.setProperty('background','none','important');u.style.setProperty('border-bottom','1.3px solid '+c,'important')}
         else u.style.setProperty('background-image','linear-gradient('+c+','+c+')','important')});
     }});
-    let cv; try{cv=await window.html2canvas(els[i],opt(1.6,'grad'))}
-    catch(e1){try{cv=await window.html2canvas(els[i],opt(1.6,'border'))}catch(e2){cv=await window.html2canvas(els[i],opt(1.3,'border'))}}
+    let cv; try{cv=await paperCanvasNative(els[i],1.6)}
+    catch(e0){try{cv=await window.html2canvas(els[i],opt(1.6,'grad'))}
+    catch(e1){try{cv=await window.html2canvas(els[i],opt(1.6,'border'))}catch(e2){cv=await window.html2canvas(els[i],opt(1.3,'border'))}}}
     if(i>0) pdf.addPage();
     pdf.addImage(cv.toDataURL('image/jpeg',0.85),'JPEG',0,0,595.28,841.89,undefined,'FAST');
     await new Promise(r=>setTimeout(r,0));
@@ -901,7 +919,7 @@ async function geminiJson(prompt,opts){
       let r;
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:0.7,responseMimeType:'application/json'},thinkCfg(model))})},isTest?15000:90000);
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.7,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:90000);
       }catch(e){
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
         throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}
@@ -1803,7 +1821,9 @@ async function genEpreuve(E){
   'TYPES SPÉCIAUX (à utiliser pour les parties concernées, avec un champ « type » dans l’objet de la partie) : (1) « relier » : l’énoncé ne contient que la consigne (ex. « Relie par une flèche chaque calcul à son résultat ») ; fournis "type":"relier","gauche":["1) …","2) …"],"droite":["a) …","b) …"] (réponses en DÉSORDRE, jamais face à leur correspondant, avec parfois un intrus) et "liens":["1-c","2-a"] ; NE JAMAIS écrire les liens (⟷, →, tirets) dans l’énoncé ; le corrigé est généré à partir de « liens ». (2) « reordre » : « Réarrange les groupes de mots pour obtenir une phrase correcte » ; prends une propriété, une règle ou une définition EXACTE du cours, découpe-la en 4 à 7 groupes de mots, mélange-les ; fournis "type":"reordre","groupes":["…","…"] (mélangés, jamais dans l’ordre correct) et "solution":"la phrase exacte" ; l’énoncé ne contient que la consigne. Ce type peut aussi figurer dans l’Exercice 3.\n'+
   'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…","fig":facultatif,"figCorr":facultatif}],"figSit":facultatif,"figCorrSit":facultatif,"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
   (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+'MISE EN PAGE : l’énoncé de l’épreuve (sans le corrigé) doit tenir sur UNE page, DEUX au maximum, jamais trois : situation brève (6 à 8 lignes), consignes courtes, questions concises, pas de texte inutile. Pour « Choisis la bonne réponse », écris chaque question sur sa ligne, puis toutes ses propositions a), b), c) (et d) si nécessaire, par exemple « Aucune réponse ») sur UNE SEULE ligne, sans retour à la ligne entre les propositions. Pour « relier par des flèches », donne seulement les deux colonnes (gauche numérotée, droite lettrée en désordre).\n'+LATEX_RULE_EPR;
-  const d=await ask(prompt);
+  const hist=Array.isArray(E.hist)?E.hist:[];
+  const variante='\n\nVARIANTE n°'+((E.nGen||0)+1)+' (graine '+Math.random().toString(36).slice(2,8)+') : compose une épreuve ORIGINALE, différente à chaque génération. '+(hist.length?'Épreuves déjà générées pour ces mêmes capacités, à NE PAS reprendre : change totalement le contexte de la situation (lieu, personnages, objets, activité), les données numériques, les affirmations vrai ou faux, les questions à choix et les exemples. Anciennes situations : '+hist.map((h,i)=>(i+1)+') '+h).join(' ; ')+'.':'Choisis un contexte précis et peu banal de la vie au Togo.');
+  const d=await ask(prompt+variante,{temp:1});
   if(!d||!has(eprS(d.situation))||!Array.isArray(d.consignes)||!d.consignes.length||!Array.isArray(d.grille)||!d.grille.length) throw {code:'invalid_json',message:'L’épreuve reçue est incomplète. Relancez la préparation.'};
   E.content={situation:eprS(d.situation),consignes:d.consignes.map(eprS),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,4).map(normGrille)};
   {const C=E.content;
@@ -1841,11 +1861,14 @@ async function eprAct(a,b){
     E.caps=[...String(E.caps).split('\n').filter(has),...add.filter(x=>!have.has(x))].join('\n'); save();render();return}
   if(a==='gen'){
     if(!aiKind()){eprSay(NO_AI,true);return}
+    const snapC=E.content;
+    if(snapC&&snapC.situation){E.hist=[String(snapC.situation).replace(/\s+/g,' ').slice(0,260)].concat(E.hist||[]).slice(0,4)}
+    E.nGen=(E.nGen||0)+1;
     E.content=null; save(); render(); b=document.querySelector('[data-epact="gen"]')||b;
     b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;
     await acquireGenWakeLock();
     try{await genEpreuve(E);save();render();eprSay('Épreuve préparée : relisez le sujet, le corrigé et la grille, puis téléchargez-la.')}
-    catch(e){eprSay(errCopy(e),true);b.disabled=false}
+    catch(e){if(!E.content&&snapC){E.content=snapC;save();render()}eprSay(errCopy(e),true);b.disabled=false}
     await releaseGenWakeLock();return}
   if(a==='corr'){
     const ta=document.getElementById('corr-ep'),ins=((ta&&ta.value)||'').trim();
