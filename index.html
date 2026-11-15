@@ -818,8 +818,8 @@ async function geminiModelList(key){
   const list=(j.models||[])
     .filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
     .map(m=>String(m.name||'').replace(/^models\//,''))
-    .filter(n=>/^gemini-/i.test(n)&&!/image|tts|live|audio|embedding|robotics|preview|experimental|thinking/i.test(n));
-  const score=n=>/^gemini-[\d.]+-flash$/.test(n)?0:/flash/.test(n)&&!/lite/.test(n)?1:/flash/.test(n)?2:3;
+    .filter(n=>/^gemini-/i.test(n)&&!/image|tts|live|audio|embedding|robotics|experimental|thinking|customtools|computer/i.test(n));
+  const score=n=>(/preview/.test(n)?10:0)+(/^gemini-[\d.]+-flash$/.test(n)?0:/flash/.test(n)&&!/lite/.test(n)?1:/flash/.test(n)?2:3);
   return [...new Set(list)].sort((a,b)=>score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
 }
 async function geminiModel(){
@@ -846,7 +846,7 @@ async function gemModels(key){
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   const list=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
   const pref=DB.ai.model&&list.includes(DB.ai.model)?[DB.ai.model]:[];
-  return [...pref,...list.filter(n=>n!==pref[0])].slice(0,5);
+  return [...pref,...list.filter(n=>n!==pref[0])].slice(0,7);
 }
 function fixJsonText(t){
   return String(t)
@@ -902,11 +902,11 @@ async function geminiJson(prompt,opts){
           GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);
           continue;                      // clé ou modèle suivant, sans attendre
         }
-        if(e.code==='service_busy'){GEM.hot[hk]=Date.now()+8000;continue}
+        if(e.code==='service_busy'){GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;GEM.hot[hk]=Date.now()+Math.min(60,8*nb)*1000;continue}
         if(e.code==='model_gone'){GEM.dead[model]=Date.now()+24*3600e3;continue}
         throw e;
       }
-      GEM.good=key; if(DB.ai.model!==model){DB.ai.model=model;save()}
+      GEM.good=key; if(GEM.bz) GEM.bz[hk]=0; if(DB.ai.model!==model){DB.ai.model=model;save()}
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
       const tryParse=x=>{try{return JSON.parse(fixJsonText(x))}catch(e){return JSON.parse(x)}};
@@ -914,13 +914,14 @@ async function geminiJson(prompt,opts){
     }
     if(isTest) break;
     // toutes les clés et tous les modèles sont momentanément limités : pause automatique puis reprise
-    if(!soonest||++waits>5) break;
+    if(!soonest||++waits>12) break;
     if(soonest>180) break;               // quota du jour épuisé partout
-    await gemPause(Math.min(75,Math.max(5,soonest)),'Les '+(keys.length>1?keys.length+' clés sont':'quotas sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
+    await gemPause(Math.min(75,Math.max(5,soonest)),lastError&&lastError.code==='service_busy'?'Les serveurs de Google sont surchargés en ce moment (ce n’est pas un problème de clé).':'Les '+(keys.length>1?keys.length+' clés sont':'quotas sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
   }
   if(lastError&&lastError.code==='invalid_json') throw lastError;
   if(lastError&&lastError.code==='rate_limited') throw {code:'rate_limited',message:'Le quota gratuit du service de rédaction est atteint sur '+(keys.length>1?'toutes vos clés':'votre clé')+' (limite par minute ou par jour). Ce qui est déjà rédigé est conservé : cliquez à nouveau sur « Préparer les séances » dans quelques minutes, ou demain si le quota du jour est épuisé.'};
-  throw {code:'service_busy',message:'Le service de rédaction est momentanément indisponible. Réessayez dans quelques minutes. Votre fiche et les textes déjà rédigés sont conservés.'};
+  const why=lastError?(' [Détail : '+(lastError.code||'?')+(lastError.message?' – '+String(lastError.message).slice(0,150):'')+']'):'';
+  throw {code:'service_busy',message:'Les serveurs de Google (service gratuit) sont surchargés et n’ont pas répondu, même après plusieurs tentatives sur '+keys.length+' clé(s). Vos clés ne sont pas en cause. Réessayez dans quelques minutes (tôt le matin ou tard le soir, c’est plus fluide). Votre fiche et les textes déjà rédigés sont conservés.'+why};
 }
 async function claudeJson(prompt,opts){
   try{return await SAMPLE.json(prompt,Object.assign({modelTier:'default'},opts&&opts.images?{images:opts.images}:{}))}
