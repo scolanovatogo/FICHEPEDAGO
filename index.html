@@ -485,7 +485,8 @@ function buildDoc(f0){
    ========================================================= */
 function imgHTML(im){return '<img alt="" src="'+im.src+'" style="width:'+(im.dw||300)+'px;max-width:100%">'+(im.credit?'<div style="font:italic 12px/1.2 var(--f-paper,serif);text-align:center;margin-top:-2px">'+(/^(Sch|Repr)/.test(im.credit)?'':'Source : ')+esc(im.credit)+'</div>':'')}
 function cellHTML(c,r){
-  const st=[]; if(c.shade)st.push('background:'+c.shade); if(c.color)st.push('color:'+c.color); if(c.align)st.push('text-align:'+c.align);
+  if(c.vm) return '';
+  const st=[]; if(c.mid)st.push('vertical-align:middle'); if(c.shade)st.push('background:'+c.shade); if(c.color)st.push('color:'+c.color); if(c.align)st.push('text-align:'+c.align);
   const bt=c.bt!==undefined?c.bt:r.bt, bb=c.bb!==undefined?c.bb:r.bb;
   if(c.nb)st.push('border:none');
   if(!bt)st.push('border-top-color:transparent'); if(!bb)st.push('border-bottom-color:transparent');
@@ -496,7 +497,7 @@ function cellHTML(c,r){
     const pad=(c.indentCell?' style="padding-left:22px"':'')||(c.center1&&i===0?' style="text-align:center"':'');
     return '<div class="ln"'+pad+'>'+(t||'&nbsp;')+'</div>'}).join('');
   if(c.img) inner+=imgHTML(c.img);
-  return '<td'+(c.span>1?' colspan="'+c.span+'"':'')+(cls?' class="'+cls+'"':'')+(st.length?' style="'+st.join(';')+'"':'')+'>'+inner+'</td>';
+  return '<td'+(c.span>1?' colspan="'+c.span+'"':'')+(c.rs>1?' rowspan="'+c.rs+'"':'')+(cls?' class="'+cls+'"':'')+(st.length?' style="'+st.join(';')+'"':'')+'>'+inner+'</td>';
 }
 function rowsHTML(rows){return rows.map(r=>'<tr>'+r.cells.map(c=>cellHTML(c,r)).join('')+'</tr>').join('')}
 function tblHTML(b,rows,withHead){
@@ -544,11 +545,15 @@ function paginate(doc,k){
       cur().push({html:blockHTML(b)}); used+=m.h; return;
     }
     let chunk=null;
-    for(let i=0;i<b.rows.length;i++){
-      let need=m.rowH[i]+(b.rows[i].keep&&i+1<b.rows.length?m.rowH[i+1]:0)+(chunk?0:m.headH);
-      if(used+need>CONTENT_H&&used>0){np();chunk=null;need=m.rowH[i]+(b.rows[i].keep&&i+1<b.rows.length?m.rowH[i+1]:0)+m.headH}
+    for(let i=0;i<b.rows.length;){
+      let e=i; while(b.rows[e].grp&&b.rows[e+1]&&b.rows[e+1].grp===b.rows[e].grp) e++;
+      let h=0; for(let k=i;k<=e;k++) h+=m.rowH[k];
+      const kp=(b.rows[e].keep&&e+1<b.rows.length)?m.rowH[e+1]:0;
+      let need=h+kp+(chunk?0:m.headH);
+      if(used+need>CONTENT_H&&used>0){np();chunk=null;need=h+kp+m.headH}
       if(!chunk){chunk={b,rows:[]};cur().push(chunk);used+=m.headH}
-      chunk.rows.push(b.rows[i]); used+=m.rowH[i];
+      for(let k=i;k<=e;k++) chunk.rows.push(b.rows[k]); used+=h;
+      i=e+1;
     }
     used+=m.gap;
   });
@@ -669,6 +674,8 @@ function buildDocx(f,docModel,kScale){
         const bt=c.bt!==undefined?c.bt:r.bt, bb=c.bb!==undefined?c.bb:r.bb;
         cs.push(new D.TableCell({width:{size:w,type:D.WidthType.DXA},columnSpan:span>1?span:undefined,
           shading:c.shade?{type:D.ShadingType.CLEAR,fill:c.shade.replace('#',''),color:'auto'}:undefined,
+          verticalMerge:c.vm?D.VerticalMergeType.CONTINUE:(c.rs>1?D.VerticalMergeType.RESTART:undefined),
+          verticalAlign:c.mid?D.VerticalAlign.CENTER:undefined,
           margins:{top:30,bottom:30,left:80,right:80},
           borders:c.nb||b.nb?{top:NONE,bottom:NONE,left:NONE,right:NONE}:{top:bt?ONE:NONE,bottom:bb?ONE:NONE,left:ONE,right:ONE},
           children:paras(c,r)}));
@@ -1705,18 +1712,28 @@ function eprHead(E){
     row([cell([b(has(E.insp)?E.insp:'Périmètre pédagogique')],{align:'center'}),cell([b('Épreuves de '+eprDiscNom(E))],{align:'center'}),cell([b(lab('Classe :',E.classe)+'   '+lab('Coef :',E.coef)),b(lab('Durée :',E.duree))],{align:'center'})])
   ]});
 }
+const SUBD='₀₁₂₃₄₅₆₇₈₉';
+function grNiv(t){t=String(t||'').trim();const m=/^[–—-]\s*(.*)$/.exec(t);t=m?m[1]:t;return '– '+t.replace(/^(C\s?\d\s?:)/,'**$1**')}
 function grilleRows(E){
   const G=(E.content&&E.content.grille)||[], m=eprModel(E), rows=[];
-  G.forEach(g=>{
-    const L=parseGrille(g.txt), tot=L.reduce((a,x)=>a+x.pts,0);
-    const lab=['**'+(m==='43'&&has(g.critere)?g.critere:'')+'**','**'+g.nom+'**','('+fmtN(tot)+(tot>1?' pts)':' pt)')].filter(x=>x!=='****');
-    const per=L.map(()=>[]);
-    if(L.length>=lab.length) lab.forEach((t,i)=>per[i].push(t));
-    else if(L.length===2){per[0].push(lab.slice(0,-1).join(' '));per[1].push(lab[lab.length-1])}
-    else per[0]=lab;
-    L.forEach((x,i)=>rows.push(row([
-      cell(per[i]),cell(has(x.ind)?[x.ind]:[]),cell([x.niv]),cell([fmtN(x.pts)+(x.pts>1?' pts':' pt')],{align:'center'})
-    ],{bt:i===0,bb:i===L.length-1})));
+  G.forEach((g,gi)=>{
+    const L=parseGrille(g.txt); if(!L.length) return;
+    const tot=L.reduce((a,x)=>a+x.pts,0), N=L.length;
+    const crit=m==='43'&&has(g.critere)?g.critere.replace(/^(CM|CP)(\d)$/,(z,a,d)=>a+SUBD[+d]):'';
+    const lab=[crit?'**'+crit+'**':'','**'+g.nom+'**','('+fmtN(tot)+(tot>1?' pts)':' pt)')].filter(Boolean);
+    // groupes d'indicateurs : lignes consécutives de même indicateur (ou indicateur vide)
+    const grp=[]; let last=null;
+    L.forEach((x,i)=>{const k=String(x.ind||'').trim().toLowerCase();
+      if(i===0||(k&&k!==last)){grp.push({ind:x.ind,from:i,n:1});last=k||last}else grp[grp.length-1].n++});
+    const gOf=i=>{let q=grp[0];for(const x of grp)if(x.from<=i)q=x;return q};
+    L.forEach((x,i)=>{
+      const q=gOf(i), cells=[];
+      cells.push(i===0?cell(lab,{rs:N,mid:true,align:'center'}):cell([],{vm:true}));
+      cells.push(i===q.from?cell(has(q.ind)?[q.ind]:[],{rs:q.n,mid:true}):cell([],{vm:true}));
+      cells.push(cell([grNiv(x.niv)]));
+      cells.push(cell([fmtN(x.pts)+(x.pts>1?' pts':' pt')],{align:'center'}));
+      rows.push(row(cells,{bt:true,bb:true,grp:'g'+gi}));
+    });
   });
   return rows;
 }
@@ -1796,7 +1813,7 @@ function buildEprDoc(E){
   if(gr.length){
     const hd=t=>cell(['**'+t+'**'],{shade:'#4472C4',color:'#fff',align:'center'});
     doc.push({t:'p',lines:['**Grille de correction de la situation d’évaluation**'],align:'center',keep:true,gap:4});
-    doc.push(tb({thick:true,cols:[21,27,40,12],head:[row([hd('Critères'),hd('Indicateurs'),hd('Niveaux de performance'),hd('Barème')])],rows:gr,gap:10}));
+    doc.push(tb({thick:true,cols:[21,27,40,12],head:[row([hd('Critères'),hd('Indicateurs'),hd('Niveaux de performance'),hd('Barèmes')])],rows:gr,gap:10}));
   }
   doc.push({t:'p',lines:['**__Exercice 2__**'],keep:true,gap:4});
   (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});eprPartBlocks(p,true).forEach(b=>doc.push(b))});
@@ -1805,22 +1822,32 @@ function buildEprDoc(E){
   return doc;
 }
 function eprBase(E){return noAccent(['epreuve',E.disc,E.classe,E.type,E.periode].filter(has).join('-')).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
+const EPR_SEP=' — ';
+function eprContList(v){return (Array.isArray(v)?v:String(v==null?'':v).split(/\n|;/)).map(x=>String(x).replace(/\*/g,'').replace(/^\s*[-•]\s*/,'').replace(/\s+/g,' ').trim()).filter(Boolean)}
+function eprCapLine(cap,conts){cap=String(cap||'').replace(/\*/g,'').replace(/\s+/g,' ').trim();const c=eprContList(conts);return c.length?(cap||'Capacité')+EPR_SEP+c.join(' ; '):cap}
+function eprCapParse(l){const i=l.indexOf(EPR_SEP);return i<0?{cap:l.trim(),conts:[]}:{cap:l.slice(0,i).trim(),conts:eprContList(l.slice(i+EPR_SEP.length))}}
 async function genEpreuve(E){
   const m=eprModel(E);
   const caps=String(E.caps).split('\n').map(x=>x.trim()).filter(Boolean);
-  if(!caps.length) throw {code:'fatal',message:'Indiquez d’abord les capacités à évaluer.'};
+  if(!caps.length) throw {code:'fatal',message:'Indiquez d’abord les capacités et contenus à évaluer.'};
   const p1=parseN(E.p1),p2=parseN(E.p2),p3=parseN(E.p3);
   const disc=eprDiscNom(E), maths=E.disc==='maths';
   const modele=m==='65'
    ? 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec UNE SEULE consigne. Exercice 2 en quatre parties : I. « Réponds par vrai ou faux » (4 affirmations, 0,5 pt chacune) ; II. « Choisis la bonne réponse » (4 questions à choix a), b), c), d) dont parfois « aucune réponse », 0,5 pt chacune) ; III. « Complète sans recopier le texte » (phrase avec ... a ... et ... b ..., 0,5 pt par mot) ; IV. « Réarrange les groupes de mots suivants pour obtenir une phrase correcte » (partie de type « reordre », 1 pt). Exercice 3 : questions traditionnelles courtes et variées (écrire en lettres, calculs, écriture d’un ensemble, une construction géométrique…), chaque question avec son barème.'
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (partie de type « relier » : 4 éléments numérotés r), s), t), v) dans « gauche » et 4 réponses a), b), c), d) EN DÉSORDRE dans « droite », SANS aucun lien dans l’énoncé ; les liens n’apparaissent que dans « liens », 0,5 pt chacune) ; D) « Réarrange les groupes de mots pour obtenir une propriété ou une définition correcte du cours » (partie de type « reordre », 1 pt) ; E) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
-  'CAPACITÉS À ÉVALUER :\n'+caps.map(c=>'- '+c).join('\n')+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+caps.map(l=>{const o=eprCapParse(l);return '- Capacité : '+o.cap+(o.conts.length?'\n    Contenus enseignés : '+o.conts.join(' ; '):'')}).join('\n')+
+  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé.'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
-  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les capacités ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
+  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
   'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
-  'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent à la situation (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère contient plusieurs lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème multiple de 0,25}. Les indicateurs sont : CM1 « Compréhension de la situation / Respect de la consigne / Pertinence de la réponse » ; CM2 « Exactitude des calculs ou des résultats » ; CM3 « Enchaînement de la démarche / Cohérence des résultats » ; CP « Qualité de la langue / Présentation / problème entièrement résolu ». Les niveaux de performance sont CONCRETS : ils citent les données, les calculs et les résultats attendus de cette situation.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales).':'')+'\n\n'+
+  'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Elle doit être DÉTAILLÉE, ligne par ligne, comme une vraie grille officielle. Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère est une liste de lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème}. Un indicateur regroupe PLUSIEURS lignes consécutives : RÉPÈTE le même texte d’indicateur, à l’identique, sur chaque ligne de son groupe. Chaque ligne de niveau de performance vaut 0,25 pt (multiples de 0,25 seulement) : un critère de 2,5 pts contient donc 10 lignes, un critère de 2 pts en contient 8. INDICATEURS ET NIVEAUX : '+
+  'CM1 (trois indicateurs) : « Adéquation avec le support : données et contraintes identifiées » (UNE ligne par donnée numérique ou contrainte du texte et de la figure, ex. « Côté de la cour : (x + 5) m », « Prix du béton : 2 500 F le m² ») ; « Adéquation avec la consigne (compréhension de la consigne) » (une ligne par tâche demandée : ce qu’il faut exprimer, calculer, factoriser, construire) ; « Justesse de la réponse au regard de la consigne » (une ligne par grandeur finale demandée, ex. « Calculer le coût du béton pour x = 10 »). '+
+  'CM2 (deux indicateurs) : « Respect des étapes de l’utilisation des outils » (une ligne par étape de méthode ou d’outil : développement, factorisation, calcul pour une valeur, construction d’un point, tracé, utilisation d’une propriété) ; « Justesse des résultats obtenus au regard des outils et concepts utilisés » (une ligne par résultat attendu AVEC sa valeur exacte : expression, aire, coût, longueurs, périmètre, positions de points…). '+
+  'CM3 (deux indicateurs) : « Bon enchaînement des étapes de la démarche » (lignes sur l’ORDRE des étapes : ce qui doit être fait avant quoi) ; « Conformité des résultats et conclusions à la démarche » (lignes sur la cohérence des résultats, les unités, la conclusion rédigée « même si le résultat est faux »). '+
+  'CP (trois indicateurs, une ligne chacun) : « Le problème est entièrement résolu » – « Résolution entière du problème » (0,5 pt) ; « Qualité de la langue » – « Expressions correctes » (0,25 pt) ; « La production est-elle bien présentée ? » – « Écriture lisible, sans rature » (0,25 pt) (adapte ces barèmes si le total de CP n’est pas 1). '+
+  'Les niveaux de performance sont CONCRETS : ils citent les données, les calculs et les résultats attendus de CETTE situation, et sont courts (une phrase). Si les totaux obligent à moins de lignes, garde au moins 2 lignes par indicateur.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales, sans « C1 »).':' Il n’y a qu’une seule consigne : n’utilise pas « C1 : ».')+'\n\n'+
   'TYPES SPÉCIAUX (à utiliser pour les parties concernées, avec un champ « type » dans l’objet de la partie) : (1) « relier » : l’énoncé ne contient que la consigne (ex. « Relie par une flèche chaque calcul à son résultat ») ; fournis "type":"relier","gauche":["1) …","2) …"],"droite":["a) …","b) …"] (réponses en DÉSORDRE, jamais face à leur correspondant, avec parfois un intrus) et "liens":["1-c","2-a"] ; NE JAMAIS écrire les liens (⟷, →, tirets) dans l’énoncé ; le corrigé est généré à partir de « liens ». (2) « reordre » : « Réarrange les groupes de mots pour obtenir une phrase correcte » ; prends une propriété, une règle ou une définition EXACTE du cours, découpe-la en 4 à 7 groupes de mots, mélange-les ; fournis "type":"reordre","groupes":["…","…"] (mélangés, jamais dans l’ordre correct) et "solution":"la phrase exacte" ; l’énoncé ne contient que la consigne. Ce type peut aussi figurer dans l’Exercice 3.\n'+
   'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…","fig":facultatif,"figCorr":facultatif}],"figSit":facultatif,"figCorrSit":facultatif,"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
   (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+'MISE EN PAGE : l’énoncé de l’épreuve (sans le corrigé) doit tenir sur UNE page, DEUX au maximum, jamais trois : situation brève (6 à 8 lignes), consignes courtes, questions concises, pas de texte inutile. Pour « Choisis la bonne réponse », écris chaque question sur sa ligne, puis toutes ses propositions a), b), c) (et d) si nécessaire, par exemple « Aucune réponse ») sur UNE SEULE ligne, sans retour à la ligne entre les propositions. Pour « relier par des flèches », donne seulement les deux colonnes (gauche numérotée, droite lettrée en désordre).\n'+LATEX_RULE_EPR;
@@ -1846,15 +1873,15 @@ async function eprImportCaps(files){
       if(useAI) d=await extractProgramme({},{images:[await canvasBlob(files[i],2200)]},'');
       else d=localData(await ocrItems(await enhanceForOcr(files[i]).catch(()=>files[i])));
       for(const c of ((d&&d.capacites)||[])){
-        const t=String(c.capacite||c.cap||'').replace(/\*/g,'').replace(/\s+/g,' ').trim();
+        const t=eprCapLine(c.capacite||c.cap,c.contenus);
         if(t&&!have.has(t.toLowerCase())){have.add(t.toLowerCase());added.push(t)}
       }
     }catch(e){fails++; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
   }
   if(added.length){E.caps=[...String(E.caps).split('\n').filter(has),...added].join('\n');save();render();
-    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(useAI?'':' (lecture locale : relisez attentivement)');
+    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) avec leurs contenus ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(useAI?'':' (lecture locale : relisez attentivement)');
     flash(m); if(st2){st2.textContent=m;st2.className='status small muted'}}
-  else say('Aucune capacité trouvée. Prenez une capture plus nette du tableau « Capacités | Contenus », ou saisissez-les à la main.',true);
+  else say('Aucune capacité trouvée. Prenez une capture plus nette du tableau « Capacités | Contenus », ou saisissez-les à la main (une ligne : Capacité — contenu ; contenu).',true);
 }
 async function eprCorrect(E,ins){
   const C=E.content;
@@ -1882,7 +1909,7 @@ async function eprAct(a,b){
   if(a==='new'){askConfirm(b,'epnew',()=>{const k=newEpr();for(const x of ['dre','insp','type','periode','annee','disc','sub','classe','coef','duree','p1','p2','p3']) k[x]=E[x];DB.epr=k;save();render()},'Effacer cette épreuve ?');return}
   if(a==='addprog'){
     const sel=document.getElementById('ep-prog'); const p=sel&&(DB.progs||[]).find(x=>x.id===sel.value); if(!p){eprSay('Choisissez d’abord une leçon.',true);return}
-    const add=(p.capacites||[]).map(c=>String(c.cap||'').trim()).filter(Boolean);
+    const add=(p.capacites||[]).map(c=>eprCapLine(c.cap,c.contenus)).filter(Boolean);
     const have=new Set(String(E.caps).split('\n').map(x=>x.trim()));
     E.caps=[...String(E.caps).split('\n').filter(has),...add.filter(x=>!have.has(x))].join('\n'); save();render();return}
   if(a==='gen'){
@@ -1939,11 +1966,11 @@ function renderEpr(){
     ${d.subs.length?eprSel('Spécialité','sub',[['','—'],...d.subs]):''}
     ${eprSel('Classe','classe',EPR_CLASSES,true)}
     ${eprFld('Coefficient','coef',{ph:'1'})}${eprFld('Durée','duree',{ph:'1h 30'})}</div></section>
-   <section class="card"><h2>Capacités à évaluer</h2>
-    <div class="grid">${eprFld('Capacités à évaluer (une par ligne)','caps',{rows:4,wide:true,ph:'Ex. : Calculer la somme de nombres entiers naturels',hint:'Saisissez-les ou reprenez celles d’une leçon déjà préparée'})}</div>
-    <div class="row" style="margin:8px 0"><label class="btn alt" for="epCapImg" style="cursor:pointer">Ajouter des capacités par photo ou capture d’écran</label><input type="file" id="epCapImg" accept="image/*" multiple hidden></div>
-    <div class="muted small">Vous pouvez choisir plusieurs images à la fois (tableaux « Capacités | Contenus »). Les capacités lues sont ajoutées à la liste ci-dessus : vérifiez-les.</div><div id="ep-capst" class="status small muted" role="status"></div>
-    ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre les capacités d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités</button></div>`:''}
+   <section class="card"><h2>Capacités et contenus à évaluer</h2>
+    <div class="grid">${eprFld('Capacités et contenus enseignés (une capacité par ligne)','caps',{rows:7,wide:true,ph:'Ex. : Calculer — PPCM et PGCD de deux nombres ; Addition de deux fractions',hint:'Format : Capacité — contenu ; contenu. Les questions portent sur les contenus enseignés ; la capacité précise le savoir-faire évalué.'})}</div>
+    <div class="row" style="margin:8px 0"><label class="btn alt" for="epCapImg" style="cursor:pointer">Ajouter capacités et contenus par photo ou capture d’écran</label><input type="file" id="epCapImg" accept="image/*" multiple hidden></div>
+    <div class="muted small">Vous pouvez choisir plusieurs images à la fois (tableaux « Capacités | Contenus »). Les capacités et leurs contenus sont ajoutés à la liste ci-dessus (une ligne par capacité) : vérifiez-les.</div><div id="ep-capst" class="status small muted" role="status"></div>
+    ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre capacités et contenus d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités et contenus</button></div>`:''}
     <div class="grid">${eprFld('Précisions (facultatif)','ctx',{rows:2,wide:true,ph:'Ex. : contexte du marché, éviter les fractions, situation sur la construction d’un jardin…'})}
     ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
     <div class="muted small" style="margin:4px 0 10px">Total : ${fmtN(total)} points${total!==20?' (en général 20)':''} · modèle utilisé : ${eprModel(E)==='43'?'4ᵉ / 3ᵉ (deux consignes dans la situation)':'6ᵉ / 5ᵉ (une consigne dans la situation)'}.</div>
@@ -1960,7 +1987,7 @@ function renderEpr(){
     <div style="font-weight:700;margin:10px 0 4px">Exercice 3 : questions traditionnelles</div>${(C.ex3||[]).map((p,i)=>part('ex3',i,p)).join('')}</section>
    <section class="card"><h2>Corrigé et grille de correction</h2><div class="grid">
     ${eprFld('Corrigé de la situation (exercice 1)','content.corrSit',{rows:6,wide:true})}
-    ${(C.grille||[]).map((g,i)=>eprFld((g.critere?g.critere+' : ':'')+g.nom+' — une ligne par indicateur : indicateur | niveau de performance | barème','content.grille.'+i+'.txt',{rows:4,wide:true})).join('')}</div>
+    ${(C.grille||[]).map((g,i)=>eprFld((g.critere?g.critere+' : ':'')+g.nom+' — une ligne par niveau : indicateur (répété pour les lignes d’un même groupe) | niveau de performance | barème','content.grille.'+i+'.txt',{rows:4,wide:true})).join('')}</div>
     <div class="status small ${ok?'muted':'err'}" style="margin-top:6px">Total de la grille : ${fmtN(gsum)} pt(s)${ok?' : conforme à la situation.':' : il devrait valoir '+fmtN(parseN(E.p1))+' pts.'}</div></section>
    <section class="card"><h2>Corriger avec une instruction</h2>
     <textarea id="corr-ep" rows="2" placeholder="Ex. : rends la consigne 2 plus facile ; change les prix dans la situation ; ajoute une question sur les diviseurs" style="width:100%"></textarea>
