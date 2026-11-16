@@ -470,12 +470,13 @@ function buildDoc(f0){
       rows.push(mo('commun'));
       if(has(s.resolution)) rows.push(...grp([row([cell(['**__[[red:RÉSOLUTION DE LA SITUATION D’APPRENTISSAGE]]__**'],{span:3,align:'center'})]),...lines(s.resolution).map(x=>row([cell([x],{span:3,just:true})]))]));
       rows.push(row([cell(['**__[[red:INSTITUTIONNALISATION (trace écrite)]]__** **(10 min)**'],{span:3,align:'center'})]));
-      const consEst=Math.ceil(String(s.consignes||'').length/26)+1;
-      const tl=lines(s.trace).filter((x,k,a)=>has(x)||k<a.length);
-      let first=['***[[blue:Capacités : '+mk(s.capTitre)+']]***'],est=1,k=0;
-      while(k<tl.length&&est<consEst){first.push(tl[k]);est+=Math.max(1,Math.ceil(tl[k].replace(/\$[^$]*\$/g,'xxxxx').length/95))+0.4;k++}
-      const tr=[row([cell(['**Consignes au prof**',...lines(s.consignes)],{sm:true}),cell(first,{span:2})])];
-      for(;k<tl.length;k++) tr.push(row([cell([],{sm:true}),cell([tl[k]],{span:2})]));
+      const cl=['**Consignes au prof**',...lines(s.consignes).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1]))).flatMap(x=>String(x).length>50?String(x).split(/(?<=[.!?;])\s+/):[x])];
+      const hz=(x,w,e)=>Math.max(1,Math.ceil(String(x).replace(/\$[^$]*\$/g,'xxxxx').length/w))+e;
+      const tl=lines(s.trace).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])));
+      const rt=[['***[[blue:Capacités : '+mk(s.capTitre)+']]***'],...tl.map(x=>[x])];
+      const tr=[]; let ci=0,lh=0,rh=0;
+      rt.forEach(r=>{rh+=hz(r[0],95,0.4);const ch=[];while(ci<cl.length&&(ch.length===0&&ci===0||lh<rh)){ch.push(cl[ci]);lh+=hz(cl[ci],26,0.2);ci++}tr.push(row([cell(ch,{sm:true}),cell(r,{span:2})]))});
+      if(ci<cl.length){tr.push(row([cell([cl.slice(ci).join(' ')],{span:3,sm:true,just:true})]));ci=cl.length}
       rows.push(...grp(tr));
       if(s.traceImg) rows.push(row([cell([],{sm:true}),cell([],{span:2,img:s.traceImg})]));
       figsOf(s).forEach(im=>rows.push(row([cell([],{sm:true}),cell([],{span:2,img:im,align:'center'})])));
@@ -1025,10 +1026,9 @@ async function geminiJson(prompt,opts){
     for(const [key,model] of order()){
       const hk=key+'|'+model;
       if(GEM.hot[hk]>Date.now()){const w=Math.ceil((GEM.hot[hk]-Date.now())/1000);soonest=soonest?Math.min(soonest,w):w;continue}
-      const gap=(GEM.klast[key]||0)+GEM.gap-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
+      const at=Math.max(Date.now(),(GEM.klast[key]||0)+GEM.gap); GEM.klast[key]=at; const gap=at-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
       if(fast&&Date.now()-t0>80000) throw {code:'fatal',message:'Le service met trop de temps à répondre. Rien n’a été modifié : réessayez dans un instant.'};
-      GEM.klast[key]=Date.now();
       let r;
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
@@ -1295,8 +1295,7 @@ async function importFile(file){
     const n=applyExtracted(f,data);
     if(!n){setGen((aiErr?errCopy(aiErr)+' ':'')+'Aucune capacité reconnue. Si le fichier contient plusieurs leçons, indiquez la leçon visée ci-dessus ; sinon saisissez le tableau à la main.',true);return}
     if(how==='local') f.photoNote='Lecture automatique locale : vérifiez le tableau des capacités et contenus (une photo peut contenir des fautes de reconnaissance).'+(f.photoNote?' '+f.photoNote:'');
-    touch(); setGen(n+' capacités lues, '+f.seances.length+' séance(s) prévue(s).'+(aiErr?' (Lecture par IA indisponible : '+errCopy(aiErr)+')':''));
-    if(autoGen){ GEN.running=false; await generateAll(f,{overwrite:false,fromImport:true}); return }
+    touch(); setGen(n+' capacités lues, '+f.seances.length+' séance(s) prévue(s). Vérifiez ce nombre, puis cliquez sur « Répartir les capacités sur les séances ».'+(aiErr?' (Lecture par IA indisponible : '+errCopy(aiErr)+')':''));
   }catch(e){setGen(errCopy(e),true)}
   finally{ GEN.running=false; lockGen(false); render2(); }
 }
@@ -1700,7 +1699,7 @@ function ctxSuggest(f,i){let h=0;const t=String(f.titre||f.theme||'');for(let k=
 const SIT_PROGRESS='PROGRESSION (règle n°2) : regarde « numeroSeance » et « acquisAnterieurs ». SÉANCE 1 : la situation s’appuie sur des acquis des classes antérieures ou des leçons précédentes (choisis-en un ou deux dans acquisAnterieurs, ceux qui servent le mieux la capacité) pour faire construire la première notion de la leçon. SÉANCES SUIVANTES : elle s’appuie, chaque fois que c’est possible, sur ce qui vient d’être vu aux séances précédentes de la même leçon (seancesPrecedentes : leurs capacités et contenus), en plus des acquis antérieurs. Tu ne mobilises JAMAIS une notion qui n’a été vue ni dans acquisAnterieurs, ni aux séances précédentes, ni dans la séance du jour. MATÉRIEL SIMPLE (règle n°3) : la situation ne repose que sur ce que des élèves peuvent lire, mesurer ou constater eux-mêmes : étiquette, facture, plaque signalétique, notice, schéma, objet du quotidien, mesure à la règle. N’invente jamais l’observation de particules, d’atomes, d’ions ou de charges, ni une expérience compliquée. Exemple pour les ions : une étiquette d’eau minérale ou d’engrais portant des symboles comme Ca²⁺, Cl⁻ ou NO₃⁻, et la question demande le nom et le type de chacun (n’en tire rien si la leçon est différente).';
 const SIT_RECIPE='ANCRAGE (règle n°1) : le tableau du programme a deux colonnes, les CAPACITÉS (à gauche) et les CONTENUS (à droite). La situation est construite à partir des DEUX : passe en revue chaque contenu de « contenusDeLaSeance » ; les données et la question doivent amener les élèves à rencontrer TOUS ces contenus (aucun oublié, aucun ajouté), et la question finale doit être celle dont la réponse demande la capacité visée sans la nommer, ni nommer les contenus ; elle découle directement de la phrase écrite (mêmes objets, mêmes données) et ne porte jamais sur autre chose. RECETTE DE LA SITUATION : (1) un personnage réel du quotidien togolais (prénom varié) qui a un BESOIN ou une DÉCISION à prendre (acheter, partager, construire, réparer, comparer deux offres, vérifier un compte, mesurer un terrain…) ; (2) des données plausibles pour le Togo (prix en FCFA réalistes, mesures et distances vraisemblables, nombres simples) ; (3) une question ouverte qui oblige à calculer, mesurer, comparer ou conjecturer avec les seuls prérequis, sans nommer la notion. CADRE : utilise celui de « contexteSuggere » (change-le seulement s’il est incompatible avec la leçon) ; ne reprends ni le cadre, ni le personnage, ni le type de question des « situationsDejaEcrites » ; évite le marché de Lomé et Kpalimé s’ils ne sont pas proposés. À ÉVITER : l’exercice déguisé (« Un commerçant a 5 sacs… Calcule… »), les données inventées sans raison, une question dont la réponse est évidente ou qu’on ne se poserait jamais dans la vie, une consigne qui donne déjà la méthode. VÉRIFIE avant de répondre : un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? toutes les données sont-elles dans le texte ? la situation fait-elle sentir le besoin de la notion ? le nombre de mots est-il respecté ?';
 const SIT_INTENT='"intention": en une phrase (non affichée), ce que les élèves vont observer, mesurer, comparer ou constater dans la situation et qui les mènera à la notion de la séance ;\n';
-const SIT_VERIFY=false;
+const SIT_VERIFY=true;
 async function verifySituation(f,s,d,extra){
   if(!SIT_VERIFY) return null;
   if(!d||!has(d.situation)) return null;
@@ -1711,6 +1710,16 @@ Situation : ${d.situation}
 ${extra||''}
 Juge STRICTEMENT : (1) la question finale découle-t-elle directement des données et du contexte écrits dans la situation ? (2) toutes les données nécessaires pour répondre figurent-elles dans le texte ? (3) répondre à la question demande-t-il réellement la capacité visée (et non une autre notion), et la situation fait-elle rencontrer CHACUN des contenus listés, sans en omettre ni en ajouter ? (4) la situation évite-t-elle de donner la notion ou le vocabulaire du cours ? (5) les valeurs et les faits (physique, chimie, technologie, calcul) sont-ils exacts et plausibles ? (6) un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? (7) la situation s’appuie-t-elle uniquement sur des notions réellement antérieures (acquis antérieurs ou séances précédentes de la leçon), et, s’il s’agit de la séance 1, sur des acquis antérieurs à la leçon ? (8) le matériel est-il simple et observable par des élèves (étiquette, facture, plaque, mesure…), sans observation de particules ni expérience irréaliste ?
 Réponds uniquement par {"ok":true,"probleme":""} si tout est satisfaisant, sinon {"ok":false,"probleme":"le défaut précis, en une phrase"}.`;
+  return await ask(p);
+}
+async function verifyCalculs(f,s,d,A){
+  const keys=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
+  const part={};keys.forEach(k=>{if(has(d[k])) part[k]=String(d[k])});
+  if(!Object.keys(part).length) return null;
+  const p=`Tu es professeur vérificateur (${discLabel(f)}, ${f.classe||'collège'}). Voici des éléments rédigés pour la séance « ${[s.capNum,s.capTitre].filter(has).join(' : ')} » (contenus : ${s.contenus}), au format JSON :
+${JSON.stringify(part)}
+Refais TOUS les calculs, vérifie chaque solution, chaque réponse, chaque formule, chaque unité et chaque définition. Vérifie aussi que les solutions répondent bien aux exercices posés et que les données d’un exercice suffisent pour le résoudre.
+Réponds uniquement par {"ok":true} si tout est exact. Sinon {"ok":false,"corriges":{"cle":"texte entièrement corrigé"}} en ne reprenant QUE les clés fautives (parmi : ${keys.join(', ')}), avec le même format (lignes séparées par \n, formules entre $…$) et en corrigeant l’erreur sans changer le sujet.`;
   return await ask(p);
 }
 async function genSeanceContent(f,i,o){
@@ -1755,6 +1764,16 @@ ${desc}`;
       d=await ask(prompt+'\nCORRECTION OBLIGATOIRE : une première version a été REJETÉE pour ce défaut : « '+v.probleme+' ». Réécris TOUTE la séance (situation, résolution, essentiel, exercices) en corrigeant ce défaut : la question doit découler de la phrase écrite, demander exactement la capacité de la séance et faire rencontrer tous ses contenus.');
     }
   }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
+  if(d&&typeof d==='object'){
+    try{
+      const v=await verifyCalculs(f,s,d,A);
+      if(v&&v.ok===false&&v.corriges&&typeof v.corriges==='object'){
+        const allowed=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
+        let n=0;for(const k of allowed) if(has(v.corriges[k])){d[k]=String(v.corriges[k]);n++}
+        if(n) setGen('Séance '+(i+1)+' : '+n+' élément(s) corrigé(s) après vérification des calculs.');
+      }
+    }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
+  }
   if(!d||typeof d!=='object') throw {code:'invalid_json',message:'La réponse de l’IA ne contient pas une séance exploitable.'};
   const required=A?['situation','synthese','essentiel','exoApp','exoMaison']:['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
   const missing=required.filter(k=>!has(d[k]));
@@ -1799,17 +1818,37 @@ let genWakeLock=null;
 async function acquireGenWakeLock(){try{if('wakeLock' in navigator && document.visibilityState==='visible') genWakeLock=await navigator.wakeLock.request('screen')}catch(e){genWakeLock=null}}
 async function releaseGenWakeLock(){try{if(genWakeLock){await genWakeLock.release();genWakeLock=null}}catch(e){genWakeLock=null}}
 document.addEventListener('visibilitychange',()=>{if(GEN.running&&document.visibilityState==='visible') acquireGenWakeLock()});
-function resetGenerated(f){
+function resetGenerated(f,keepPlan){
   const A=f.tpl==='A';
   const b=newSeance(f.tpl);
   f.seances.forEach(s=>{
     if(has(s.situation)) s.prevSit=[String(s.situation).replace(/\s+/g,' ').slice(0,200)].concat(s.prevSit||[]).slice(0,3);
-    for(const k of ['capNum','capTitre','contenus','situation','img','imgKey','synthese','resolution','essentiel','exoApp','exoMaison','consignes','trace','traceImg','imgEss','figs','exoAppSol','evalQ','evalR','exoMaisonSol']) s[k]=b[k];
+    for(const k of ['capNum','capTitre','contenus','situation','img','imgKey','synthese','resolution','essentiel','exoApp','exoMaison','consignes','trace','traceImg','imgEss','figs','exoAppSol','evalQ','evalR','exoMaisonSol']){ if(keepPlan&&(k==='capNum'||k==='capTitre'||k==='contenus')) continue; s[k]=b[k] }
     delete s.autoImgSearch;
     const mm=A?[['remob',['prof','eleve']],['appro',['eleve']]]:[['prereq',['prof','eleve']]];
     mm.forEach(([m,ks])=>{if(s.m&&s.m[m]&&DEF[f.tpl]&&DEF[f.tpl][m]) ks.forEach(k=>{s.m[m][k]=DEF[f.tpl][m][k]})});
   });
   f.bilan=BIL_T.map(()=>({q:'',s:''}));
+}
+async function repartirCaps(f){
+  if(GEN.running) return;
+  if(!f.capacites.some(c=>has(c.cap))){setGen('Ajoutez d’abord les capacités et contenus.',true);return}
+  GEN.running=true;GEN.stop=false;lockGen(true);
+  const n=f.seances.length;
+  try{
+    f.seances.forEach(x=>{['capNum','capTitre','contenus'].forEach(k=>{x[k]=newSeance(f.tpl)[k]})});
+    if(!aiKind()){planLocal(f,{overwrite:true});setGen('Capacités réparties sur les '+n+' séance(s). Vérifiez, puis passez à l’étape 3 : « Préparer les séances ».')}
+    else{
+      setGen('Répartition des capacités sur les '+n+' séance(s)…');
+      try{await planSeances(f,{overwrite:true});setGen('Capacités réparties sur les '+n+' séance(s). Passez à l’étape 3 : « Préparer les séances ».')}
+      catch(e){
+        if(e&&(e.code==='cancelled'||e.code==='not_granted'||e.code==='fatal')) throw e;
+        planLocal(f,{overwrite:true});setGen('Répartition locale effectuée sur les '+n+' séance(s) (le service IA n’a pas répondu). Passez à l’étape 3.')
+      }
+    }
+    rememberProgram(f);touch();
+  }catch(e){setGen(errCopy(e),true)}
+  finally{GEN.running=false;lockGen(false);render2()}
 }
 async function generateAll(f,o){
   if(GEN.running) return;
@@ -1817,37 +1856,40 @@ async function generateAll(f,o){
   GEN.running=true;GEN.stop=false;GEN.figMissing=[];lockGen(true);await acquireGenWakeLock();
   const n=f.seances.length;let failed=[],failWhy='',snap=null;
   try{
+    if(!f.seances.every(x=>has(x.capTitre)&&has(x.contenus))){setGen('Répartissez d’abord les capacités : cliquez sur « Répartir les capacités sur les séances » (étape 2).',true);return}
     if(!aiKind()){
-      planLocal(f,o);rememberProgram(f);touch();
-      setGen('Capacités réparties sur les '+n+' séance(s). Pour que l’application rédige aussi les situations d’apprentissage, la résolution, l’essentiel à retenir et les exercices, activez la rédaction automatique dans Réglages (clé gratuite, 1 minute).');
-      step=3;openSeances=new Set([0]);return;
+      setGen('Pour que l’application rédige les situations d’apprentissage, la résolution, l’essentiel à retenir et les exercices, activez la rédaction automatique dans Réglages (clé gratuite).',true);
+      return;
     }
     setGen('Réinitialisation de la fiche avant la nouvelle rédaction…');
     snap={s:JSON.parse(JSON.stringify(f.seances)),b:JSON.parse(JSON.stringify(f.bilan||[]))};
-    resetGenerated(f);o=Object.assign({},o,{overwrite:true});touch();
+    resetGenerated(f,true);o=Object.assign({},o,{overwrite:true});touch();
     {const sh=document.getElementById('sheets');if(sh) sh.innerHTML='';}
     if(view==='fiche'){render2();lockGen(true)}
-    setGen('Répartition des capacités sur les '+n+' séance(s)…');
-    try{await planSeances(f,o)}
-    catch(e){
-      if(e&&(e.code==='rate_limited'||e.code==='service_busy'||e.code==='cancelled'||e.code==='not_granted'||e.code==='fatal')) throw e;
-      planLocal(f,o);
-      setGen('Le service IA a tardé à répartir les capacités. Répartition locale effectuée automatiquement ; préparation des séances…');
-    }
     rememberProgram(f);
     touch();
-    for(let i=0;i<n;i++){
-      if(GEN.stop){setGen('Arrêté après la séance '+i+'. Ce qui est rédigé est conservé.');break}
-      setGen('Rédaction de la séance '+(i+1)+' sur '+n+' (situation, résolution, essentiel à retenir, exercices)…');
+    const conc=Math.max(1,Math.min(n,geminiKeys().length>1?3:2));
+    let next=0,done=0,fatal=null;
+    const doOne=async i=>{
       let ok=false,last=null;
-      for(let attempt=1;attempt<=2&&!ok;attempt++){
+      for(let attempt=1;attempt<=2&&!ok&&!fatal&&!GEN.stop;attempt++){
         try{await genSeanceContent(f,i,o);touch();ok=true}
         catch(e){last=e;if(e&&(e.code==='rate_limited'||e.code==='cancelled'||e.code==='service_busy'||e.code==='not_granted'||e.code==='network'||e.code==='fatal'||/^http_4/.test(e.code||'')))break;
-          if(attempt<2){setGen('La séance '+(i+1)+' est incomplète. Nouvelle tentative automatique…');await geminiWait(900)}
+          if(attempt<2){await geminiWait(900)}
         }
       }
-      if(!ok){failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':''); if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')) throw last;}
-    }
+      done++;
+      if(ok){setGen('Séances rédigées : '+done+' sur '+n+'…');return}
+      if(GEN.stop&&!last) return;
+      failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':'');
+      if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')&&!fatal) fatal=last;
+    };
+    setGen('Rédaction des séances (plusieurs à la fois) : 0 sur '+n+'…');
+    await Promise.all(Array.from({length:conc},async()=>{
+      while(next<n&&!fatal&&!GEN.stop){const i=next++;await doOne(i)}
+    }));
+    if(fatal) throw fatal;
+    if(GEN.stop){setGen('Arrêté après '+done+' séance(s). Ce qui est rédigé est conservé.')}
     let bilNote='';
     if(!GEN.stop){
       setGen('Rédaction des exercices de synthèse de la leçon…');
@@ -2537,7 +2579,7 @@ function stepCaps(f){
     <input type="file" id="photoIn" accept="image/*" hidden>
     <label class="btn" for="pdfIn" style="cursor:pointer">Choisir un PDF</label>
     <input type="file" id="pdfIn" accept="application/pdf,.pdf" hidden>
-    <div class="chips"><label for="autoGen"><input type="checkbox" id="autoGen"${autoGen?' checked':''}>Préparer aussi les séances automatiquement</label></div></div>
+</div>
    <label class="f" for="lessonHint" style="max-width:460px">Leçon visée <span class="hint">Facultatif : utile si le fichier contient plusieurs leçons (ex. « Leçon 4 Nombres rationnels »)</span><input type="text" id="lessonHint" value="${esc(f.titre?('Leçon '+(f.leconNo||'')+' '+f.titre).trim():'')}"></label>
    <div class="row" style="margin-top:12px">${po?`<select id="progSel" aria-label="Charger depuis la bibliothèque" style="max-width:380px"><option value="">Ou charger depuis les Programmes…</option>${po}</select>`:''}
     <button class="btn alt" id="saveProg" data-lock="1">Ajouter à la bibliothèque</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
@@ -2558,6 +2600,10 @@ function stepCaps(f){
    <p class="muted small" style="margin:0 0 10px">Notions des classes précédentes ou des leçons précédentes sur lesquelles s’appuie cette leçon (une par ligne). La première situation de la leçon est construite à partir d’elles, les suivantes à partir des séances déjà faites. Si vous laissez vide, l’application utilise la bibliothèque (onglet Programmes) : plus elle contient de leçons des classes précédentes, meilleures sont les situations.</p>
    <label class="f" for="acquisTxt">Acquis<textarea id="acquisTxt" data-p="acquis" rows="4" placeholder="Ex. : structure de l’atome ; charge positive ou négative d’un corps électrisé…">${esc(f.acquis||'')}</textarea></label>
   </section>
+  <section class="card"><h2>Répartition sur les séances</h2>
+   <p class="muted small" style="margin:0 0 10px">Modifiez au besoin le nombre de séances, puis répartissez les capacités. Ensuite, à l’étape 3, « Préparer les séances » rédige directement chaque séance.</p>
+   <div class="row" style="align-items:flex-end">${fld('Nombre de séances','nbSeances',{type:'number',attrs:'min="1" max="12" data-nb="1"'})}<button class="btn" id="repartCaps" data-lock="1">Répartir les capacités sur les séances</button></div>
+   <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div></section>
   <section class="card"><h2>Tableau des capacités et contenus${hideBtn('cap')}</h2>${HIDE.cap?`<div class="muted small">${f.capacites.length} capacité(s) et leurs contenus sont masqués. Appuyez sur « Afficher » pour les voir ou les modifier.</div>`:`${rows}
    <button class="btn alt sm" data-addcap="1">Ajouter une capacité</button>`}</section>`;
 }
@@ -2629,7 +2675,7 @@ function stepSeances(f){
     ${fld('Exercices proposés','proposes',{rows:5,wide:true,hint:'Une ligne par exercice'})}
     ${fld('Stratégie pédagogique','strategie',{rows:2,wide:true})}</div></section>`:'';
   const gen=`<section class="card"><h2>Préparation automatique <small>${f.seances.length} séance(s)</small></h2>
-   <p class="muted small" style="margin:0 0 10px">À partir du tableau des capacités et contenus, L’application répartit les capacités sur les séances puis rédige pour chacune la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier.</p>
+   <p class="muted small" style="margin:0 0 10px">À partir de la répartition des capacités (étape 2), l’application rédige pour chaque séance la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier.</p>
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
@@ -2720,7 +2766,6 @@ root.addEventListener('change',e=>{
   if(t.dataset.p==='sub'){touch();render();return}
   if(t.dataset.strat){const [i,x]=t.dataset.strat.split('|');const s=f.seances[+i];const set=new Set(s.strat||[]);t.checked?set.add(x):set.delete(x);s.strat=STRATS.filter(y=>set.has(y));touch();return}
   if(t.id==='jsonIn'&&t.files[0]){const fl=t.files[0];t.value='';fl.text().then(x=>{try{const o=JSON.parse(x);if(!o||!Array.isArray(o.seances)||!Array.isArray(o.capacites))throw new Error('format');o.id=uid();o.updated=Date.now();o.seances.forEach(s=>ensureSeance(s,o.tpl||'A'));DB.fiches.push(o);DB.cur=o.id;view='fiche';step=3;save();render()}catch(e){alert&&0;setGen('Ce fichier n’est pas une fiche valide.',true)}});return}
-  if(t.id==='autoGen'){autoGen=t.checked;return}
   if((t.id==='guideImg'||t.id==='guidePdf'||t.id==='guideAny')&&t.files[0]){const fl=t.files[0];t.value='';importGuide(fl);return}
   if(t.id==='epCapImg'&&t.files&&t.files.length){const fl=[...t.files];t.value='';eprImportCaps(fl);return}
   if((t.id==='photoIn'||t.id==='pdfIn')&&t.files[0]){const fl=t.files[0];t.value='';importFile(fl);return}
@@ -2824,6 +2869,10 @@ root.addEventListener('click',async e=>{
   if(b.id==='claudeClear'){DB.ai.ckey='';DB.ai.provider='';save();setGen('Clé Claude effacée.');render2();return}
   if(b.dataset&&b.dataset.clearguide){f.guide='';touch();render();return}
   if(b.id==='stopGen'){GEN.stop=true;setGen('Arrêt en cours…');return}
+  if(b.id==='repartCaps'){
+    if(f.seances.some(x=>has(x.situation))) askConfirm(b,'rep',()=>repartirCaps(f),'Les séances déjà rédigées ne correspondront plus à la nouvelle répartition (utilisez ensuite « Tout régénérer »). Continuer ?');
+    else repartirCaps(f);
+    return}
   if(b.id==='genAll'||b.id==='genAllOver'){const ov=b.id==='genAllOver';if(ov){askConfirm(b,'gao',()=>generateAll(f,{overwrite:true}),'Écraser le texte existant ?')}else generateAll(f,{overwrite:false});return}
   if(b.id==='saveProg'){
     const caps=f.capacites.filter(c=>has(c.cap)||has(c.contenus)); if(!caps.length){setGen('Ajoutez d’abord au moins une capacité.',true);return}
