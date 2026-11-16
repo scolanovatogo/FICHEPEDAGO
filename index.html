@@ -1010,6 +1010,8 @@ async function geminiJson(prompt,opts){
   if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé gratuite dans Réglages.'};
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
+  let tmo=0;
+  if(typeof navigator!=='undefined'&&navigator.onLine===false) throw {code:'network',message:'Pas de connexion Internet : activez le Wi-Fi ou les données mobiles, puis réessayez.'};
   const isTest=!!opts.test, fast=!!opts.fast, t0=Date.now(), stopped=()=>GEN.stop||(opts.cancel&&opts.cancel.stop);
   const thinkCfg=m=>{if(GEM.noThink&&GEM.noThink[m]||/pro/.test(m)) return {};const v=/gemini-(\d+)/.exec(m);return (v&&+v[1]>=3)?{thinkingConfig:{thinkingLevel:'low'}}:{thinkingConfig:{thinkingBudget:0}}};
   let redo=false;
@@ -1032,7 +1034,9 @@ async function geminiJson(prompt,opts){
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
           body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.7,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
       }catch(e){
-        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;continue}
+        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;
+          if(++tmo>=3&&!isTest) throw {code:'network',message:'Le réseau est trop lent ou instable : le service ne répond pas (3 tentatives sans réponse). Ce qui est déjà rédigé est conservé. Vérifiez votre connexion (Wi-Fi ou données), puis recliquez.'};
+          continue}
         throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}
       }
       let j;
@@ -2224,8 +2228,8 @@ function renderEpr(){
     ${d.subs.length?eprSel('Spécialité','sub',[['','—'],...d.subs]):''}
     ${eprSel('Classe','classe',EPR_CLASSES,true)}
     ${eprFld('Coefficient','coef',{ph:'1'})}${eprFld('Durée','duree',{ph:'1h 30'})}</div></section>
-   <section class="card"><h2>Capacités et contenus à évaluer</h2>
-    <div class="grid">${eprFld('Capacités et contenus enseignés (une capacité par ligne)','caps',{rows:7,wide:true,ph:'Ex. : Calculer — PPCM et PGCD de deux nombres ; Addition de deux fractions',hint:'Format : Capacité — contenu ; contenu. Les questions portent sur les contenus enseignés ; la capacité précise le savoir-faire évalué.'})}</div>
+   <section class="card"><h2>Capacités et contenus à évaluer${hideBtn('epcap')}</h2>
+   ${HIDE.epcap?`<div class="muted small">${eprLines(E.caps).length} capacité(s) avec leurs contenus sont masquées. Appuyez sur « Afficher » pour les voir ou les modifier.</div>`:`    <div class="grid">${eprFld('Capacités et contenus enseignés (une capacité par ligne)','caps',{rows:7,wide:true,ph:'Ex. : Calculer — PPCM et PGCD de deux nombres ; Addition de deux fractions',hint:'Format : Capacité — contenu ; contenu. Les questions portent sur les contenus enseignés ; la capacité précise le savoir-faire évalué.'})}</div>
     <div class="row" style="margin:8px 0"><label class="btn alt" for="epCapImg" style="cursor:pointer">Ajouter capacités et contenus par photo ou capture d’écran</label><input type="file" id="epCapImg" accept="image/*" multiple hidden></div>
     <div class="muted small">Vous pouvez choisir plusieurs images à la fois (tableaux « Capacités | Contenus »). Les capacités et leurs contenus sont ajoutés à la liste ci-dessus (une ligne par capacité) : vérifiez-les.</div><div id="ep-capst" class="status small muted" role="status"></div>
     ${progs.length?`<div class="row" style="margin:8px 0"><select id="ep-prog" aria-label="Leçon préparée" style="flex:1;min-width:200px"><option value="">Reprendre capacités et contenus d’une leçon préparée…</option>${progs.map(p=>`<option value="${esc(p.id)}">${esc((p.classe?p.classe+' · ':'')+(p.titre||'(sans titre)')+(p.sub?' ('+p.sub+')':''))}</option>`).join('')}</select><button class="btn alt sm" type="button" data-epact="addprog">Ajouter ces capacités et contenus</button></div>`:''}
@@ -2233,7 +2237,8 @@ function renderEpr(){
     ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
     <div class="muted small" style="margin:4px 0 10px">Total : ${fmtN(total)} points${total!==20?' (en général 20)':''} · modèle utilisé : ${eprModel(E)==='43'?'4ᵉ / 3ᵉ (deux consignes dans la situation)':'6ᵉ / 5ᵉ (une consigne dans la situation)'}.</div>
     <div class="row"><button class="btn" type="button" data-epact="gen">${C?'Refaire toute l’épreuve':'Préparer l’épreuve'}</button>${C?'<button class="btn danger sm" type="button" data-epact="new">Nouvelle épreuve</button>':''}</div>
-    <div id="ep-st" class="status genstatus muted" role="status" style="margin-top:10px"></div></section>`;
+    <div id="ep-st" class="status genstatus muted" role="status" style="margin-top:10px"></div>`}
+   </section>`;
   if(!C) return head;
   const part=(k,i,p)=>`<div class="moment"><h4>${esc(p.titre||'Partie')}</h4><div class="grid">${eprFld('Titre','content.'+k+'.'+i+'.titre')}${eprFld('Barème','content.'+k+'.'+i+'.bareme')}${eprFld('Énoncé','content.'+k+'.'+i+'.enonce',{rows:3,wide:true})}${eprFld('Corrigé','content.'+k+'.'+i+'.corrige',{rows:3,wide:true})}${p.type==='relier'?eprFld('Colonne de gauche (un élément par ligne)','content.'+k+'.'+i+'.gauche',{rows:4,wide:true})+eprFld('Colonne de droite (en désordre)','content.'+k+'.'+i+'.droite',{rows:4,wide:true})+eprFld('Liens du corrigé (ex. 1-c)','content.'+k+'.'+i+'.liens',{rows:3,wide:true}):''}${p.type==='reordre'?eprFld('Groupes de mots mélangés (un par ligne)','content.'+k+'.'+i+'.groupes',{rows:4,wide:true})+eprFld('Phrase correcte','content.'+k+'.'+i+'.solution',{rows:2,wide:true}):''}</div>${p.fig?`<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.${k}.${i}.fig">Retirer la figure de l’énoncé</button> `:''}${p.figCorr?`<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.${k}.${i}.figCorr">Retirer la figure du corrigé</button>`:''}</div>`;
   const gsum=(C.grille||[]).reduce((a,g)=>a+parseGrille(g.txt).reduce((b,x)=>b+x.pts,0),0);
@@ -2405,6 +2410,9 @@ function toggleMic(i,btn){
    Interface
    ========================================================= */
 let view='fiche',step=1,lastTA=null,openSeances=new Set([0]);
+const HIDE=(()=>{try{return Object.assign({cap:false,epcap:false},JSON.parse(localStorage.getItem('fp_hide')||'{}'))}catch(e){return {cap:false,epcap:false}}})();
+const saveHide=()=>{try{localStorage.setItem('fp_hide',JSON.stringify(HIDE))}catch(e){}};
+const hideBtn=(k,n)=>`<button type="button" class="btn alt sm" data-togglehide="${k}" aria-expanded="${!HIDE[k]}" style="margin-left:10px;vertical-align:middle">${HIDE[k]?'Afficher':'Masquer'}</button>`;
 const root=document.getElementById('root');
 const getp=(o,p)=>p.split('.').reduce((a,k)=>a==null?a:a[k],o);
 function setp(o,p,v){const ks=p.split('.');const last=ks.pop();ks.reduce((a,k)=>a[k],o)[last]=v}
@@ -2550,8 +2558,8 @@ function stepCaps(f){
    <p class="muted small" style="margin:0 0 10px">Notions des classes précédentes ou des leçons précédentes sur lesquelles s’appuie cette leçon (une par ligne). La première situation de la leçon est construite à partir d’elles, les suivantes à partir des séances déjà faites. Si vous laissez vide, l’application utilise la bibliothèque (onglet Programmes) : plus elle contient de leçons des classes précédentes, meilleures sont les situations.</p>
    <label class="f" for="acquisTxt">Acquis<textarea id="acquisTxt" data-p="acquis" rows="4" placeholder="Ex. : structure de l’atome ; charge positive ou négative d’un corps électrisé…">${esc(f.acquis||'')}</textarea></label>
   </section>
-  <section class="card"><h2>Tableau des capacités et contenus</h2>${rows}
-   <button class="btn alt sm" data-addcap="1">Ajouter une capacité</button></section>`;
+  <section class="card"><h2>Tableau des capacités et contenus${hideBtn('cap')}</h2>${HIDE.cap?`<div class="muted small">${f.capacites.length} capacité(s) et leurs contenus sont masqués. Appuyez sur « Afficher » pour les voir ou les modifier.</div>`:`${rows}
+   <button class="btn alt sm" data-addcap="1">Ajouter une capacité</button>`}</section>`;
 }
 function momentCard(f,s,i,k){
   const m=s.m[k]; const base=`seances.${i}.m.${k}`;
@@ -2764,6 +2772,7 @@ root.addEventListener('click',async e=>{
   if(d.delfig){const [i,k]=d.delfig.split('|');const s=f.seances[+i];if(Array.isArray(s.figs))s.figs.splice(+k,1);else if(s.imgEss)s.imgEss=null;touch();renderKeepOpen(+i);return}
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
+  if(d.togglehide){HIDE[d.togglehide]=!HIDE[d.togglehide];saveHide();render2();return}
   if(d.mic!==undefined){toggleMic(d.mic,b);return}
   if(d.bilan!==undefined){
     const st=document.getElementById('bil-st'); const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
