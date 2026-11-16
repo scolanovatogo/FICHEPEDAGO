@@ -528,14 +528,14 @@ function cellHTML(c,r){
 function rowsHTML(rows){return rows.map(r=>'<tr>'+r.cells.map(c=>cellHTML(c,r)).join('')+'</tr>').join('')}
 function tblHTML(b,rows,withHead){
   const cg='<colgroup>'+b.cols.map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>';
-  return '<div class="blk" style="--gap:'+(b.gap??8)+'px"><table class="tb'+(b.thick?' thick':'')+(b.nb?' nb':'')+'">'+cg+(withHead&&b.head.length?rowsHTML(b.head):'')+rowsHTML(rows)+'</table></div>';
+  return '<div class="blk" style="--gap:'+Math.min(b.gap??8,5)+'px"><table class="tb'+(b.thick?' thick':'')+(b.nb?' nb':'')+'">'+cg+(withHead&&b.head.length?rowsHTML(b.head):'')+rowsHTML(rows)+'</table></div>';
 }
 function blockHTML(b){
   if(b.t==='tbl') return tblHTML(b,b.rows,true);
-  if(b.t==='img') return '<div class="blk" style="--gap:'+(b.gap??8)+'px">'+imgHTML(b.img)+'</div>';
+  if(b.t==='img') return '<div class="blk" style="--gap:'+Math.min(b.gap??8,5)+'px">'+imgHTML(b.img)+'</div>';
   const st=[]; if(b.align)st.push('text-align:'+b.align); if(b.just)st.push('text-align:justify');
   const inn=b.lines.map(x=>'<div class="ln"'+(b.indent?' style="padding-left:20px"':'')+'>'+(runsHTML(x,b.bold?{b:true}:null)||'&nbsp;')+'</div>').join('');
-  return '<div class="blk" style="--gap:'+(b.gap??8)+'px;'+st.join(';')+'">'+inn+'</div>';
+  return '<div class="blk" style="--gap:'+Math.min(b.gap??8,5)+'px;'+st.join(';')+'">'+inn+'</div>';
 }
 
 /* =========================================================
@@ -565,7 +565,7 @@ function paginate(doc,k){
       M.innerHTML=tblHTML(b,b.rows,true);
       const trs=[...M.querySelectorAll('tr')].map(t=>t.getBoundingClientRect().height);
       const hh=trs.slice(0,b.head.length).reduce((a,x)=>a+x,0);
-      const gap=b.gap??8;
+      const gap=Math.min(b.gap??8,5);
       return {headH:hh,rowH:trs.slice(b.head.length),gap};
     }
     M.innerHTML=blockHTML(b);
@@ -589,7 +589,7 @@ function paginate(doc,k){
     const rows=b.rows.slice(), rowH=m.rowH.slice();
     let chunk=null;
     for(let i=0;i<rows.length;){
-      let e=i; while(rows[e].grp&&rows[e+1]&&rows[e+1].grp===rows[e].grp) e++;
+      let e=i; /* Les lignes d’un même groupe peuvent continuer sur la page suivante : cela évite de laisser un grand blanc en bas de page. */
       let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
       const kp=(rows[e].keep&&e+1<rows.length)?rowH[e+1]:0;
       let need=h+kp+(chunk?0:m.headH);
@@ -742,7 +742,7 @@ function buildDocx(f,docModel,kScale){
     if(b.pb) children.push(new D.Paragraph({pageBreakBefore:true,spacing:{before:0,after:0,line:20},children:[]}));
     if(b.t==='tbl'){children.push(tableOf(b));children.push(new D.Paragraph({spacing:{before:0,after:0,line:120},children:[]}));}
     else if(b.t==='img'){children.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{after:b.img.credit?0:120},children:[imgRun(b.img)]}));if(b.img.credit)children.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{after:120},children:[new D.TextRun({text:(/^(Sch|Repr)/.test(b.img.credit)?'':'Source : ')+b.img.credit,italics:true,size:18,font:'Bookman Old Style'})]}))}
-    else b.lines.forEach((x,i)=>children.push(new D.Paragraph({alignment:al(b.align||(b.just?'justify':'left')),keepNext:!!b.keep||i<b.lines.length-1&&false,spacing:{before:0,after:i===b.lines.length-1?Math.round((b.gap??8)*15):0,line:240},indent:b.indent?{left:400}:undefined,children:runsDocx(x,{size:sizeN,bold:b.bold})})));
+    else b.lines.forEach((x,i)=>children.push(new D.Paragraph({alignment:al(b.align||(b.just?'justify':'left')),keepNext:!!b.keep||i<b.lines.length-1&&false,spacing:{before:0,after:i===b.lines.length-1?Math.round(Math.min(b.gap??8,5)*15):0,line:240},indent:b.indent?{left:400}:undefined,children:runsDocx(x,{size:sizeN,bold:b.bold})})));
   }
   const fl=footerLeft(f);
   const footer=new D.Footer({children:[new D.Paragraph({tabStops:[{type:D.TabStopType.RIGHT,position:FULL}],border:{top:{style:D.BorderStyle.SINGLE,size:12,color:'7F4A1D',space:4}},
@@ -834,7 +834,7 @@ function canvasBlob(file,maxW=1800){
 /* =========================================================
    Claude (lecture de photo, aide à la rédaction)
    ========================================================= */
-let SAMPLE=null,LIM=null,SAMPLE_IMG=false,autoGen=true;
+let SAMPLE=null,LIM=null,SAMPLE_IMG=false,autoGen=false;
 const GEN={running:false,stop:false,msg:'',err:false};
 const PDF_URL='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDF_WORKER='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -1296,7 +1296,7 @@ async function importFile(file){
     if(!n){setGen((aiErr?errCopy(aiErr)+' ':'')+'Aucune capacité reconnue. Si le fichier contient plusieurs leçons, indiquez la leçon visée ci-dessus ; sinon saisissez le tableau à la main.',true);return}
     if(how==='local') f.photoNote='Lecture automatique locale : vérifiez le tableau des capacités et contenus (une photo peut contenir des fautes de reconnaissance).'+(f.photoNote?' '+f.photoNote:'');
     touch(); setGen(n+' capacités lues, '+f.seances.length+' séance(s) prévue(s).'+(aiErr?' (Lecture par IA indisponible : '+errCopy(aiErr)+')':''));
-    if(autoGen){ GEN.running=false; await generateAll(f,{overwrite:false,fromImport:true}); return }
+
   }catch(e){setGen(errCopy(e),true)}
   finally{ GEN.running=false; lockGen(false); render2(); }
 }
@@ -1364,7 +1364,7 @@ async function svgToPngImage(raw){
   const sc=Math.min(3,2400/w);
   const png=await new Promise((res,rej)=>{const im=new Image();im.onerror=()=>rej(new Error('Schéma illisible.'));
     im.onload=()=>{const c=document.createElement('canvas');c.width=Math.round(w*sc);c.height=Math.round(h*sc);const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/png'))};im.src=url});
-  return{src:png,w,h,dw:Math.min(520,w),credit:'Schéma généré automatiquement — vérifier les dimensions et les légendes avant utilisation'}
+  return{src:png,w,h,dw:Math.min(520,w),credit:'Schéma généré automatiquement par IA — vérifier l’exactitude scientifique, les dimensions et les légendes avant utilisation'}
 }
 function shortSituation(value){
   let t=String(value||'').replace(/\s+/g,' ').trim();
@@ -2537,7 +2537,11 @@ function stepCaps(f){
     <input type="file" id="photoIn" accept="image/*" hidden>
     <label class="btn" for="pdfIn" style="cursor:pointer">Choisir un PDF</label>
     <input type="file" id="pdfIn" accept="application/pdf,.pdf" hidden>
-    <div class="chips"><label for="autoGen"><input type="checkbox" id="autoGen"${autoGen?' checked':''}>Préparer aussi les séances automatiquement</label></div></div>
+   </div>
+   <div class="grid" style="align-items:end;margin-top:10px">
+    <label class="f" for="importNb">Nombre de séances à retenir <span class="hint">Modifiez le nombre détecté avant la répartition.</span><input type="number" id="importNb" min="1" max="12" value="${Math.max(1,Math.min(12,+f.nbSeances||f.seances.length||1))}"></label>
+    <div><button class="btn" id="distributeCaps"${f.capacites.some(c=>has(c.cap))?'':' disabled'}>Répartir les capacités et contenus selon les séances</button></div>
+   </div>
    <label class="f" for="lessonHint" style="max-width:460px">Leçon visée <span class="hint">Facultatif : utile si le fichier contient plusieurs leçons (ex. « Leçon 4 Nombres rationnels »)</span><input type="text" id="lessonHint" value="${esc(f.titre?('Leçon '+(f.leconNo||'')+' '+f.titre).trim():'')}"></label>
    <div class="row" style="margin-top:12px">${po?`<select id="progSel" aria-label="Charger depuis la bibliothèque" style="max-width:380px"><option value="">Ou charger depuis les Programmes…</option>${po}</select>`:''}
     <button class="btn alt" id="saveProg" data-lock="1">Ajouter à la bibliothèque</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
@@ -2579,7 +2583,7 @@ function imgBlock(f,s,i,key,label){
    <div class="row" style="margin-top:8px"><label class="btn alt sm" for="img_${i}_${key}" style="cursor:pointer">${im?'Remplacer':'Ajouter'} une image de l’appareil</label><input type="file" id="img_${i}_${key}" accept="image/*" hidden data-img="${i}|${key}"></div>
    <div class="row small" style="margin-top:8px"><label class="f" for="kw_${i}" style="flex:1;min-width:180px"><span class="hint">Mot-clé pour chercher une image sur Internet</span><input type="text" id="kw_${i}" data-p="seances.${i}.imgKey" value="${esc(s.imgKey||'')}" placeholder="${esc(f.titre||'prise du secteur')}"></label>
    <a class="btn alt sm" target="_blank" rel="noopener" href="https://commons.wikimedia.org/w/index.php?search=${q}&ns6=1" style="text-decoration:none;margin-top:16px">Wikimedia Commons ↗</a>
-   <a class="btn alt sm" target="_blank" rel="noopener" href="https://www.google.com/search?tbm=isch&q=${q}" style="text-decoration:none;margin-top:16px">Google Images ↗</a></div>
+   <span class="muted small" style="align-self:center;margin-top:16px">Recherche limitée à Wikimedia Commons</span></div>
    <div class="row" style="margin-top:8px"><button class="btn alt sm" data-imgsearch="${i}|${key}">Afficher des propositions d’images</button><span class="muted small">ou enregistrez l’image trouvée sur votre appareil puis ajoutez-la.</span></div>
    <div id="isr_${i}_${key}" class="small" style="margin-top:8px"></div></div>`;
 }
@@ -2712,6 +2716,11 @@ root.addEventListener('change',e=>{
   if(t.dataset.ep){const E=eprInit();setp(E,t.dataset.ep,t.value);if(t.dataset.ep==='disc'){const dd=DISCIPLINES.find(x=>x.id===E.disc);E.sub=(dd&&dd.subs[0])||''}save();if(t.dataset.eprr||t.dataset.ep==='classe'||t.dataset.ep==='disc'){render()}else if(DB.epr.content){clearTimeout(eprPrevT);eprPrevT=setTimeout(eprPreview,300)}return}
   if(t.dataset.nb){
     const ok=setNbSeances(+t.value||1); touch(); if(!ok){render();const n=document.querySelector('.card');n&&n.insertAdjacentHTML('afterbegin','<div class="note warn" style="margin-bottom:10px">Pour réduire le nombre de séances, supprimez d’abord les séances en trop à l’étape 3 (elles contiennent du texte).</div>')} else render(); return}
+  if(t.id==='importNb'){
+    const ok=setNbSeances(+t.value||1,f,true);
+    if(ok){f.nbSeances=f.seances.length;touch();render2()}
+    return;
+  }
   if(t.dataset.rerender==='disc'){
     const d=DISCIPLINES.find(x=>x.id===f.disc); f.sub=d.subs[0]||'';
     const oldTpl=f.tpl; f.tpl=d.tpl; if(oldTpl!==f.tpl){f.seances.forEach(s=>ensureSeance(s,f.tpl));f.compLabel=f.tpl==='B'?'Compétence de base':'Compétence 1'}
@@ -2720,7 +2729,6 @@ root.addEventListener('change',e=>{
   if(t.dataset.p==='sub'){touch();render();return}
   if(t.dataset.strat){const [i,x]=t.dataset.strat.split('|');const s=f.seances[+i];const set=new Set(s.strat||[]);t.checked?set.add(x):set.delete(x);s.strat=STRATS.filter(y=>set.has(y));touch();return}
   if(t.id==='jsonIn'&&t.files[0]){const fl=t.files[0];t.value='';fl.text().then(x=>{try{const o=JSON.parse(x);if(!o||!Array.isArray(o.seances)||!Array.isArray(o.capacites))throw new Error('format');o.id=uid();o.updated=Date.now();o.seances.forEach(s=>ensureSeance(s,o.tpl||'A'));DB.fiches.push(o);DB.cur=o.id;view='fiche';step=3;save();render()}catch(e){alert&&0;setGen('Ce fichier n’est pas une fiche valide.',true)}});return}
-  if(t.id==='autoGen'){autoGen=t.checked;return}
   if((t.id==='guideImg'||t.id==='guidePdf'||t.id==='guideAny')&&t.files[0]){const fl=t.files[0];t.value='';importGuide(fl);return}
   if(t.id==='epCapImg'&&t.files&&t.files.length){const fl=[...t.files];t.value='';eprImportCaps(fl);return}
   if((t.id==='photoIn'||t.id==='pdfIn')&&t.files[0]){const fl=t.files[0];t.value='';importFile(fl);return}
@@ -2748,6 +2756,23 @@ root.addEventListener('click',async e=>{
   if(d.view){view=d.view;render();scrollTo(0,0);return}
   if(d.step){step=+d.step;render();scrollTo(0,0);return}
   if(d.go){step=+d.go;render();scrollTo(0,0);return}
+  if(b.id==='distributeCaps'){
+    if(!f.capacites.some(c=>has(c.cap))){flash('Importez ou saisissez d’abord les capacités et les contenus.',true);return}
+    const count=Math.max(1,Math.min(12,+(document.getElementById('importNb')||{}).value||f.seances.length||1));
+    setNbSeances(count,f,true);f.nbSeances=count;
+    GEN.running=true;GEN.stop=false;lockGen(true);
+    setGen('Répartition des capacités et contenus sur '+count+' séance(s)…');
+    try{
+      if(aiKind()) await planSeances(f,{overwrite:true});
+      else planLocal(f,{overwrite:true});
+      rememberProgram(f);touch();step=3;openSeances=new Set([0]);
+      setGen('Répartition terminée : '+count+' séance(s). Vérifiez chaque séance avant de poursuivre.');
+    }catch(err){
+      if(err&&(err.code==='cancelled'||err.code==='rate_limited'||err.code==='service_busy'||err.code==='not_granted'||err.code==='fatal')) setGen(errCopy(err),true);
+      else{planLocal(f,{overwrite:true});rememberProgram(f);touch();step=3;openSeances=new Set([0]);setGen('Répartition locale effectuée sur '+count+' séance(s). Vérifiez le résultat.')}
+    }finally{GEN.running=false;lockGen(false);render2()}
+    return;
+  }
   if(d.ins!==undefined||d.wrap){
     const t=lastTA; if(!t||t.tagName==='SELECT'||!t.dataset.p) return;
     const a=t.selectionStart??t.value.length,z=t.selectionEnd??a,sel=t.value.slice(a,z);
@@ -2872,12 +2897,12 @@ async function searchImages(i,key){
   const q=(s.imgKey||f.titre||f.theme||'').trim(); if(!q){box.textContent='Saisissez un mot-clé.';return}
   box.textContent='Recherche en cours…';
   try{
-    const u='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(q)+'&gsrnamespace=6&gsrlimit=16&prop=imageinfo&iiprop=url|extmetadata|mime&iiurlwidth=1600&format=json&origin=*';
+    const u='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(q)+'&gsrnamespace=6&gsrlimit=10&prop=imageinfo&iiprop=url|extmetadata|mime&iiurlwidth=1600&format=json&origin=*';
     const j=await (await fetch(u)).json();
     const pages=Object.values((j.query&&j.query.pages)||{}).filter(p=>p.imageinfo&&/^image\/(jpeg|png)/.test(p.imageinfo[0].mime||''));
     if(!pages.length){box.textContent='Aucune image trouvée. Essayez un autre mot-clé (en français ou en anglais).';return}
-    IMGRES[i+'|'+key]=pages.map(p=>{const ii=p.imageinfo[0],m=ii.extmetadata||{};const art=String((m.Artist&&m.Artist.value)||'').replace(/<[^>]*>/g,'').trim();return {url:ii.thumburl||ii.url,credit:'Wikimedia Commons'+(art?' — '+art:'')+(m.LicenseShortName?' ('+m.LicenseShortName.value+')':'')}});
-    box.innerHTML='<div class="row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+IMGRES[i+'|'+key].map((r,n)=>'<button type="button" data-pick="'+i+'|'+key+'|'+n+'" style="border:1px solid var(--line);background:#fff;padding:2px;border-radius:6px;cursor:pointer"><img alt="Résultat '+(n+1)+'" src="'+esc(r.url)+'" style="height:150px;max-width:220px;object-fit:contain;display:block"></button>').join('')+'</div><div class="muted small" style="margin-top:4px">Cliquez sur une image pour l’ajouter à la fiche (la source est indiquée sous l’image).</div>';
+    IMGRES[i+'|'+key]=pages.map(p=>{const ii=p.imageinfo[0],m=ii.extmetadata||{};const clean=v=>String(v||'').replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').trim();const art=clean(m.Artist&&m.Artist.value),lic=clean(m.LicenseShortName&&m.LicenseShortName.value);return {url:ii.thumburl||ii.url,title:p.title.replace(/^File:/,''),credit:(art?'Auteur : '+art:'Wikimedia Commons')+(lic?' · Licence : '+lic:'')}});
+    box.innerHTML='<div class="row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+IMGRES[i+'|'+key].map((r,n)=>'<button type="button" data-pick="'+i+'|'+key+'|'+n+'" title="'+esc(r.title)+'" style="border:1px solid var(--line);background:#fff;padding:5px;border-radius:6px;cursor:pointer;text-align:left"><img loading="lazy" alt="'+esc(r.title)+'" src="'+esc(r.url)+'" style="height:125px;width:100%;max-width:220px;object-fit:contain;display:block"><span style="display:block;font-size:11px;line-height:1.25;margin-top:4px">'+esc(r.title.slice(0,90))+'</span><span style="display:block;font-size:10px;color:#555">'+esc(r.credit)+'</span></button>').join('')+'</div><div class="muted small" style="margin-top:4px">Résultats issus de Wikimedia Commons. Vérifiez le titre, la légende et la licence avant insertion.</div>';
   }catch(e){box.textContent='Recherche impossible ici (connexion Internet nécessaire, et non disponible dans la version intégrée à Claude). Ouvrez la version autonome, ou enregistrez une image sur votre appareil.'}
 }
 async function pickImage(i,key,n){
