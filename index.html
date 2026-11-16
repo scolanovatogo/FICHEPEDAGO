@@ -509,7 +509,7 @@ function buildDoc(f0){
 /* =========================================================
    Rendu HTML d'un bloc
    ========================================================= */
-function imgHTML(im){return '<img alt="" src="'+im.src+'" style="width:'+(im.dw||300)+'px;max-width:100%'+(im.w&&im.h?';aspect-ratio:'+im.w+'/'+im.h:'')+'">'+(im.credit?'<div style="font:italic 12px/1.2 var(--f-paper,serif);text-align:center;margin-top:-2px">'+(/^(Sch|Repr)/.test(im.credit)?'':'Source : ')+esc(im.credit)+'</div>':'')}
+function imgHTML(im){return '<img alt="" src="'+im.src+'" style="width:'+(im.dw||300)+'px;max-width:100%">'+(im.credit?'<div style="font:italic 12px/1.2 var(--f-paper,serif);text-align:center;margin-top:-2px">'+(/^(Sch|Repr)/.test(im.credit)?'':'Source : ')+esc(im.credit)+'</div>':'')}
 function cellHTML(c,r){
   if(c.vm) return '';
   const st=[]; if(c.mid)st.push('vertical-align:middle'); if(c.shade)st.push('background:'+c.shade); if(c.color)st.push('color:'+c.color); if(c.align)st.push('text-align:'+c.align);
@@ -1698,7 +1698,7 @@ const CONTEXTES=['un atelier de couture à Tsévié','un chantier de constructio
 function ctxSuggest(f,i){let h=0;const t=String(f.titre||f.theme||'');for(let k=0;k<t.length;k++)h=(h*31+t.charCodeAt(k))>>>0;return CONTEXTES[(h+i*7)%CONTEXTES.length]}
 const SIT_PROGRESS='PROGRESSION (règle n°2) : regarde « numeroSeance » et « acquisAnterieurs ». SÉANCE 1 : la situation s’appuie sur des acquis des classes antérieures ou des leçons précédentes (choisis-en un ou deux dans acquisAnterieurs, ceux qui servent le mieux la capacité) pour faire construire la première notion de la leçon. SÉANCES SUIVANTES : elle s’appuie, chaque fois que c’est possible, sur ce qui vient d’être vu aux séances précédentes de la même leçon (seancesPrecedentes : leurs capacités et contenus), en plus des acquis antérieurs. Tu ne mobilises JAMAIS une notion qui n’a été vue ni dans acquisAnterieurs, ni aux séances précédentes, ni dans la séance du jour. MATÉRIEL SIMPLE (règle n°3) : la situation ne repose que sur ce que des élèves peuvent lire, mesurer ou constater eux-mêmes : étiquette, facture, plaque signalétique, notice, schéma, objet du quotidien, mesure à la règle. N’invente jamais l’observation de particules, d’atomes, d’ions ou de charges, ni une expérience compliquée. Exemple pour les ions : une étiquette d’eau minérale ou d’engrais portant des symboles comme Ca²⁺, Cl⁻ ou NO₃⁻, et la question demande le nom et le type de chacun (n’en tire rien si la leçon est différente).';
 const SIT_RECIPE='ANCRAGE (règle n°1) : le tableau du programme a deux colonnes, les CAPACITÉS (à gauche) et les CONTENUS (à droite). La situation est construite à partir des DEUX : passe en revue chaque contenu de « contenusDeLaSeance » ; les données et la question doivent amener les élèves à rencontrer TOUS ces contenus (aucun oublié, aucun ajouté), et la question finale doit être celle dont la réponse demande la capacité visée sans la nommer, ni nommer les contenus ; elle découle directement de la phrase écrite (mêmes objets, mêmes données) et ne porte jamais sur autre chose. RECETTE DE LA SITUATION : (1) un personnage réel du quotidien togolais (prénom varié) qui a un BESOIN ou une DÉCISION à prendre (acheter, partager, construire, réparer, comparer deux offres, vérifier un compte, mesurer un terrain…) ; (2) des données plausibles pour le Togo (prix en FCFA réalistes, mesures et distances vraisemblables, nombres simples) ; (3) une question ouverte qui oblige à calculer, mesurer, comparer ou conjecturer avec les seuls prérequis, sans nommer la notion. CADRE : utilise celui de « contexteSuggere » (change-le seulement s’il est incompatible avec la leçon) ; ne reprends ni le cadre, ni le personnage, ni le type de question des « situationsDejaEcrites » ; évite le marché de Lomé et Kpalimé s’ils ne sont pas proposés. À ÉVITER : l’exercice déguisé (« Un commerçant a 5 sacs… Calcule… »), les données inventées sans raison, une question dont la réponse est évidente ou qu’on ne se poserait jamais dans la vie, une consigne qui donne déjà la méthode. VÉRIFIE avant de répondre : un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? toutes les données sont-elles dans le texte ? la situation fait-elle sentir le besoin de la notion ? le nombre de mots est-il respecté ?';
-const SIT_INTENT='"analyse": (non affichée, À RÉDIGER EN PREMIER) en 2 à 3 phrases : (1) ce que la capacité et les contenus de CETTE séance font apprendre de nouveau ; (2) les notions déjà connues des élèves (acquis antérieurs, classes précédentes, séances précédentes de la leçon) qui permettent d’introduire cette notion, et seulement celles-là ; (3) la donnée ou la question qui fera le lien entre ces notions connues et la notion nouvelle ;\n"intention": en une phrase (non affichée), ce que les élèves vont observer, mesurer, comparer ou constater dans la situation et qui les mènera à la notion de la séance ;\n';
+const SIT_INTENT='"intention": en une phrase (non affichée), ce que les élèves vont observer, mesurer, comparer ou constater dans la situation et qui les mènera à la notion de la séance ;\n';
 const SIT_VERIFY=false;
 async function verifySituation(f,s,d,extra){
   if(!SIT_VERIFY) return null;
@@ -1710,16 +1710,6 @@ Situation : ${d.situation}
 ${extra||''}
 Juge STRICTEMENT : (1) la question finale découle-t-elle directement des données et du contexte écrits dans la situation ? (2) toutes les données nécessaires pour répondre figurent-elles dans le texte ? (3) répondre à la question demande-t-il réellement la capacité visée (et non une autre notion), et la situation fait-elle rencontrer CHACUN des contenus listés, sans en omettre ni en ajouter ? (4) la situation évite-t-elle de donner la notion ou le vocabulaire du cours ? (5) les valeurs et les faits (physique, chimie, technologie, calcul) sont-ils exacts et plausibles ? (6) un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? (7) la situation s’appuie-t-elle uniquement sur des notions réellement antérieures (acquis antérieurs ou séances précédentes de la leçon), et, s’il s’agit de la séance 1, sur des acquis antérieurs à la leçon ? (8) le matériel est-il simple et observable par des élèves (étiquette, facture, plaque, mesure…), sans observation de particules ni expérience irréaliste ?
 Réponds uniquement par {"ok":true,"probleme":""} si tout est satisfaisant, sinon {"ok":false,"probleme":"le défaut précis, en une phrase"}.`;
-  return await ask(p);
-}
-async function verifyCalculs(f,s,d,A){
-  const keys=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
-  const part={};keys.forEach(k=>{if(has(d[k])) part[k]=String(d[k])});
-  if(!Object.keys(part).length) return null;
-  const p=`Tu es professeur vérificateur (${discLabel(f)}, ${f.classe||'collège'}). Voici des éléments rédigés pour la séance « ${[s.capNum,s.capTitre].filter(has).join(' : ')} » (contenus : ${s.contenus}), au format JSON :
-${JSON.stringify(part)}
-Refais TOUS les calculs, vérifie chaque solution, chaque réponse, chaque formule, chaque unité et chaque définition. Vérifie aussi que les solutions répondent bien aux exercices posés et que les données d’un exercice suffisent pour le résoudre.
-Réponds uniquement par {"ok":true} si tout est exact. Sinon {"ok":false,"corriges":{"cle":"texte entièrement corrigé"}} en ne reprenant QUE les clés fautives (parmi : ${keys.join(', ')}), avec le même format (lignes séparées par \n, formules entre $…$) et en corrigeant l’erreur sans changer le sujet.`;
   return await ask(p);
 }
 async function genSeanceContent(f,i,o){
@@ -1764,16 +1754,6 @@ ${desc}`;
       d=await ask(prompt+'\nCORRECTION OBLIGATOIRE : une première version a été REJETÉE pour ce défaut : « '+v.probleme+' ». Réécris TOUTE la séance (situation, résolution, essentiel, exercices) en corrigeant ce défaut : la question doit découler de la phrase écrite, demander exactement la capacité de la séance et faire rencontrer tous ses contenus.');
     }
   }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
-  if(d&&typeof d==='object'){
-    try{
-      const v=await verifyCalculs(f,s,d,A);
-      if(v&&v.ok===false&&v.corriges&&typeof v.corriges==='object'){
-        const allowed=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
-        let n=0;for(const k of allowed) if(has(v.corriges[k])){d[k]=String(v.corriges[k]);n++}
-        if(n) setGen('Séance '+(i+1)+' : '+n+' élément(s) corrigé(s) après vérification des calculs.');
-      }
-    }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
-  }
   if(!d||typeof d!=='object') throw {code:'invalid_json',message:'La réponse de l’IA ne contient pas une séance exploitable.'};
   const required=A?['situation','synthese','essentiel','exoApp','exoMaison']:['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
   const missing=required.filter(k=>!has(d[k]));
@@ -1894,7 +1874,7 @@ async function generateAll(f,o){
     if(!GEN.stop){
       setGen('Rédaction des exercices de synthèse de la leçon…');
       try{await genBilan(f,o);touch()}catch(e){if(e&&e.code==='cancelled') throw e; bilNote=' Les exercices de synthèse n’ont pas pu être rédigés (bouton « Rédiger les exercices de synthèse »).'}
-      if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets'+(GEN.bilWhy?' (motif : '+GEN.bilWhy+')':'')+' : cliquez sur « Rédiger les exercices de synthèse » pour compléter les manquants.';
+      if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets (bouton « Rédiger les exercices de synthèse »).';
     }
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
     else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Ouvrez cette séance à l’étape 3 et cliquez sur « Rédiger cette séance automatiquement » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
@@ -1931,33 +1911,14 @@ async function genBilan(f,o){
   '- "sp" : TROIS situations-problèmes différentes et progressives, chacune avec un contexte concret local et des consignes numérotées qui font mobiliser plusieurs séances de la leçon. La solution de chacune est une résolution détaillée et rédigée.\n'+
   'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+(f.tpl==='B'?'DISCIPLINE EXPÉRIMENTALE (physique, chimie, technologie) : les cinq exercices sont OBLIGATOIRES, comme en mathématiques. « vf » : 6 affirmations vrai/faux sur les notions, grandeurs, unités, appareils et règles de sécurité de la leçon. « mix » : 2 questions directes (définition, formule, unité ou appareil), 3 phrases à compléter avec les mots-clés de la leçon, puis 4 éléments à relier par des flèches (grandeurs, unités, appareils ou symboles). Les trois situations-problèmes s’appuient sur une expérience, un montage, des mesures ou un objet technique du quotidien (appareil électrique, facture, ustensile, réaction courante…) avec des données chiffrées ; les questions demandent de calculer (formule, application numérique et unité), d’interpréter, de légender ou de schématiser un montage décrit par écrit. Les solutions donnent les formules, les calculs et les unités. ':'')+LATEX_RULE;
   const tx=v=>Array.isArray(v)?v.map(tx).join('\n'):(v&&typeof v==='object')?Object.values(v).map(tx).join('\n'):String(v==null?'':v);
+  const complete=()=>bl.every(x=>has(x.q)&&has(x.s));
   const over=!!(o&&o.overwrite);
-  if(over) bl.forEach(x=>{x.q='';x.s=''});
-  const parts=[
-    {k:0,t:'Rédige UNIQUEMENT l’exercice « vf » (Vrai ou faux). Réponds par {"vf":{"q":"…","s":"…"}} et rien d’autre.'},
-    {k:1,t:'Rédige UNIQUEMENT l’exercice « mix » (questions directes, phrases à compléter, relier par des flèches). Réponds par {"mix":{"q":"…","s":"…"}} et rien d’autre.'},
-    {k:2,t:'Rédige UNIQUEMENT la situation-problème n°1 (la plus simple des trois). Réponds par {"sp":[{"q":"…","s":"…"}]} et rien d’autre.'},
-    {k:3,t:'Rédige UNIQUEMENT la situation-problème n°2 (difficulté moyenne, sur d’autres séances que la n°1 si possible). Réponds par {"sp":[{"q":"…","s":"…"}]} et rien d’autre.'},
-    {k:4,t:'Rédige UNIQUEMENT la situation-problème n°3 (la plus complète, qui mobilise l’ensemble de la leçon). Réponds par {"sp":[{"q":"…","s":"…"}]} et rien d’autre.'}
-  ].filter(x=>over||!(has(bl[x.k].q)&&has(bl[x.k].s)));
-  let fatal=null,nx=0;
-  const doPart=async pt=>{
-    for(let attempt=1;attempt<=2&&!fatal&&!(has(bl[pt.k].q)&&has(bl[pt.k].s)&&attempt>1);attempt++){
-      try{
-        const d=await ask(prompt+'\n\nIMPORTANT : '+pt.t+(attempt>1?' La réponse précédente était incomplète : fournis « q » (énoncé) ET « s » (solution) en texte.':''));
-        const v=pt.k===0?d&&d.vf:pt.k===1?d&&d.mix:((d&&d.sp)||[])[0]||(d&&d.q?d:null);
-        if(!v||typeof v!=='object') continue;
-        const q=tx(v.q!==undefined?v.q:(v.enonce!==undefined?v.enonce:v.question)),sl=tx(v.s!==undefined?v.s:(v.solution!==undefined?v.solution:v.reponse));
-        if(has(q)) bl[pt.k].q=q; if(has(sl)) bl[pt.k].s=sl;
-        if(has(bl[pt.k].q)&&has(bl[pt.k].s)) return;
-      }catch(e){
-        if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'||e.code==='network')){fatal=e;return}
-      }
-    }
-  };
-  await Promise.all(Array.from({length:Math.min(3,parts.length)},async()=>{while(nx<parts.length&&!fatal){await doPart(parts[nx++])}}));
-  if(fatal&&fatal.code==='cancelled') throw fatal;
-  GEN.bilWhy=fatal?String(fatal.message||fatal.code).slice(0,160):'';
+  for(let attempt=1;attempt<=2&&!complete();attempt++){
+    const d=await ask(attempt===1?prompt:prompt+'\nATTENTION : la réponse précédente était incomplète. Renvoie les CINQ éléments (vf, mix et les trois situations-problèmes de « sp »), chacun avec « q » (énoncé) ET « s » (solution) en texte.');
+    const put=(k,v)=>{if(!v||typeof v!=='object') return; const q=tx(v.q!==undefined?v.q:(v.enonce!==undefined?v.enonce:v.question)),s=tx(v.s!==undefined?v.s:(v.solution!==undefined?v.solution:v.reponse));
+      if(has(q)&&(over&&attempt===1||!has(bl[k].q))) bl[k].q=q; if(has(s)&&(over&&attempt===1||!has(bl[k].s))) bl[k].s=s};
+    put(0,d&&d.vf);put(1,d&&d.mix);((d&&d.sp)||[]).slice(0,3).forEach((v,k)=>put(2+k,v));
+  }
   return bl.some(x=>has(x.q));
 }
 /* =========================================================
