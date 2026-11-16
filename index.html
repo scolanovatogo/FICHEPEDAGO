@@ -1465,7 +1465,7 @@ function cavalierSvg(sp){
 /* =========================================================
    Figures géométriques : l'IA décrit la figure (points, segments, cercles, angles) et l'application la trace exactement
    ========================================================= */
-const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). DROITE GRADUÉE, DEMI-DROITE GRADUÉE ou AXE (nombres relatifs, abscisses, fractions, décimaux) : utilise {"droiteGraduee":{"min":-3,"max":5,"pas":1,"sous":2,"demi":"droite","origine":true,"points":{"A":2.5,"B":-1},"abscisses":false,"masque":[2,3]}} où « min » et « max » sont les valeurs des extrémités, « pas » l’écart entre deux graduations numérotées, « sous » le nombre de subdivisions par pas (2 = demi-graduations, 10 = dixièmes), « demi » = "droite" (demi-droite graduée vers la droite, départ à « min ») ou "gauche", à omettre pour une droite complète, « origine » écrit O au-dessus de 0, « points » = nom → abscisse (un nom commençant par _ n’est pas écrit), « abscisses »:true écrit l’abscisse à côté du nom, « masque » liste les valeurs dont le nombre n’est pas écrit, « etiq »:"aucune" n’écrit aucun nombre. Dans l’énoncé où l’élève doit placer des points, ne mets PAS « points » (ou mets les points à lire sans leur abscisse) ; dans le corrigé, ajoute les points placés. Cette forme remplace toute autre clé (n’y mets ni « points » de géométrie ni « segments »). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
+const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). CONSTRUCTIONS CALCULÉES PAR L’APPLICATION (à utiliser au lieu de calculer toi-même les coordonnées) : ajoute « construire » = liste appliquée dans l’ordre, après « points » ; chaque étape crée un point : {"milieu":"I","de":["A","B"]} ; {"sym":"A’","de":"A","axe":["B","C"]} (symétrique par rapport à la droite (BC)) ; {"symC":"A’","de":"A","centre":"O"} (symétrique par rapport au point O) ; {"proj":"H","de":"A","sur":["B","C"]} (pied de la perpendiculaire) ; {"inter":"I","droites":[["A","B"],["C","D"]]} (intersection) ; {"parallelogramme":"D","de":["A","B","C"]} (ABCD parallélogramme) ; {"transl":"A’","de":"A","vecteur":["B","C"]} (translation du vecteur BC) ; {"rot":"B’","de":"B","centre":"O","angle":90} (rotation de centre O, sens inverse des aiguilles d’une montre) ; {"nom":"M","sur":["A","B"],"t":0.4} (point M de [AB] avec AM = t × AB, pour Thalès). Tous les points utilisés doivent exister avant l’étape. Pour un triangle et ses symétriques, donne seulement le triangle de départ et l’axe ou le centre dans « points », puis les étapes « construire ». « demiDroites » : [{"p":["A","B"]}] (demi-droite [AB) prolongée au-delà de B). REPÈRE ORTHONORMÉ (coordonnées, fonctions affines, translations dans un repère) : ajoute "repere":{"xmin":-4,"xmax":6,"ymin":-3,"ymax":5,"pas":1,"grille":true,"coordonnees":false} ; les points, segments, droites, polygones sont alors donnés par leurs coordonnées dans ce repère (une droite d’équation y = ax + b : deux points de la droite, ex. [0,b] et [1,a+b]) ; "coordonnees":true écrit A(x ; y) à côté des points (corrigé seulement). DROITE GRADUÉE, DEMI-DROITE GRADUÉE ou AXE (nombres relatifs, abscisses, fractions, décimaux) : utilise {"droiteGraduee":{"min":-3,"max":5,"pas":1,"sous":2,"demi":"droite","origine":true,"points":{"A":2.5,"B":-1},"abscisses":false,"masque":[2,3]}} où « min » et « max » sont les valeurs des extrémités, « pas » l’écart entre deux graduations numérotées, « sous » le nombre de subdivisions par pas (2 = demi-graduations, 10 = dixièmes), « demi » = "droite" (demi-droite graduée vers la droite, départ à « min ») ou "gauche", à omettre pour une droite complète, « origine » écrit O au-dessus de 0, « points » = nom → abscisse (un nom commençant par _ n’est pas écrit), « abscisses »:true écrit l’abscisse à côté du nom, « masque » liste les valeurs dont le nombre n’est pas écrit, « etiq »:"aucune" n’écrit aucun nombre. Dans l’énoncé où l’élève doit placer des points, ne mets PAS « points » (ou mets les points à lire sans leur abscisse) ; dans le corrigé, ajoute les points placés. Cette forme remplace toute autre clé (n’y mets ni « points » de géométrie ni « segments »). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
 const GEO_RULE='00) GÉOMÉTRIE PLANE : pour toute figure faite de points, segments, droites, cercles, angles, triangles, quadrilatères, symétries, configurations… ET pour toute droite graduée, demi-droite graduée ou axe avec des points d’abscisse donnée (nombres relatifs, fractions, décimaux) ne dessine PAS en SVG : réponds {"geo":{…}} avec la description géométrique de la figure, que l’application trace exactement. '+GEO_DOC;
 function axeSvg(o){
   o=o||{}; const W=480,H=130,M=34,Y=74;
@@ -1504,19 +1504,49 @@ function axeSvg(o){
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${out.join('')}</svg>`;
 }
+function geoPre(spec){
+  /* constructions calculées par l'application (milieu, symétrique, projeté, intersection, parallélogramme, translation, rotation, point sur un segment) */
+  if(!spec||!Array.isArray(spec.construire)||!spec.construire.length) return spec;
+  const P={}, src=spec.points||spec.sommets||{};
+  for(const k in src){const v=src[k];if(Array.isArray(v)&&Number.isFinite(+v[0])&&Number.isFinite(+v[1]))P[k]=[+v[0],+v[1]]}
+  const g=n=>P[String(n)];
+  const foot=(a,b,c)=>{const dx=c[0]-b[0],dy=c[1]-b[1],l=dx*dx+dy*dy;if(!l)return null;const t=((a[0]-b[0])*dx+(a[1]-b[1])*dy)/l;return [b[0]+t*dx,b[1]+t*dy]};
+  for(const c of spec.construire){ try{
+    if(!c||typeof c!=='object') continue;
+    const nm=c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.sur||c.nom; if(!nm) continue;
+    let r=null;
+    if(c.milieu){const [a,b]=(c.de||[]).map(g);if(a&&b)r=[(a[0]+b[0])/2,(a[1]+b[1])/2]}
+    else if(c.sym){const a=g(c.de),[b,d]=(c.axe||[]).map(g);if(a&&b&&d){const h=foot(a,b,d);if(h)r=[2*h[0]-a[0],2*h[1]-a[1]]}}
+    else if(c.symC){const a=g(c.de),o=g(c.centre);if(a&&o)r=[2*o[0]-a[0],2*o[1]-a[1]]}
+    else if(c.proj){const a=g(c.de),[b,d]=(c.sur||[]).map(g);if(a&&b&&d)r=foot(a,b,d)}
+    else if(c.inter){const [[a,b],[e,f]]=(c.droites||[]).map(l=>l.map(g));if(a&&b&&e&&f){const d1=[b[0]-a[0],b[1]-a[1]],d2=[f[0]-e[0],f[1]-e[1]],den=d1[0]*d2[1]-d1[1]*d2[0];if(Math.abs(den)>1e-9){const t=((e[0]-a[0])*d2[1]-(e[1]-a[1])*d2[0])/den;r=[a[0]+t*d1[0],a[1]+t*d1[1]]}}}
+    else if(c.parallelogramme){const [a,b,d]=(c.de||[]).map(g);if(a&&b&&d)r=[a[0]+d[0]-b[0],a[1]+d[1]-b[1]]}
+    else if(c.transl){const a=g(c.de),[b,d]=(c.vecteur||[]).map(g);if(a&&b&&d)r=[a[0]+d[0]-b[0],a[1]+d[1]-b[1]]}
+    else if(c.rot){const a=g(c.de),o=g(c.centre),t=(+c.angle||0)*Math.PI/180;if(a&&o){const x=a[0]-o[0],y=a[1]-o[1];r=[o[0]+x*Math.cos(t)-y*Math.sin(t),o[1]+x*Math.sin(t)+y*Math.cos(t)]}}
+    else if(c.sur&&c.nom){const [a,b]=(c.sur||[]).map(g);const t=+c.t;if(a&&b&&Number.isFinite(t))r=[a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])]}
+    const key=c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.nom;
+    if(r&&Number.isFinite(r[0])&&Number.isFinite(r[1])) P[key]=r;
+  }catch(e){} }
+  return Object.assign({},spec,{points:P});
+}
 function geoSvg(spec){
   if(spec&&(spec.droiteGraduee||spec.axe)) return axeSvg(spec.droiteGraduee||spec.axe);
+  spec=geoPre(spec);
   const W=480,H=340,M=42;
   const A=(...k)=>{for(const x of k) if(Array.isArray(spec&&spec[x])) return spec[x]; return []};
   const X=t=>String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const P={},pts=(spec&&(spec.points||spec.sommets))||{};
   for(const k in pts){const v=pts[k];if(Array.isArray(v)&&Number.isFinite(+v[0])&&Number.isFinite(+v[1]))P[k]=[+v[0],+v[1]]}
-  const names=Object.keys(P); if(!names.length) throw new Error('Figure sans points');
+  const R=(spec&&spec.repere&&typeof spec.repere==='object')?spec.repere:null;
+  const names=Object.keys(P); if(!names.length&&!R) throw new Error('Figure sans points');
   const g=n=>P[String(n)];
   const circles=[];
   for(const c of A('cercles','circles')){const o=g(c.c||c.centre);if(!o)continue;let r=+c.r;const th=c.passePar||c.through;if(!(r>0)&&th&&g(th)){const q=g(th);r=Math.hypot(q[0]-o[0],q[1]-o[1])}if(r>0)circles.push({o,r,label:c.label,dash:c.tirets===true})}
   const xs=names.map(k=>P[k][0]),ys=names.map(k=>P[k][1]);
   circles.forEach(c=>{xs.push(c.o[0]-c.r,c.o[0]+c.r);ys.push(c.o[1]-c.r,c.o[1]+c.r)});
+  if(R){const n=v=>Number.isFinite(+v)&&v!==null&&v!==''?+v:null;
+    const rx0=n(R.xmin)!=null?n(R.xmin):Math.min(0,...xs)-1, rx1=n(R.xmax)!=null?n(R.xmax):Math.max(0,...xs)+1, ry0=n(R.ymin)!=null?n(R.ymin):Math.min(0,...ys)-1, ry1=n(R.ymax)!=null?n(R.ymax):Math.max(0,...ys)+1;
+    xs.push(rx0,rx1);ys.push(ry0,ry1);R._b=[rx0,rx1,ry0,ry1]}
   const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
   const dx=Math.max(x1-x0,0.5),dy=Math.max(y1-y0,0.5),sc=Math.min((W-2*M)/dx,(H-2*M)/dy);
   const ox=(W-dx*sc)/2,oy=(H-dy*sc)/2;
@@ -1528,6 +1558,23 @@ function geoSvg(spec){
   const text=(x,y,t,anc,sz,w)=>`<text x="${f1(x)}" y="${f1(y)}" font-size="${sz||16}" font-family="Arial" text-anchor="${anc||'middle'}"${w?` font-weight="${w}"`:''}>${X(t)}</text>`;
   const line=(p,q,dash,w)=>`<line x1="${f1(p[0])}" y1="${f1(p[1])}" x2="${f1(q[0])}" y2="${f1(q[1])}" stroke="#000" stroke-width="${w||2}"${dash?' stroke-dasharray="7 5"':''}/>`;
   const outward=(m,defd)=>{let vx=m[0]-cx,vy=m[1]-cy;const n=Math.hypot(vx,vy);return n<1?defd:[vx/n,vy/n]};
+  if(R&&R._b){
+    const [bx0,bx1,by0,by1]=R._b; const rng=Math.max(bx1-bx0,by1-by0);
+    let pas=+R.pas; if(!(pas>0)) pas=rng>24?5:rng>12?2:1;
+    const ax=Math.min(Math.max(0,by0),by1), ay=Math.min(Math.max(0,bx0),bx1);
+    const fm=v=>String(+(+v).toFixed(4)).replace('.',',').replace('-','−');
+    if(R.grille!==false){
+      for(let v=Math.ceil(bx0/pas)*pas;v<=bx1+1e-9;v+=pas){const a=T([v,by0]),b=T([v,by1]);out.push(`<line x1="${f1(a[0])}" y1="${f1(a[1])}" x2="${f1(b[0])}" y2="${f1(b[1])}" stroke="#c8c8c8" stroke-width="1"/>`)}
+      for(let v=Math.ceil(by0/pas)*pas;v<=by1+1e-9;v+=pas){const a=T([bx0,v]),b=T([bx1,v]);out.push(`<line x1="${f1(a[0])}" y1="${f1(a[1])}" x2="${f1(b[0])}" y2="${f1(b[1])}" stroke="#c8c8c8" stroke-width="1"/>`)}
+    }
+    const xa=T([bx0,ax]),xb=T([bx1,ax]),ya=T([ay,by0]),yb=T([ay,by1]);
+    out.push(`<line x1="${f1(xa[0])}" y1="${f1(xa[1])}" x2="${f1(xb[0])}" y2="${f1(xb[1])}" stroke="#000" stroke-width="2"/>`,`<line x1="${f1(ya[0])}" y1="${f1(ya[1])}" x2="${f1(yb[0])}" y2="${f1(yb[1])}" stroke="#000" stroke-width="2"/>`);
+    out.push(`<polygon points="${f1(xb[0]+7)},${f1(xb[1])} ${f1(xb[0]-5)},${f1(xb[1]-5)} ${f1(xb[0]-5)},${f1(xb[1]+5)}" fill="#000"/>`,`<polygon points="${f1(yb[0])},${f1(yb[1]-7)} ${f1(yb[0]-5)},${f1(yb[1]+5)} ${f1(yb[0]+5)},${f1(yb[1]+5)}" fill="#000"/>`);
+    out.push(`<text x="${f1(xb[0]-2)}" y="${f1(xb[1]-9)}" font-size="15" font-family="Arial" font-style="italic" text-anchor="end">x</text>`,`<text x="${f1(yb[0]+9)}" y="${f1(yb[1]+8)}" font-size="15" font-family="Arial" font-style="italic">y</text>`);
+    for(let v=Math.ceil(bx0/pas)*pas;v<=bx1+1e-9;v+=pas){if(Math.abs(v)<1e-9)continue;const a=T([v,ax]);out.push(`<line x1="${f1(a[0])}" y1="${f1(a[1]-4)}" x2="${f1(a[0])}" y2="${f1(a[1]+4)}" stroke="#000" stroke-width="1.6"/>`,`<text x="${f1(a[0])}" y="${f1(a[1]+18)}" font-size="13" font-family="Arial" text-anchor="middle">${fm(v)}</text>`)}
+    for(let v=Math.ceil(by0/pas)*pas;v<=by1+1e-9;v+=pas){if(Math.abs(v)<1e-9)continue;const a=T([ay,v]);out.push(`<line x1="${f1(a[0]-4)}" y1="${f1(a[1])}" x2="${f1(a[0]+4)}" y2="${f1(a[1])}" stroke="#000" stroke-width="1.6"/>`,`<text x="${f1(a[0]-8)}" y="${f1(a[1]+5)}" font-size="13" font-family="Arial" text-anchor="end">${fm(v)}</text>`)}
+    const o0=T([ay,ax]);out.push(`<text x="${f1(o0[0]-8)}" y="${f1(o0[1]+17)}" font-size="14" font-family="Arial" text-anchor="end">O</text>`);
+  }
   for(const c of circles){const o=T(c.o);out.push(`<circle cx="${f1(o[0])}" cy="${f1(o[1])}" r="${f1(c.r*sc)}" fill="none" stroke="#000" stroke-width="2"${c.dash?' stroke-dasharray="7 5"':''}/>`);
     if(c.label) out.push(text(o[0]+c.r*sc*0.72+4,o[1]-c.r*sc*0.72-4,c.label,'start',15))}
   for(const pg of A('polygones','polygons')){const L=(pg.p||pg).filter(n=>Q[n]);if(L.length<3)continue;
@@ -1543,9 +1590,10 @@ function geoSvg(spec){
     const ob=[fl(c1),fl(c2)].sort((a,b)=>a[1]-b[1])[0];
     for(let i=0;i<k;i++){const t=(i-(k-1)/2)*6;out.push(line([m[0]+ux/ln*t-ob[0]*7,m[1]+uy/ln*t-ob[1]*7],[m[0]+ux/ln*t+ob[0]*7,m[1]+uy/ln*t+ob[1]*7],false,1.6))}}
     if(sg.label){let o=outward([m[0]+nx,m[1]+ny],[nx,ny]);const dd=(o[0]*nx+o[1]*ny)>=0?1:-1;const px=m[0]+dd*nx*15,py=m[1]+dd*ny*15;out.push(text(px,py+5,sg.label,'middle',15))}}
-  for(const d of A('droites','lines')){const [a,b]=(d.p||[]);if(!Q[a]||!Q[b])continue;
+  for(const d0 of [...A('droites','lines').map(d=>Object.assign({},d,{_r:0})),...A('demiDroites','rayons').map(d=>Object.assign({},d,{_r:1}))]){const d=d0;const [a,b]=(d.p||[]);if(!Q[a]||!Q[b])continue;
     const p=Q[a],q=Q[b],vx=q[0]-p[0],vy=q[1]-p[1];let t0=-1e6,t1=1e6;const pp=[-vx,vx,-vy,vy],qq=[p[0]-6,W-6-p[0],p[1]-6,H-6-p[1]];let ok=true;
     for(let i=0;i<4;i++){if(pp[i]===0){if(qq[i]<0)ok=false}else{const t=qq[i]/pp[i];if(pp[i]<0)t0=Math.max(t0,t);else t1=Math.min(t1,t)}}
+    if(d._r) t0=Math.max(t0,0);
     if(!ok||t0>t1)continue;const e0=[p[0]+t0*vx,p[1]+t0*vy],e1=[p[0]+t1*vx,p[1]+t1*vy];
     out.push(line(e0,e1,d.tirets===true,2));
     if(d.label){const far=Math.hypot(e1[0]-q[0],e1[1]-q[1])>Math.hypot(e0[0]-q[0],e0[1]-q[1])?e1:e0;const n=Math.hypot(vx,vy)||1;out.push(text(far[0]-vx/n*18*(far===e1?1:-1)+(-vy/n)*12,far[1]-vy/n*18*(far===e1?1:-1)+(vx/n)*12+5,d.label,'middle',15))}}
@@ -1565,7 +1613,8 @@ function geoSvg(spec){
     if(ns.length){const mx=ns.reduce((a,n)=>a+Q[n][0],0)/ns.length,my=ns.reduce((a,n)=>a+Q[n][1],0)/ns.length;dv=[p[0]-mx,p[1]-my]}else dv=[p[0]-cx,p[1]-cy];
     let n=Math.hypot(dv[0],dv[1]);if(n<1){dv=[0,-1];n=1}dv=[dv[0]/n,dv[1]/n];
     const anc=dv[0]>0.35?'start':dv[0]<-0.35?'end':'middle';
-    out.push(text(p[0]+dv[0]*13,p[1]+dv[1]*13+(dv[1]>0.3?11:dv[1]<-0.3?-2:6),k,anc,18,'bold'))}
+    const fm2=v=>String(+(+v).toFixed(2)).replace('.',',').replace('-','−');
+    out.push(text(p[0]+dv[0]*13,p[1]+dv[1]*13+(dv[1]>0.3?11:dv[1]<-0.3?-2:6),k+((R&&R.coordonnees)?'('+fm2(P[k][0])+' ; '+fm2(P[k][1])+')':''),anc,R&&R.coordonnees?15:18,'bold'))}
   for(const t of A('textes','texts')){if(!Number.isFinite(+t.x)||!Number.isFinite(+t.y))continue;const p=T([+t.x,+t.y]);out.push(text(p[0],p[1],t.t||t.texte||'','middle',15))}
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${out.join('')}</svg>`;
 }
