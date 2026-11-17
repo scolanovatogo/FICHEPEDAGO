@@ -1041,7 +1041,7 @@ async function geminiJson(prompt,opts){
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
-  const order=()=>{const st=(GEM.rr=((GEM.rr||0)+1))%keys.length;const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
+  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];for(const key of k)for(const m of models)c.push([key,m]);return c};
   for(let round=0;round<(isTest?1:(fast?2:7));round++){
     let soonest=0;
     for(const [key,model] of order()){
@@ -1067,8 +1067,8 @@ async function geminiJson(prompt,opts){
         if(e.code==='rate_limited'){
           const perDay=/PerDay|per day|daily/i.test(e.raw||'')||/limit:\s*0\b/.test(e.raw||'');
           const d=retryDelayOf(e)||65;
-          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint');
-          continue;                      // clé ou modèle suivant, sans attendre
+          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
+          continue;                      // même demande, clé suivante sans recommencer la séance
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
         if(e.code==='service_busy'){GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;GEM.hot[hk]=Date.now()+Math.min(60,8*nb)*1000;continue}
@@ -1076,7 +1076,7 @@ async function geminiJson(prompt,opts){
         throw e;
       }
       glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : réponse en '+Math.round((Date.now()-t0)/1000)+' s');
-      GEM.good=key; if(GEM.bz) GEM.bz[hk]=0; if(DB.ai.model!==model){DB.ai.model=model;save()}
+      GEM.keyIndex=keys.indexOf(key);GEM.good=key; if(GEM.bz) GEM.bz[hk]=0; if(DB.ai.model!==model){DB.ai.model=model;save()}
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
       const tryParse=x=>{try{return JSON.parse(fixJsonText(x))}catch(e){return JSON.parse(x)}};
@@ -1912,7 +1912,7 @@ async function generateAll(f,o){
     if(view==='fiche'){render2();lockGen(true)}
     rememberProgram(f);
     touch();
-    const nk=geminiKeys().length;const conc=Math.max(1,Math.min(n,nk>=5?4:nk>1?3:2));
+    const conc=1; // une seule séance à la fois : les clés se relaient pour terminer cette séance avant la suivante
     let next=0,done=0,fatal=null;
     pbegin(n);
     const doOne=async i=>{
@@ -2740,7 +2740,7 @@ function stepSeances(f){
     ${fld('Exercices proposés','proposes',{rows:5,wide:true,hint:'Une ligne par exercice'})}
     ${fld('Stratégie pédagogique','strategie',{rows:2,wide:true})}</div></section>`:'';
   const gen=`<section class="card"><h2>Préparation automatique <small>${f.seances.length} séance(s)</small></h2>
-   <p class="muted small" style="margin:0 0 10px">À partir de la répartition des capacités (étape 2), l’application rédige pour chaque séance la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier.</p>
+   <p class="muted small" style="margin:0 0 10px">À partir de la répartition des capacités (étape 2), l’application rédige pour chaque séance la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier. Les séances sont traitées une par une ; si une clé atteint sa limite, la clé suivante reprend la même séance.</p>
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div class="genprog" style="margin-top:8px"></div>
