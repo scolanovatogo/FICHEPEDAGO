@@ -1061,6 +1061,7 @@ async function geminiJson(prompt,opts){
     let soonest=0;
     for(const [key,model] of order()){
       const hk=key+'|'+model;
+      if(GEM.dead[model]>Date.now()) continue;
       if(GEM.hot[hk]>Date.now()){const w=Math.ceil((GEM.hot[hk]-Date.now())/1000);soonest=soonest?Math.min(soonest,w):w;continue}
       const at=Math.max(Date.now(),(GEM.klast[key]||0)+GEM.gap); GEM.klast[key]=at; const gap=at-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
@@ -1104,8 +1105,14 @@ async function geminiJson(prompt,opts){
         if(e.code==='model_gone'){
           GEM.keyStates[keyNo]='MODÈLE INDISPONIBLE (essai d’un autre modèle)';gemKeyState(keyNo);
           GEM.dead[model]=Date.now()+24*3600e3;
-          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=more.filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7)}catch(_){models=[]}}
-          continue;
+          glog('modèle '+model+' refusé (introuvable) : abandonné pour toutes les clés');
+          if(DB.ai.model===model){DB.ai.model='';save()}
+          try{
+            if(!GEM.list||!GEM.list.length||models.length<=1){const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now()}
+            models=(GEM.list||[]).filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7);
+          }catch(_){models=models.filter(n=>n!==model)}
+          if(!models.length) throw {code:'model_gone',message:'Aucun modèle Google n’est disponible pour vos clés pour le moment. Réessayez plus tard.'};
+          redo=true;break;
         }
         GEM.keyStates[keyNo]='ERREUR : '+String(e.message||e.code||'échec').slice(0,100);gemKeyState(keyNo);
         throw e;
@@ -1400,7 +1407,7 @@ function paintProg(){
   if(GEN.pause) h+='<div class="small" style="color:#b45309;margin-top:4px">⏸ Pause automatique : '+esc(GEN.pause.why)+' Reprise dans '+Math.max(0,Math.ceil((GEN.pause.until-now)/1000))+' s.</div>';
   h+=P.items.map((x,i)=>{
     const name=i<n?'Séance '+(i+1):'Exercices de synthèse';
-    const st=x.st==='ok'?'✔ terminée ('+fmtT(x.dt||0)+')':x.st==='fail'?'✖ non rédigée':x.st==='run'?'⏳ en cours : '+esc(x.step||'rédaction')+' ('+fmtT(now-x.t0)+')':'○ en attente';
+    const st=x.st==='ok'?'✔ terminée ('+fmtT(x.dt||0)+')':x.st==='fail'?'✖ non rédigée'+(x.why?' — '+esc(String(x.why).slice(0,170)):''):x.st==='run'?'⏳ en cours : '+esc(x.step||'rédaction')+' ('+fmtT(now-x.t0)+')':'○ en attente';
     return '<div class="small">'+name+' — '+st+'</div>'}).join('');
   els.forEach(e=>{e.innerHTML=h});
 }
@@ -1990,7 +1997,7 @@ async function generateAll(f,o){
       done++;pend(i,ok);
       if(ok) return;
       if(GEN.stop&&!last) return;
-      failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':'');
+      failed.push(i+1);if(GEN.prog&&GEN.prog.items[i]){GEN.prog.items[i].why=String((last&&(last.message||last.code))||'raison inconnue')}failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':'');
       if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')&&!fatal) fatal=last;
     };
     setGen('Rédaction des séances en cours : le détail s’affiche ci-dessous.');
