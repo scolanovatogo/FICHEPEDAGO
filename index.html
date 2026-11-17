@@ -1043,6 +1043,8 @@ async function geminiJson(prompt,opts){
   opts=opts||{};
   const keys=geminiKeys();
   if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé gratuite dans Réglages.'};
+  // Les états affichés doivent décrire cette tentative, pas conserver les résultats d'une ancienne rotation.
+  GEM.keyStates={}; gemKeyState(0);
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
   let tmo=0;
@@ -1095,13 +1097,8 @@ async function geminiJson(prompt,opts){
           GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;
           GEM.hot[hk]=Date.now()+Math.min(45,8*nb)*1000;
           glog('Google indisponible · clé '+keyNo+'/'+keys.length+' · '+model+' · nouvelle tentative limitée');
-          // Une panne Google touche souvent toutes les clés : ne pas faire tourner inutilement les 12 clés.
-          const busyLimit=Math.min(3,Math.max(2,keys.length));
-          if(Object.keys(busySeen).length>=busyLimit){
-            keys.forEach((unused,n)=>{const idx=n+1;if(!GEM.keyStates[idx])GEM.keyStates[idx]='NON TESTÉE — arrêt après surcharge Google'});
-            gemKeyState(0);
-            throw {code:'service_busy',httpStatus:e.httpStatus||0,googleStatus:e.googleStatus||'',googleMessage:e.googleMessage||e.message||'',raw:e.raw||'',message:'Google a répondu, mais son service de génération est temporairement surchargé ou indisponible. Le problème ne permet pas de conclure que vos clés sont invalides ou que leur quota journalier est épuisé. La rotation a été arrêtée après '+Object.keys(busySeen).length+' clés testées pour éviter des essais inutiles. Les autres clés sont indiquées comme non testées. Attendez 1 à 3 minutes, puis relancez : la fiche et les textes déjà rédigés sont conservés.'};
-          }
+          // Continuer la rotation : les clés peuvent appartenir à des projets Google distincts.
+          // Une surcharge sur quelques clés ne prouve pas que les autres projets sont indisponibles.
           continue;
         }
         if(e.code==='model_gone'){
@@ -1128,6 +1125,13 @@ async function geminiJson(prompt,opts){
     if(gemAllDay(keys,models)){
       const n=keys.length;
       throw {code:'rate_limited',message:'Le quota journalier est atteint pour toutes les clés/projets testés ('+n+' clé(s)). La rédaction est mise en pause jusqu’au renouvellement des quotas. Vous pouvez ajouter de nouvelles clés créées dans d’autres projets Google depuis Réglages. Les séances déjà rédigées sont conservées.'};
+    }
+    // Rotation complète effectuée : si certains projets sont en surcharge ou ne répondent pas,
+    // ne pas les confondre avec des quotas épuisés et ne pas relancer une boucle sans fin.
+    if(Object.keys(busySeen).length||tmo>0){
+      const busyN=Object.keys(busySeen).length;
+      const quotaN=keys.filter((k)=>models.some(m=>GEM.day&&GEM.day[k+'|'+m])).length;
+      throw {code:'service_busy',message:'La rotation a testé les clés disponibles. '+busyN+' clé(s) ont rencontré une indisponibilité Google et '+tmo+' délai(s) d’attente ; '+quotaN+' clé(s) ont signalé un quota journalier atteint. Les clés en surcharge ou sans réponse ne sont pas déclarées épuisées. Réessayez dans quelques minutes. Si toutes les clés finissent par afficher « QUOTA JOURNALIER ATTEINT », ajoutez des clés provenant de nouveaux projets Google. Les textes déjà rédigés sont conservés.'};
     }
     // Toutes les clés/modèles ont été parcourus : on revient au début et on recommence.
     // En génération normale, ne jamais abandonner simplement parce que le tour complet est fini.
