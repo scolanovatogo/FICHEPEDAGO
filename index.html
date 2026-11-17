@@ -1004,10 +1004,12 @@ async function gemPause(sec,why){
   if(GEN.pause===mine) GEN.pause=null;
 }
 async function gemModels(key){
+  // Démarrage rapide : réutilise d'abord le modèle déjà choisi et enregistré.
+  // La découverte complète n'est faite qu'en cas de quota ou de modèle indisponible.
+  const saved=String(DB.ai&&DB.ai.model||'').trim();
+  if(saved&&!(GEM.dead[saved]>Date.now())) return [saved];
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
-  const list=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
-  const pref=DB.ai.model&&list.includes(DB.ai.model)?[DB.ai.model]:[];
-  return [...pref,...list.filter(n=>n!==pref[0])].slice(0,7);
+  return GEM.list.filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7);
 }
 function fixJsonText(t){
   return String(t)
@@ -1068,11 +1070,16 @@ async function geminiJson(prompt,opts){
           const perDay=/PerDay|per day|daily/i.test(e.raw||'')||/limit:\s*0\b/.test(e.raw||'');
           const d=retryDelayOf(e)||65;
           GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,7)}catch(_){}}
           continue;                      // même demande, clé suivante sans recommencer la séance
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
         if(e.code==='service_busy'){GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;GEM.hot[hk]=Date.now()+Math.min(60,8*nb)*1000;continue}
-        if(e.code==='model_gone'){GEM.dead[model]=Date.now()+24*3600e3;continue}
+        if(e.code==='model_gone'){
+          GEM.dead[model]=Date.now()+24*3600e3;
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=more.filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7)}catch(_){models=[]}}
+          continue;
+        }
         throw e;
       }
       glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : réponse en '+Math.round((Date.now()-t0)/1000)+' s');
@@ -1790,13 +1797,16 @@ async function genSeanceContent(f,i,o){
 "exoApp": exercice d’application ; "exoAppSol": sa solution détaillée ;
 "evalQ": une question vrai/faux ou à réponse courte ; "evalR": la réponse ;
 "exoMaison": exercice de maison ; "exoMaisonSol": sa solution`;
-  let prompt=`Tu es conseiller pédagogique expert de l’approche par compétences. Prépare UNE séance complète à partir de ce contexte : ${JSON.stringify(ctx)}.
-CAPACITÉS ET CONTENUS DE LA LEÇON :
+  const acquisPrecis=String(f.acquis||'').trim();
+  const regleAcquis=acquisPrecis
+    ?'ACQUIS ANTÉRIEURS FOURNIS PAR L’ENSEIGNANT : prends-les en compte en priorité lorsqu’ils sont utiles et adaptés à la séance. Ne les transforme pas tous en prérequis obligatoires et ne force pas leur présence si la séance n’en a pas besoin. '
+    :'CHAMP « ACQUIS ANTÉRIEURS » NON RENSEIGNÉ : ce champ est facultatif et son absence ne doit jamais bloquer la génération. N’invente pas d’acquis spécifiques attribués à l’enseignant ; appuie-toi seulement sur les notions antérieures sûres et nécessaires au niveau des élèves ou sur les séances précédentes de cette leçon. Si aucun prérequis précis n’est nécessaire, avance directement. ';
+  let prompt=`Tu es conseiller pédagogique expert de l’approche par compétences (collège). Prépare le contenu de la séance décrite par ce contexte JSON : ${JSON.stringify(ctx)}.
+${regleAcquis}
+Ensemble des capacités et contenus de la leçon :
 ${capsText(f)}
-${guideBlock(f)}
-Rédige en français, niveau ${f.classe||'collège'}, de façon claire, exacte et directement utilisable en classe. Respecte strictement la capacité et les contenus de cette séance : n’ajoute aucune notion hors programme ou prévue dans une autre séance. La situation (35 à 50 mots) précède le cours, utilise les prérequis, contient toutes les données nécessaires et ne révèle pas la notion. Garde le même contexte et les mêmes données dans la situation, sa résolution et les exercices. Donne les définitions nécessaires. Structure la trace/essentiel et les résolutions avec titres romains, sous-titres numérotés et exercices numérotés.
-CALCULS : effectue chaque calcul une seule fois, vérifie formule, opérations, unités et cohérence des réponses avant de produire le JSON. Corrige toute erreur avant la réponse. Montre uniquement les étapes utiles dans les corrigés ; ne répète pas les calculs ni les explications. Ne lance aucune seconde vérification. ${LATEX_RULE}
-Réponds uniquement par le JSON demandé, avec des textes concis mais complets :
+${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
+Réponds uniquement par un objet JSON avec ces clés (valeurs en texte, lignes séparées par \\n) :
 ${desc}`;
   const oldS=Array.isArray(s.prevSit)?s.prevSit.filter(has):[];
   if(oldS.length) prompt+='\nÉvite de reprendre mot pour mot ces anciennes situations : '+oldS.map((h,k)=>(k+1)+') '+String(h).slice(0,75)).join(' ; ')+'. Garde les mêmes notions, mais varie le contexte et les données. ';
