@@ -992,8 +992,11 @@ const GEM={klast:{},gap:1800,hot:{},dead:{},good:'',list:null,listAt:0,keyStates
 function gemKeyState(i,label){if(label!==undefined&&label!==null)GEM.keyStates[i]=label;const keys=geminiKeys();const lines=keys.map((k,n)=>'Clé '+(n+1)+' : '+(GEM.keyStates[n+1]||'non testée'));const el=document.getElementById('genkey-status');GEN.keyLabel=lines.join('\n');if(el)el.textContent=GEN.keyLabel;}
 function gemKeyActive(i,total,model){GEM.keyStates[i]='UTILISÉE MAINTENANT · '+model;gemKeyState(i);GEN.keyLabel='Clé utilisée maintenant : Clé '+i+' / '+total+' · '+model;const el=document.getElementById('genkey-status');if(el)el.textContent=GEN.keyLabel;}
 function retryDelayOf(e){
-  const m=/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(e&&e.raw||'')||/retry in (\d+(?:\.\d+)?)s/i.exec(e&&e.message||'');
-  return m?Math.ceil(parseFloat(m[1])):0;
+  const src=(e&&e.raw||'')+' '+(e&&e.message||'');
+  const m=/"retryDelay"\s*:\s*"((?:\d+(?:\.\d+)?h)?(?:\d+(?:\.\d+)?m)?(?:\d+(?:\.\d+)?s)?)"/i.exec(src)||/retry in ((?:\d+(?:\.\d+)?h)?(?:\d+(?:\.\d+)?m)?(?:\d+(?:\.\d+)?s))/i.exec(src);
+  if(!m)return 0;
+  const v=m[1],h=/([\d.]+)h/i.exec(v),mi=/([\d.]+)m/i.exec(v),se=/([\d.]+)s/i.exec(v);
+  return Math.ceil((h?parseFloat(h[1])*3600:0)+(mi?parseFloat(mi[1])*60:0)+(se?parseFloat(se[1]):0));
 }
 function pacificResetText(){
   try{const f=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',minute:'numeric',hour12:false});
@@ -1051,7 +1054,7 @@ async function geminiJson(prompt,opts){
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
-  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];for(const key of k)for(const m of models)c.push([key,m]);return c};
+  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];/* Priorité : tester le même modèle sur chaque projet avant de changer de modèle. */for(const m of models)for(const key of k)c.push([key,m]);return c};
   for(let round=0;isTest?round<1:true;round++){
     let soonest=0;
     for(const [key,model] of order()){
@@ -1081,7 +1084,7 @@ async function geminiJson(prompt,opts){
           const perDay=!!e.perDay||/PerDay|per day|daily|requests_per_day|generate_content_free_tier_requests_per_day|quota.?day/i.test((e.raw||'')+' '+(e.message||''));
           GEM.keyStates[keyNo]=perDay?'QUOTA JOURNALIER ATTEINT':'LIMITE TEMPORAIRE / PAR MINUTE';gemKeyState(keyNo);
           const d=retryDelayOf(e)||65;
-          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
+          /* Respecter le délai exact communiqué par Google. Pour un quota journalier sans délai exploitable, réessayer dans 24 h. */GEM.hot[hk]=Date.now()+(perDay?(d||24*3600)+2:(d+2))*1000;GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
           if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,7)}catch(_){}}
           continue;                      // même demande, clé suivante sans recommencer la séance
         }
@@ -1120,6 +1123,12 @@ async function geminiJson(prompt,opts){
     }
     if(redo){redo=false;round--;continue}
     if(isTest) break;
+    // Tous les projets/clés ont épuisé leur quota journalier pour les modèles testés :
+    // arrêter proprement et afficher la demande d'ajout de nouvelles clés.
+    if(gemAllDay(keys,models)){
+      const n=keys.length;
+      throw {code:'rate_limited',message:'Le quota journalier est atteint pour toutes les clés/projets testés ('+n+' clé(s)). La rédaction est mise en pause jusqu’au renouvellement des quotas. Vous pouvez ajouter de nouvelles clés créées dans d’autres projets Google depuis Réglages. Les séances déjà rédigées sont conservées.'};
+    }
     // Toutes les clés/modèles ont été parcourus : on revient au début et on recommence.
     // En génération normale, ne jamais abandonner simplement parce que le tour complet est fini.
     // Les clés en quota attendent leur délai (même si le quota journalier exige une longue attente).
@@ -1138,34 +1147,12 @@ async function geminiJson(prompt,opts){
   if(lastError&&lastError.code==='invalid_json') throw lastError;
   if(lastError&&lastError.code==='rate_limited'){
     const day=gemAllDay(keys,models), n=keys.length;
-    throw {
-      code:'rate_limited',
-      // Ne pas perdre la dernière réponse HTTP de Google au moment
-      // où l'on construit le message récapitulatif de toutes les clés.
-      httpStatus:lastError.httpStatus||null,
-      googleStatus:lastError.googleStatus||'',
-      googleMessage:lastError.googleMessage||lastError.message||'',
-      raw:lastError.raw||'',
-      message:(day
-        ?'Le quota du JOUR est épuisé sur '+(n>1?'les '+n+' clés':'la clé')+'. Il se remet à zéro '+pacificResetText()+'. Ce qui est déjà rédigé est conservé : reprenez à ce moment-là, ou ajoutez des clés créées dans d’AUTRES projets Google (les clés d’un même projet partagent le même quota).'
-        :'Le quota par minute reste atteint sur '+(n>1?'les '+n+' clés':'la clé')+' malgré les pauses automatiques. Ce qui est déjà rédigé est conservé : recliquez dans quelques minutes. Si cela se répète, vérifiez si les clés partagent le même projet Google.')
-    };
+    throw {code:'rate_limited',message:(day
+      ?'Le quota du JOUR est épuisé sur '+(n>1?'les '+n+' clés':'la clé')+'. Il se remet à zéro '+pacificResetText()+'. Ce qui est déjà rédigé est conservé : reprenez à ce moment-là, ou ajoutez des clés créées dans d’AUTRES projets Google (les clés d’un même projet partagent le même quota).'
+      :'Le quota par minute reste atteint sur '+(n>1?'les '+n+' clés':'la clé')+' malgré les pauses automatiques. Ce qui est déjà rédigé est conservé : recliquez dans quelques minutes. Si cela se répète, vos clés partagent probablement le même projet Google (même quota) : créez chaque clé dans un NOUVEAU projet.')};
   }
-  // Conserver intégralement la réponse Google : auparavant, ce dernier bloc
-  // remplaçait l'erreur d'origine par service_busy et perdait HTTP/status/raw.
-  if(lastError){
-    throw {
-      code:lastError.code||'service_busy',
-      httpStatus:lastError.httpStatus||null,
-      googleStatus:lastError.googleStatus||'',
-      googleMessage:lastError.googleMessage||lastError.message||'',
-      raw:lastError.raw||'',
-      message:'Échec de la génération Google. '+String(lastError.message||'Le service est temporairement indisponible.')+
-        (lastError.httpStatus?' (HTTP '+lastError.httpStatus+')':'')+
-        (lastError.googleStatus?' · Statut Google : '+lastError.googleStatus:'')
-    };
-  }
-  throw {code:'service_busy',message:'Le service de génération Google est temporairement indisponible ou surchargé. Le test de connexion des clés ne garantit pas que le moteur de rédaction accepte une génération, et cette erreur ne prouve pas que les quotas journaliers sont épuisés. Réessayez dans quelques minutes. Votre fiche et les textes déjà rédigés sont conservés.'};
+  const why=lastError?(' [Détail : '+(lastError.code||'?')+(lastError.message?' – '+String(lastError.message).slice(0,150):'')+']'):'';
+  throw {code:'service_busy',message:'Le service de génération Google est temporairement indisponible ou surchargé. Le test de connexion des clés ne garantit pas que le moteur de rédaction accepte une génération, et cette erreur ne prouve pas que les quotas journaliers sont épuisés. Réessayez dans quelques minutes. Votre fiche et les textes déjà rédigés sont conservés.'+why};
 }
 async function claudeJson(prompt,opts){
   try{return await SAMPLE.json(prompt,Object.assign({modelTier:'default'},opts&&opts.images?{images:opts.images}:{}))}
@@ -3016,14 +3003,7 @@ root.addEventListener('click',async e=>{
         put(L.join('\n')+'\nTest en cours…');
       }
       try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse avec la clé '+(((GEM.keyIndex||0)+1))+'/'+ks.length+(DB.ai.model?' · modèle '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
-      catch(e){
-        L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,320));
-        if(e&&e.httpStatus)L.push('CODE HTTP GOOGLE : '+e.httpStatus);
-        if(e&&e.googleStatus)L.push('STATUT GOOGLE : '+String(e.googleStatus).slice(0,180));
-        if(e&&e.googleMessage)L.push('MESSAGE GOOGLE : '+String(e.googleMessage).slice(0,500));
-        if(e&&e.raw)L.push('RÉPONSE BRUTE GOOGLE : '+String(e.raw).slice(0,1200));
-        if(!(e&&(e.httpStatus||e.googleStatus||e.googleMessage||e.raw))&&e&&e.code)L.push('Code interne (aucune réponse HTTP exploitable) : '+e.code);
-      }
+      catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,240));if(e&&e.httpStatus)L.push('Détail Google : HTTP '+e.httpStatus+(e.googleStatus?' · '+e.googleStatus:'')+(e.googleMessage?' · '+e.googleMessage:'').slice(0,320));else if(e&&e.raw)L.push('Détail technique Google : '+String(e.raw).slice(0,500));else if(e&&e.code)L.push('Code interne : '+e.code);}
       L.push('Conclusion : « clé joignable » confirme seulement que Google répond au test de connexion. Le test de rédaction vérifie séparément la génération. Une surcharge ou un délai de Google ne signifie ni clé invalide ni quota journalier épuisé.');
       put(L.join('\n'));b.disabled=false;
     })();
