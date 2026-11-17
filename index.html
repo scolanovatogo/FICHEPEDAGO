@@ -1983,7 +1983,7 @@ async function generateAll(f,o){
     if(view==='fiche'){render2();lockGen(true)}
     rememberProgram(f);
     touch();
-    const nk=geminiKeys().length;const conc=Math.max(1,Math.min(n,nk>=3?3:nk));
+    const conc=1; // une séance à la fois, dans l’ordre : la clé en cours sert jusqu’à sa limite, puis la suivante prend le relais
     let next=0,done=0,fatal=null;
     pbegin(n);
     const doOne=async i=>{
