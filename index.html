@@ -1053,7 +1053,7 @@ async function geminiJson(prompt,opts){
       let r;
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.7,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:5600,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
       }catch(e){
         if(e&&e.name==='AbortError'&&stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;
@@ -1129,7 +1129,7 @@ async function anthropicJson(prompt,opts){
       :{type:'image',source:{type:'base64',media_type:b.type||'image/jpeg',data}});
   }
   content.push({type:'text',text:prompt});
-  const body=JSON.stringify({model,max_tokens:opts.test?64:8000,
+  const body=JSON.stringify({model,max_tokens:opts.test?64:5600,
     system:'Tu es un conseiller pédagogique expert. Tu réponds uniquement par un objet JSON valide, sans texte autour ni balises de code.',
     messages:[{role:'user',content}]});
   let lastErr=null;
@@ -1790,15 +1790,18 @@ async function genSeanceContent(f,i,o){
 "exoApp": exercice d’application ; "exoAppSol": sa solution détaillée ;
 "evalQ": une question vrai/faux ou à réponse courte ; "evalR": la réponse ;
 "exoMaison": exercice de maison ; "exoMaisonSol": sa solution`;
-  let prompt=`Tu es conseiller pédagogique expert de l’approche par compétences (collège). Prépare le contenu de la séance décrite par ce contexte JSON : ${JSON.stringify(ctx)}.
-Ensemble des capacités et contenus de la leçon :
+  let prompt=`Tu es conseiller pédagogique expert de l’approche par compétences. Prépare UNE séance complète à partir de ce contexte : ${JSON.stringify(ctx)}.
+CAPACITÉS ET CONTENUS DE LA LEÇON :
 ${capsText(f)}
-${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
-Réponds uniquement par un objet JSON avec ces clés (valeurs en texte, lignes séparées par \\n) :
+${guideBlock(f)}
+Rédige en français, niveau ${f.classe||'collège'}, de façon claire, exacte et directement utilisable en classe. Respecte strictement la capacité et les contenus de cette séance : n’ajoute aucune notion hors programme ou prévue dans une autre séance. La situation (35 à 50 mots) précède le cours, utilise les prérequis, contient toutes les données nécessaires et ne révèle pas la notion. Garde le même contexte et les mêmes données dans la situation, sa résolution et les exercices. Donne les définitions nécessaires. Structure la trace/essentiel et les résolutions avec titres romains, sous-titres numérotés et exercices numérotés.
+CALCULS : effectue chaque calcul une seule fois, vérifie formule, opérations, unités et cohérence des réponses avant de produire le JSON. Corrige toute erreur avant la réponse. Montre uniquement les étapes utiles dans les corrigés ; ne répète pas les calculs ni les explications. Ne lance aucune seconde vérification. ${LATEX_RULE}
+Réponds uniquement par le JSON demandé, avec des textes concis mais complets :
 ${desc}`;
   const oldS=Array.isArray(s.prevSit)?s.prevSit.filter(has):[];
-  prompt+='\n\nVARIANTE (graine '+Math.random().toString(36).slice(2,8)+') : rédige une version ORIGINALE de cette séance. '+(oldS.length?'Les capacités, contenus et notions restent EXACTEMENT les mêmes, mais change totalement le contexte de la situation (lieu, personnages, objets, activité), les données numériques, les formulations, les exemples et les exercices par rapport à ces anciennes versions, à NE PAS reprendre : '+oldS.map((h,k)=>(k+1)+') '+h).join(' ; ')+'. ':'')+'Pour tout symbole normalisé, schéma, formule ou unité (par exemple le symbole d’un composant électrique ou d’un appareil), vérifie qu’il est exact et conforme à ce qu’on enseigne au collège ; en cas de doute, choisis la représentation la plus courante des manuels scolaires.';
-  let d=await ask(prompt,{temp:1});
+  if(oldS.length) prompt+='\nÉvite de reprendre mot pour mot ces anciennes situations : '+oldS.map((h,k)=>(k+1)+') '+String(h).slice(0,75)).join(' ; ')+'. Garde les mêmes notions, mais varie le contexte et les données. ';
+  prompt+='Utilise les symboles, formules et unités scolaires usuels et exacts. ';
+  let d=await ask(prompt,{temp:0.4});
   try{
     const v=await verifySituation(f,s,d,'Séance n°'+(i+1)+' sur '+f.seances.length+'.\nAcquis antérieurs disponibles : '+ctx.acquisAnterieurs+'\nSéances précédentes de la leçon : '+(prev||'aucune'));
     if(v&&v.ok===false&&has(v.probleme)){
