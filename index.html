@@ -895,7 +895,7 @@ function keyPrompt(why){
     b.disabled=true; say('Test de la clé…'); const good=[],bad=[];
     await Promise.all(add.map(async k=>{try{const r=await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1',{headers:gHeaders(k)},8000);(r.ok||r.status===429?good:bad).push(k)}catch(e){bad.push(k)}}));
     if(!good.length){say(bad.length>1?'Aucune de ces clés n’est valide. Vérifiez qu’elles sont copiées en entier.':'Cette clé n’est pas valide. Vérifiez qu’elle est copiée en entier.',true);b.disabled=false;return}
-    DB.ai.keys=[...new Set([...ownKeys(),...good])].slice(0,30); DB.ai.key=DB.ai.keys[0]; DB.ai.model=''; DB.ai.provider=''; GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good=''; save();
+    DB.ai.keys=[...new Set([...ownKeys(),...good])].slice(0,30); DB.ai.key=DB.ai.keys[0]; DB.ai.model=''; DB.ai.provider=''; GEM.list=null;GEM.hot={};GEM.day={};GEM.keyDay={};GEM.keyStates={};GEM.dead={};GEM.good=''; save();
     say('Clé enregistrée'+(bad.length?' ('+bad.length+' clé(s) refusée(s))':'')+'. Vous pouvez relancer la préparation.'); flash('Clé enregistrée : relancez la préparation.');
     setTimeout(()=>{close();try{render()}catch(e){}},900);
   };
@@ -982,9 +982,9 @@ async function geminiModel(){
 }
 function geminiWait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 const GEMLOG=[];function glog(m){GEMLOG.push(new Date().toLocaleTimeString('fr-FR')+' '+m);if(GEMLOG.length>60)GEMLOG.shift()}
-const GEM={klast:{},gap:1800,hot:{},dead:{},good:'',list:null,listAt:0,keyStates:{}};
-function gemKeyState(i,label){GEM.keyStates[i]=label;const keys=geminiKeys();const lines=keys.map((k,n)=>'Clé '+(n+1)+' : '+(GEM.keyStates[n+1]||'en attente'));const el=document.getElementById('genkey-status');GEN.keyLabel=lines.join('\n');if(el)el.textContent=GEN.keyLabel;}
-function gemKeyActive(i,total,model){GEM.keyStates[i]='UTILISÉE MAINTENANT · '+model;gemKeyState(i);GEN.keyLabel='Clé utilisée maintenant : Clé '+i+' / '+total+' · '+model;const el=document.getElementById('genkey-status');if(el)el.textContent=GEN.keyLabel;}
+const GEM={klast:{},gap:1800,hot:{},dead:{},good:'',list:null,listAt:0,keyStates:{},keyDay:{}};
+function gemKeyState(i,label){if(i&&label!==undefined)GEM.keyStates[i]=label;const keys=geminiKeys();const lines=keys.map((k,n)=>'Clé '+(n+1)+' : '+(GEM.keyStates[n+1]||'en attente'));const el=document.getElementById('genkey-status');GEN.keyLabel=lines.join('\n');if(el)el.textContent=GEN.keyLabel;}
+function gemKeyActive(i,total,model){GEM.keyStates[i]='EN COURS · '+model;gemKeyState();}
 function retryDelayOf(e){
   const m=/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(e&&e.raw||'')||/retry in (\d+(?:\.\d+)?)s/i.exec(e&&e.message||'');
   return m?Math.ceil(parseFloat(m[1])):0;
@@ -1049,13 +1049,15 @@ async function geminiJson(prompt,opts){
   for(let round=0;isTest?round<1:true;round++){
     let soonest=0;
     for(const [key,model] of order()){
+      const keyNo=keys.indexOf(key)+1;
+      if(GEM.keyDay&&GEM.keyDay[key]) continue; // quota journalier : ne plus essayer d’autre modèle avec cette clé
       const hk=key+'|'+model;
       if(GEM.hot[hk]>Date.now()){const w=Math.ceil((GEM.hot[hk]-Date.now())/1000);soonest=soonest?Math.min(soonest,w):w;continue}
       const at=Math.max(Date.now(),(GEM.klast[key]||0)+GEM.gap); GEM.klast[key]=at; const gap=at-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
       if(fast&&Date.now()-t0>80000) throw {code:'fatal',message:'Le service met trop de temps à répondre. Rien n’a été modifié : réessayez dans un instant.'};
       let r;
-      const keyNo=keys.indexOf(key)+1;gemKeyActive(keyNo,keys.length,model);
+      gemKeyActive(keyNo,keys.length,model);
       glog('utilisation de la clé '+keyNo+'/'+keys.length+' · '+model);
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
@@ -1075,7 +1077,7 @@ async function geminiJson(prompt,opts){
           const perDay=/PerDay|per day|daily|requests_per_day|generate_content_free_tier_requests_per_day/i.test(e.raw||'')||/limit:\s*0\b/.test(e.raw||'');
           GEM.keyStates[keyNo]=perDay?'QUOTA JOURNALIER ATTEINT':'LIMITE TEMPORAIRE / PAR MINUTE';gemKeyState(keyNo);
           const d=retryDelayOf(e)||65;
-          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
+          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(perDay){GEM.keyDay=GEM.keyDay||{};GEM.keyDay[key]=true;GEM.keyStates[keyNo]='QUOTA JOURNALIER ATTEINT';gemKeyState()}if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
           if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,7)}catch(_){}}
           continue;                      // même demande, clé suivante sans recommencer la séance
         }
@@ -2917,7 +2919,7 @@ root.addEventListener('click',async e=>{
     catch(e){say(errCopy(e),true)}
     b.disabled=false;return}
   if(d.corr!==undefined){b.disabled=true;await applyCorrection(+d.corr);b.disabled=false;return}
-  if(d.keydel!==undefined){const i=+d.keydel,ks=ownKeys();if(ks[i]!==undefined){ks.splice(i,1);DB.ai.keys=ks;DB.ai.key=ks[0]||'';DB.ai.model='';GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good='';save();setGen('Clé retirée.');render2()}return}
+  if(d.keydel!==undefined){const i=+d.keydel,ks=ownKeys();if(ks[i]!==undefined){ks.splice(i,1);DB.ai.keys=ks;DB.ai.key=ks[0]||'';DB.ai.model='';GEM.list=null;GEM.hot={};GEM.day={};GEM.keyDay={};GEM.keyStates={};GEM.dead={};GEM.good='';save();setGen('Clé retirée.');render2()}return}
   if(b.id==='aiSave'){
     const add=[...new Set(String(document.getElementById('aiKeys').value||'').split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean))];
     const known=ownKeys(),fresh=add.filter(k=>!known.includes(k));
@@ -2931,7 +2933,7 @@ root.addEventListener('click',async e=>{
       const bad=res.filter(x=>!x.ok&&x.st>0),off=res.filter(x=>!x.ok&&x.st===0),good=res.filter(x=>x.ok);
       if(fresh.length){
         const keep=[...good,...off].map(x=>x.k);
-        if(keep.length){DB.ai.keys=[...known,...keep].slice(0,30);DB.ai.key=DB.ai.keys[0];DB.ai.model='';DB.ai.provider='';GEM.list=null;GEM.hot={};GEM.day={};GEM.dead={};GEM.good='';save()}
+        if(keep.length){DB.ai.keys=[...known,...keep].slice(0,30);DB.ai.key=DB.ai.keys[0];DB.ai.model='';DB.ai.provider='';GEM.list=null;GEM.hot={};GEM.day={};GEM.keyDay={};GEM.keyStates={};GEM.dead={};GEM.good='';save()}
         const msg=[];
         if(good.length) msg.push(good.length+' clé(s) ajoutée(s) et valide(s)');
         if(off.length) msg.push(off.length+' clé(s) ajoutée(s) mais non testée(s) (connexion trop faible)');
@@ -2962,15 +2964,15 @@ root.addEventListener('click',async e=>{
     const out=document.getElementById('nettest');const put=t=>{if(out)out.textContent=t};
     b.disabled=true;put('Test en cours…');
     (async()=>{
-      const ks=geminiKeys(),L=[];
+      const ks=geminiKeys(),L=[];GEM.keyStates={};gemKeyState();
       if(typeof navigator!=='undefined'&&navigator.onLine===false){put('✖ Pas de connexion Internet sur cet appareil.');b.disabled=false;return}
       for(let i=0;i<ks.length;i++){
         const t0=Date.now();
         try{
           const r=await geminiFetch(gBase()+'/v1beta/models?pageSize=1',{headers:gHeaders(ks[i])},12000);
           const ms=Date.now()-t0;
-          let quota='';if(r.status===429){try{const jj=await r.clone().json();const raw=JSON.stringify(jj);quota=/PerDay|per day|daily|requests_per_day|generate_content_free_tier_requests_per_day/i.test(raw)?'⚠ quota journalier atteint':'⚠ limite temporaire/par minute atteinte';}catch(_){quota='⚠ limite 429 (quota à préciser)'}}L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':r.status===429?quota:r.status===400||r.status===403?'✖ clé refusée ('+r.status+')':'⚠ réponse '+r.status+' en '+ms+' ms'));
-        }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)'))}
+          let status='';if(r.status===429){status='⚠ limite API (quota de rédaction non vérifié par ce test)';}else if(r.ok){status='✔ clé joignable en '+ms+' ms · quota de rédaction à vérifier';}else if(r.status===400||r.status===403){status='✖ clé refusée ('+r.status+')';}else{status='⚠ réponse '+r.status+' en '+ms+' ms';}GEM.keyStates[i+1]=status;gemKeyState();L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+status);
+        }catch(e){const status=e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)';GEM.keyStates[i+1]=status;gemKeyState();L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+status)}
         put(L.join('\n')+'\nTest en cours…');
       }
       try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse avec la clé '+(((GEM.keyIndex||0)+1))+'/'+ks.length+(DB.ai.model?' · modèle '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
