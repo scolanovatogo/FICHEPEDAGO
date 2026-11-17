@@ -1138,9 +1138,18 @@ async function geminiJson(prompt,opts){
   if(lastError&&lastError.code==='invalid_json') throw lastError;
   if(lastError&&lastError.code==='rate_limited'){
     const day=gemAllDay(keys,models), n=keys.length;
-    throw {code:'rate_limited',message:(day
-      ?'Le quota du JOUR est épuisé sur '+(n>1?'les '+n+' clés':'la clé')+'. Il se remet à zéro '+pacificResetText()+'. Ce qui est déjà rédigé est conservé : reprenez à ce moment-là, ou ajoutez des clés créées dans d’AUTRES projets Google (les clés d’un même projet partagent le même quota).'
-      :'Le quota par minute reste atteint sur '+(n>1?'les '+n+' clés':'la clé')+' malgré les pauses automatiques. Ce qui est déjà rédigé est conservé : recliquez dans quelques minutes. Si cela se répète, vos clés partagent probablement le même projet Google (même quota) : créez chaque clé dans un NOUVEAU projet.')};
+    throw {
+      code:'rate_limited',
+      // Ne pas perdre la dernière réponse HTTP de Google au moment
+      // où l'on construit le message récapitulatif de toutes les clés.
+      httpStatus:lastError.httpStatus||null,
+      googleStatus:lastError.googleStatus||'',
+      googleMessage:lastError.googleMessage||lastError.message||'',
+      raw:lastError.raw||'',
+      message:(day
+        ?'Le quota du JOUR est épuisé sur '+(n>1?'les '+n+' clés':'la clé')+'. Il se remet à zéro '+pacificResetText()+'. Ce qui est déjà rédigé est conservé : reprenez à ce moment-là, ou ajoutez des clés créées dans d’AUTRES projets Google (les clés d’un même projet partagent le même quota).'
+        :'Le quota par minute reste atteint sur '+(n>1?'les '+n+' clés':'la clé')+' malgré les pauses automatiques. Ce qui est déjà rédigé est conservé : recliquez dans quelques minutes. Si cela se répète, vérifiez si les clés partagent le même projet Google.')
+    };
   }
   // Conserver intégralement la réponse Google : auparavant, ce dernier bloc
   // remplaçait l'erreur d'origine par service_busy et perdait HTTP/status/raw.
