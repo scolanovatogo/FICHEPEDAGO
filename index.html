@@ -989,7 +989,7 @@ async function geminiModel(){
 function geminiWait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 const GEMLOG=[];function glog(m){GEMLOG.push(new Date().toLocaleTimeString('fr-FR')+' '+m);if(GEMLOG.length>60)GEMLOG.shift()}
 const GEM={klast:{},gap:1800,hot:{},dead:{},good:'',list:null,listAt:0,keyStates:{}};
-function gemKeyState(i,label){GEM.keyStates[i]=label;const keys=geminiKeys();const lines=keys.map((k,n)=>'Clé '+(n+1)+' : '+(GEM.keyStates[n+1]||'en attente'));const el=document.getElementById('genkey-status');GEN.keyLabel=lines.join('\n');if(el)el.textContent=GEN.keyLabel;}
+function gemKeyState(i,label){if(label!==undefined&&label!==null)GEM.keyStates[i]=label;const keys=geminiKeys();const lines=keys.map((k,n)=>'Clé '+(n+1)+' : '+(GEM.keyStates[n+1]||'non testée'));const el=document.getElementById('genkey-status');GEN.keyLabel=lines.join('\n');if(el)el.textContent=GEN.keyLabel;}
 function gemKeyActive(i,total,model){GEM.keyStates[i]='UTILISÉE MAINTENANT · '+model;gemKeyState(i);GEN.keyLabel='Clé utilisée maintenant : Clé '+i+' / '+total+' · '+model;const el=document.getElementById('genkey-status');if(el)el.textContent=GEN.keyLabel;}
 function retryDelayOf(e){
   const m=/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(e&&e.raw||'')||/retry in (\d+(?:\.\d+)?)s/i.exec(e&&e.message||'');
@@ -1095,7 +1095,9 @@ async function geminiJson(prompt,opts){
           // Une panne Google touche souvent toutes les clés : ne pas faire tourner inutilement les 12 clés.
           const busyLimit=Math.min(3,Math.max(2,keys.length));
           if(Object.keys(busySeen).length>=busyLimit){
-            throw {code:'service_busy',message:'Google a répondu, mais son service de génération est temporairement surchargé ou indisponible. Le problème ne permet pas de conclure que vos clés sont invalides ou que leur quota journalier est épuisé. La rotation a été arrêtée après '+Object.keys(busySeen).length+' clés testées pour éviter des essais inutiles. Attendez 1 à 3 minutes, puis relancez : la fiche et les textes déjà rédigés sont conservés.'};
+            keys.forEach((unused,n)=>{const idx=n+1;if(!GEM.keyStates[idx])GEM.keyStates[idx]='NON TESTÉE — arrêt après surcharge Google'});
+            gemKeyState(0);
+            throw {code:'service_busy',message:'Google a répondu, mais son service de génération est temporairement surchargé ou indisponible. Le problème ne permet pas de conclure que vos clés sont invalides ou que leur quota journalier est épuisé. La rotation a été arrêtée après '+Object.keys(busySeen).length+' clés testées pour éviter des essais inutiles. Les autres clés sont indiquées comme non testées. Attendez 1 à 3 minutes, puis relancez : la fiche et les textes déjà rédigés sont conservés.'};
           }
           continue;
         }
