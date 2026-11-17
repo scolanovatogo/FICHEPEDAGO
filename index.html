@@ -469,15 +469,9 @@ function buildDoc(f0){
       rows.push(mo('orga'));
       rows.push(mo('commun'));
       if(has(s.resolution)) rows.push(...grp([row([cell(['**__[[red:RÉSOLUTION DE LA SITUATION D’APPRENTISSAGE]]__**'],{span:3,align:'center'})]),...lines(s.resolution).map(x=>row([cell([x],{span:3,just:true})]))]));
-      rows.push(row([cell(['**__[[red:INSTITUTIONNALISATION (trace écrite)]]__** **(10 min)**'],{span:3,align:'center'})]));
-      const cl=['**Consignes au prof**',...lines(s.consignes).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1]))).flatMap(x=>String(x).length>50?String(x).split(/(?<=[.!?;])\s+/):[x])];
-      const hz=(x,w,e)=>Math.max(1,Math.ceil(String(x).replace(/\$[^$]*\$/g,'xxxxx').length/w))+e;
+      rows.push(row([cell(['**__[[red:INSTITUTIONNALISATION (trace écrite)]]__** **(10 min)**'],{span:3,align:'center'})],{keep:true}));
       const tl=lines(s.trace).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])));
-      const rt=[['***[[blue:Capacités : '+mk(s.capTitre)+']]***'],...tl.map(x=>[x])];
-      const tr=[]; let ci=0,lh=0,rh=0;
-      rt.forEach(r=>{rh+=hz(r[0],95,0.4);const ch=[];while(ci<cl.length&&(ch.length===0&&ci===0||lh<rh)){ch.push(cl[ci]);lh+=hz(cl[ci],26,0.2);ci++}tr.push(row([cell(ch,{sm:true}),cell(r,{span:2})]))});
-      if(ci<cl.length){tr.push(row([cell([cl.slice(ci).join(' ')],{span:3,sm:true,just:true})]));ci=cl.length}
-      rows.push(...grp(tr));
+      rows.push(row([cell(['**Consignes au prof**',...lines(s.consignes).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])))],{sm:true}),cell(['***[[blue:Capacités : '+mk(s.capTitre)+']]***',...tl],{span:2})]));
       if(s.traceImg) rows.push(row([cell([],{sm:true}),cell([],{span:2,img:s.traceImg})]));
       figsOf(s).forEach(im=>rows.push(row([cell([],{sm:true}),cell([],{span:2,img:im,align:'center'})])));
       rows.push(row([cell(['**[[red:EXERCICE D’APPLICATION]]**'],{span:2,align:'center'}),cell(['**[[red:SOLUTION]]**'],{align:'center'})]));
@@ -509,7 +503,7 @@ function buildDoc(f0){
 /* =========================================================
    Rendu HTML d'un bloc
    ========================================================= */
-function imgHTML(im){return '<img alt="" src="'+im.src+'" style="width:'+(im.dw||300)+'px;max-width:100%">'+(im.credit?'<div style="font:italic 12px/1.2 var(--f-paper,serif);text-align:center;margin-top:-2px">'+(/^(Sch|Repr)/.test(im.credit)?'':'Source : ')+esc(im.credit)+'</div>':'')}
+function imgHTML(im){return '<img alt="" src="'+im.src+'" style="width:'+(im.dw||300)+'px;max-width:100%'+(im.w&&im.h?';aspect-ratio:'+im.w+'/'+im.h:'')+'">'+(im.credit?'<div style="font:italic 12px/1.2 var(--f-paper,serif);text-align:center;margin-top:-2px">'+(/^(Sch|Repr)/.test(im.credit)?'':'Source : ')+esc(im.credit)+'</div>':'')}
 function cellHTML(c,r){
   if(c.vm) return '';
   const st=[]; if(c.mid)st.push('vertical-align:middle'); if(c.shade)st.push('background:'+c.shade); if(c.color)st.push('color:'+c.color); if(c.align)st.push('text-align:'+c.align);
@@ -544,16 +538,36 @@ function blockHTML(b){
    ========================================================= */
 const PAGE_H=1123,CONTENT_H=1123-36-62;
 function lhOf(k){return (!k||k>=.95)?1.27:(k>=.85?1.2:1.14)}
-function rowSplittable(r){return r.cells&&r.cells.length&&r.cells.every(c=>!c.img&&!c.sub&&!(c.rs>1)&&!c.vm)&&r.cells.some(c=>c.lines&&c.lines.length>=4)}
+const cellLen=c=>(c.lines||[]).reduce((a,x)=>a+String(x).length+30,0);
+function rowSplittable(r){return !!(r.cells&&r.cells.length&&r.cells.every(c=>!c.img&&!c.sub&&!(c.rs>1)&&!c.vm)&&r.cells.some(c=>cellLen(c)>=260))}
+function cutLine(s,off){
+  const ok=i=>{const p=s.slice(0,i);return (p.split('$').length-1)%2===0&&((p.match(/\*\*/g)||[]).length%2===0)&&((p.match(/\[\[/g)||[]).length===(p.match(/\]\]/g)||[]).length)};
+  for(let d=0;d<s.length;d++){for(const i of [off-d,off+d]){if(i>8&&i<s.length-8&&s[i]===' '&&ok(i)) return i}}
+  return -1;
+}
+function splitCell(c,t){
+  const L=(c.lines||[]).map(String),w=L.map(x=>x.length+30),tot=w.reduce((a,x)=>a+x,0);
+  if(tot<260) return null;
+  const target=tot*t;let acc=0,idx=0;
+  while(idx<L.length-1&&acc+w[idx]<=target){acc+=w[idx];idx++}
+  const off=Math.round(target-acc-15),line=L[idx],head=L.slice(0,idx),tail=L.slice(idx+1);
+  if(off>20&&off<line.length-20){
+    const k=cutLine(line,off);
+    if(k>0){head.push(line.slice(0,k).trimEnd());tail.unshift(line.slice(k+1).trimStart())}
+    else if(off>line.length/2) head.push(line); else tail.unshift(line);
+  }else if(off<=20) tail.unshift(line); else head.push(line);
+  if(!head.length||!tail.length) return null;
+  return [Object.assign({},c,{lines:head}),Object.assign({},c,{lines:tail})];
+}
 function splitRowFit(b,r,room,M){
   const mr=rr=>{M.innerHTML=tblHTML(b,[rr],false);const tr=M.querySelector('tr');return tr?tr.getBoundingClientRect().height:0};
-  const build=t=>{const a=[],z=[];let ok=true;
-    for(const c of r.cells){const n=c.lines.length;
-      if(n>=4){const q=Math.max(2,Math.floor(n*t)); if(n-q<2) ok=false; a.push(Object.assign({},c,{lines:c.lines.slice(0,q)})); z.push(Object.assign({},c,{lines:c.lines.slice(q)}))}
-      else{a.push(c); z.push(Object.assign({},c,{lines:['']}))}}
-    return ok?[Object.assign({},r,{cells:a,bb:false}),Object.assign({},r,{cells:z,bt:false})]:null};
-  let lo=.1,hi=.92,best=null;
-  for(let it=0;it<7;it++){const mid=(lo+hi)/2,parts=build(mid);
+  const build=t=>{const a=[],z=[];let any=false;
+    for(const c of r.cells){const sp=splitCell(c,t);
+      if(sp){any=true;a.push(sp[0]);z.push(sp[1])}
+      else{a.push(c);z.push(Object.assign({},c,{lines:['']}))}}
+    return any?[Object.assign({},r,{cells:a,bb:false}),Object.assign({},r,{cells:z,bt:false})]:null};
+  let lo=.05,hi=.95,best=null;
+  for(let it=0;it<8;it++){const mid=(lo+hi)/2,parts=build(mid);
     if(!parts){hi=mid;continue}
     if(mr(parts[0])<=room-1){best=parts;lo=mid}else hi=mid}
   if(!best) return null;
@@ -583,6 +597,7 @@ function paginate(doc,k){
     const m=meas[bi];
     if(b.pb&&used>0) np();
     if(b.t!=='tbl'){
+      if(b.lines&&b.lines.every(x=>!String(x).trim())&&(used===0||used+m.h>CONTENT_H)) return;
       let need=m.h; if(b.keep){let j=bi+1;while(doc[j]&&doc[j].keep&&doc[j].t!=='tbl'){need+=meas[j].h;j++}need+=firstPiece(j)}
       if(used+need>CONTENT_H&&used>0) np();
       cur().push({html:blockHTML(b)}); used+=m.h; return;
@@ -592,11 +607,11 @@ function paginate(doc,k){
     for(let i=0;i<rows.length;){
       let e=i; while(rows[e].grp&&rows[e+1]&&rows[e+1].grp===rows[e].grp) e++;
       let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
-      const kp=(rows[e].keep&&e+1<rows.length)?rowH[e+1]:0;
+      const kp=(rows[e].keep&&e+1<rows.length)?(rowSplittable(rows[e+1])?Math.min(rowH[e+1],80):rowH[e+1]):0;
       let need=h+kp+(chunk?0:m.headH);
       if(i===e&&!kp&&used>0&&used+need>CONTENT_H){
         const room=CONTENT_H-used-(chunk?0:m.headH);
-        if(room>=90&&rowSplittable(rows[i])){
+        if(room>=60&&rowSplittable(rows[i])){
           const sp=splitRowFit(b,rows[i],room,M);
           if(sp){rows.splice(i,1,sp[0].row,sp[1].row);rowH.splice(i,1,sp[0].h,sp[1].h);h=rowH[i];need=h+(chunk?0:m.headH)}
         }
@@ -936,10 +951,12 @@ async function geminiCheck(r){
   else e.message=msg||('Erreur du service de rédaction ('+r.status+')');
   throw e;
 }
+const LIVE=new Set();
+function abortAllFetches(){LIVE.forEach(c=>{try{c.abort()}catch(e){}});LIVE.clear()}
 function geminiFetch(url,options,timeoutMs){
-  const controller=new AbortController();
+  const controller=new AbortController();LIVE.add(controller);
   const timer=setTimeout(()=>controller.abort(),timeoutMs||12000);
-  return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>clearTimeout(timer));
+  return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>{clearTimeout(timer);LIVE.delete(controller)});
 }
 function gBase(){return String((usingProxy()&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
 function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};if(key&&key!=='proxy')h['x-goog-api-key']=key;return h}
@@ -963,6 +980,7 @@ async function geminiModel(){
   DB.ai.model=pick; save(); return pick;
 }
 function geminiWait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+const GEMLOG=[];function glog(m){GEMLOG.push(new Date().toLocaleTimeString('fr-FR')+' '+m);if(GEMLOG.length>60)GEMLOG.shift()}
 const GEM={klast:{},gap:1800,hot:{},dead:{},good:'',list:null,listAt:0};
 function retryDelayOf(e){
   const m=/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(e&&e.raw||'')||/retry in (\d+(?:\.\d+)?)s/i.exec(e&&e.message||'');
@@ -1020,7 +1038,7 @@ async function geminiJson(prompt,opts){
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
-  const order=()=>{const k=GEM.good&&keys.includes(GEM.good)?[GEM.good,...keys.filter(x=>x!==GEM.good)]:keys.slice();const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
+  const order=()=>{const st=(GEM.rr=((GEM.rr||0)+1))%keys.length;const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];for(const m of models)for(const key of k)c.push([key,m]);return c};
   for(let round=0;round<(isTest?1:(fast?2:7));round++){
     let soonest=0;
     for(const [key,model] of order()){
@@ -1034,6 +1052,7 @@ async function geminiJson(prompt,opts){
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
           body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.7,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
       }catch(e){
+        if(e&&e.name==='AbortError'&&stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;
           if(++tmo>=3&&!isTest) throw {code:'network',message:'Le réseau est trop lent ou instable : le service ne répond pas (3 tentatives sans réponse). Ce qui est déjà rédigé est conservé. Vérifiez votre connexion (Wi-Fi ou données), puis recliquez.'};
           continue}
@@ -1045,7 +1064,7 @@ async function geminiJson(prompt,opts){
         if(e.code==='rate_limited'){
           const perDay=/PerDay|per day|daily/i.test(e.raw||'')||/limit:\s*0\b/.test(e.raw||'');
           const d=retryDelayOf(e)||65;
-          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;
+          GEM.hot[hk]=Date.now()+(perDay?6*3600e3:(d+2)*1000);GEM.day=GEM.day||{};GEM.day[hk]=perDay;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint');
           continue;                      // clé ou modèle suivant, sans attendre
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
@@ -1053,6 +1072,7 @@ async function geminiJson(prompt,opts){
         if(e.code==='model_gone'){GEM.dead[model]=Date.now()+24*3600e3;continue}
         throw e;
       }
+      glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : réponse en '+Math.round((Date.now()-t0)/1000)+' s');
       GEM.good=key; if(GEM.bz) GEM.bz[hk]=0; if(DB.ai.model!==model){DB.ai.model=model;save()}
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
@@ -1062,7 +1082,7 @@ async function geminiJson(prompt,opts){
     if(redo){redo=false;round--;continue}
     if(isTest) break;
     // toutes les clés et tous les modèles sont momentanément limités : pause automatique puis reprise
-    if(!soonest||++waits>(fast?1:12)) break;
+    if(!soonest||++waits>(fast?1:3)) break;
     if(soonest>(fast?25:180)) break;               // quota du jour épuisé partout
     await gemPause(Math.min(75,Math.max(5,soonest)),lastError&&lastError.code==='service_busy'?'Les serveurs de Google sont surchargés en ce moment (ce n’est pas un problème de clé).':'Les '+(keys.length>1?keys.length+' clés sont':'quotas sont')+' momentanément limité'+(keys.length>1?'e':'')+'s.');
   }
@@ -1698,7 +1718,7 @@ const CONTEXTES=['un atelier de couture à Tsévié','un chantier de constructio
 function ctxSuggest(f,i){let h=0;const t=String(f.titre||f.theme||'');for(let k=0;k<t.length;k++)h=(h*31+t.charCodeAt(k))>>>0;return CONTEXTES[(h+i*7)%CONTEXTES.length]}
 const SIT_PROGRESS='PROGRESSION (règle n°2) : regarde « numeroSeance » et « acquisAnterieurs ». SÉANCE 1 : la situation s’appuie sur des acquis des classes antérieures ou des leçons précédentes (choisis-en un ou deux dans acquisAnterieurs, ceux qui servent le mieux la capacité) pour faire construire la première notion de la leçon. SÉANCES SUIVANTES : elle s’appuie, chaque fois que c’est possible, sur ce qui vient d’être vu aux séances précédentes de la même leçon (seancesPrecedentes : leurs capacités et contenus), en plus des acquis antérieurs. Tu ne mobilises JAMAIS une notion qui n’a été vue ni dans acquisAnterieurs, ni aux séances précédentes, ni dans la séance du jour. MATÉRIEL SIMPLE (règle n°3) : la situation ne repose que sur ce que des élèves peuvent lire, mesurer ou constater eux-mêmes : étiquette, facture, plaque signalétique, notice, schéma, objet du quotidien, mesure à la règle. N’invente jamais l’observation de particules, d’atomes, d’ions ou de charges, ni une expérience compliquée. Exemple pour les ions : une étiquette d’eau minérale ou d’engrais portant des symboles comme Ca²⁺, Cl⁻ ou NO₃⁻, et la question demande le nom et le type de chacun (n’en tire rien si la leçon est différente).';
 const SIT_RECIPE='ANCRAGE (règle n°1) : le tableau du programme a deux colonnes, les CAPACITÉS (à gauche) et les CONTENUS (à droite). La situation est construite à partir des DEUX : passe en revue chaque contenu de « contenusDeLaSeance » ; les données et la question doivent amener les élèves à rencontrer TOUS ces contenus (aucun oublié, aucun ajouté), et la question finale doit être celle dont la réponse demande la capacité visée sans la nommer, ni nommer les contenus ; elle découle directement de la phrase écrite (mêmes objets, mêmes données) et ne porte jamais sur autre chose. RECETTE DE LA SITUATION : (1) un personnage réel du quotidien togolais (prénom varié) qui a un BESOIN ou une DÉCISION à prendre (acheter, partager, construire, réparer, comparer deux offres, vérifier un compte, mesurer un terrain…) ; (2) des données plausibles pour le Togo (prix en FCFA réalistes, mesures et distances vraisemblables, nombres simples) ; (3) une question ouverte qui oblige à calculer, mesurer, comparer ou conjecturer avec les seuls prérequis, sans nommer la notion. CADRE : utilise celui de « contexteSuggere » (change-le seulement s’il est incompatible avec la leçon) ; ne reprends ni le cadre, ni le personnage, ni le type de question des « situationsDejaEcrites » ; évite le marché de Lomé et Kpalimé s’ils ne sont pas proposés. À ÉVITER : l’exercice déguisé (« Un commerçant a 5 sacs… Calcule… »), les données inventées sans raison, une question dont la réponse est évidente ou qu’on ne se poserait jamais dans la vie, une consigne qui donne déjà la méthode. VÉRIFIE avant de répondre : un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? toutes les données sont-elles dans le texte ? la situation fait-elle sentir le besoin de la notion ? le nombre de mots est-il respecté ?';
-const SIT_INTENT='"intention": en une phrase (non affichée), ce que les élèves vont observer, mesurer, comparer ou constater dans la situation et qui les mènera à la notion de la séance ;\n';
+const SIT_INTENT='"analyse": (non affichée, À RÉDIGER EN PREMIER) en 2 à 3 phrases : (1) ce que la capacité et les contenus de CETTE séance font apprendre de nouveau ; (2) les notions déjà connues des élèves (acquis antérieurs, classes précédentes, séances précédentes de la leçon) qui permettent d’introduire cette notion, et seulement celles-là ; (3) la donnée ou la question qui fera le lien entre ces notions connues et la notion nouvelle ;\n"intention": en une phrase (non affichée), ce que les élèves vont observer, mesurer, comparer ou constater dans la situation et qui les mènera à la notion de la séance ;\n';
 const SIT_VERIFY=false;
 async function verifySituation(f,s,d,extra){
   if(!SIT_VERIFY) return null;
@@ -1711,6 +1731,16 @@ ${extra||''}
 Juge STRICTEMENT : (1) la question finale découle-t-elle directement des données et du contexte écrits dans la situation ? (2) toutes les données nécessaires pour répondre figurent-elles dans le texte ? (3) répondre à la question demande-t-il réellement la capacité visée (et non une autre notion), et la situation fait-elle rencontrer CHACUN des contenus listés, sans en omettre ni en ajouter ? (4) la situation évite-t-elle de donner la notion ou le vocabulaire du cours ? (5) les valeurs et les faits (physique, chimie, technologie, calcul) sont-ils exacts et plausibles ? (6) un élève de ce niveau peut-il commencer à chercher avec ses seuls prérequis ? (7) la situation s’appuie-t-elle uniquement sur des notions réellement antérieures (acquis antérieurs ou séances précédentes de la leçon), et, s’il s’agit de la séance 1, sur des acquis antérieurs à la leçon ? (8) le matériel est-il simple et observable par des élèves (étiquette, facture, plaque, mesure…), sans observation de particules ni expérience irréaliste ?
 Réponds uniquement par {"ok":true,"probleme":""} si tout est satisfaisant, sinon {"ok":false,"probleme":"le défaut précis, en une phrase"}.`;
   return await ask(p);
+}
+async function verifyCalculs(f,s,d,A){
+  const keys=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
+  const part={};keys.forEach(k=>{if(has(d[k])) part[k]=String(d[k])});
+  if(!Object.keys(part).length) return null;
+  const p=`Tu es professeur vérificateur (${discLabel(f)}, ${f.classe||'collège'}). Voici des éléments rédigés pour la séance « ${[s.capNum,s.capTitre].filter(has).join(' : ')} » (contenus : ${s.contenus}), au format JSON :
+${JSON.stringify(part)}
+Refais TOUS les calculs, vérifie chaque solution, chaque réponse, chaque formule, chaque unité et chaque définition. Vérifie aussi que les solutions répondent bien aux exercices posés et que les données d’un exercice suffisent pour le résoudre.
+Réponds uniquement par {"ok":true} si tout est exact. Sinon {"ok":false,"corriges":{"cle":"texte entièrement corrigé"}} en ne reprenant QUE les clés fautives (parmi : ${keys.join(', ')}), avec le même format (lignes séparées par \n, formules entre $…$) et en corrigeant l’erreur sans changer le sujet.`;
+  return await ask(p,{fast:true});
 }
 async function genSeanceContent(f,i,o){
   const s=f.seances[i],A=f.tpl==='A';
@@ -1754,6 +1784,16 @@ ${desc}`;
       d=await ask(prompt+'\nCORRECTION OBLIGATOIRE : une première version a été REJETÉE pour ce défaut : « '+v.probleme+' ». Réécris TOUTE la séance (situation, résolution, essentiel, exercices) en corrigeant ce défaut : la question doit découler de la phrase écrite, demander exactement la capacité de la séance et faire rencontrer tous ses contenus.');
     }
   }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
+  if(d&&typeof d==='object'){
+    try{
+      const v=await verifyCalculs(f,s,d,A);
+      if(v&&v.ok===false&&v.corriges&&typeof v.corriges==='object'){
+        const allowed=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
+        let n=0;for(const k of allowed) if(has(v.corriges[k])){d[k]=String(v.corriges[k]);n++}
+        if(n) setGen('Séance '+(i+1)+' : '+n+' élément(s) corrigé(s) après vérification des calculs.');
+      }
+    }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
+  }
   if(!d||typeof d!=='object') throw {code:'invalid_json',message:'La réponse de l’IA ne contient pas une séance exploitable.'};
   const required=A?['situation','synthese','essentiel','exoApp','exoMaison']:['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
   const missing=required.filter(k=>!has(d[k]));
@@ -1848,7 +1888,7 @@ async function generateAll(f,o){
     if(view==='fiche'){render2();lockGen(true)}
     rememberProgram(f);
     touch();
-    const conc=Math.max(1,Math.min(n,geminiKeys().length>1?3:2));
+    const nk=geminiKeys().length;const conc=Math.max(1,Math.min(n,nk>=5?4:nk>1?3:2));
     let next=0,done=0,fatal=null;
     const doOne=async i=>{
       let ok=false,last=null;
@@ -1874,7 +1914,7 @@ async function generateAll(f,o){
     if(!GEN.stop){
       setGen('Rédaction des exercices de synthèse de la leçon…');
       try{await genBilan(f,o);touch()}catch(e){if(e&&e.code==='cancelled') throw e; bilNote=' Les exercices de synthèse n’ont pas pu être rédigés (bouton « Rédiger les exercices de synthèse »).'}
-      if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets (bouton « Rédiger les exercices de synthèse »).';
+      if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets'+(GEN.bilWhy?' (motif : '+GEN.bilWhy+')':'')+' : cliquez sur « Rédiger les exercices de synthèse » pour compléter les manquants.';
     }
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
     else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Ouvrez cette séance à l’étape 3 et cliquez sur « Rédiger cette séance automatiquement » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
@@ -1911,14 +1951,33 @@ async function genBilan(f,o){
   '- "sp" : TROIS situations-problèmes différentes et progressives, chacune avec un contexte concret local et des consignes numérotées qui font mobiliser plusieurs séances de la leçon. La solution de chacune est une résolution détaillée et rédigée.\n'+
   'Chaque énoncé commence par son titre (« Exercice 1 : … », « Exercice 2 : … », « Situation-problème 1 », etc.) en **gras**. Écris les solutions complètes et exactes. '+(f.tpl==='B'?'DISCIPLINE EXPÉRIMENTALE (physique, chimie, technologie) : les cinq exercices sont OBLIGATOIRES, comme en mathématiques. « vf » : 6 affirmations vrai/faux sur les notions, grandeurs, unités, appareils et règles de sécurité de la leçon. « mix » : 2 questions directes (définition, formule, unité ou appareil), 3 phrases à compléter avec les mots-clés de la leçon, puis 4 éléments à relier par des flèches (grandeurs, unités, appareils ou symboles). Les trois situations-problèmes s’appuient sur une expérience, un montage, des mesures ou un objet technique du quotidien (appareil électrique, facture, ustensile, réaction courante…) avec des données chiffrées ; les questions demandent de calculer (formule, application numérique et unité), d’interpréter, de légender ou de schématiser un montage décrit par écrit. Les solutions donnent les formules, les calculs et les unités. ':'')+LATEX_RULE;
   const tx=v=>Array.isArray(v)?v.map(tx).join('\n'):(v&&typeof v==='object')?Object.values(v).map(tx).join('\n'):String(v==null?'':v);
-  const complete=()=>bl.every(x=>has(x.q)&&has(x.s));
   const over=!!(o&&o.overwrite);
-  for(let attempt=1;attempt<=2&&!complete();attempt++){
-    const d=await ask(attempt===1?prompt:prompt+'\nATTENTION : la réponse précédente était incomplète. Renvoie les CINQ éléments (vf, mix et les trois situations-problèmes de « sp »), chacun avec « q » (énoncé) ET « s » (solution) en texte.');
-    const put=(k,v)=>{if(!v||typeof v!=='object') return; const q=tx(v.q!==undefined?v.q:(v.enonce!==undefined?v.enonce:v.question)),s=tx(v.s!==undefined?v.s:(v.solution!==undefined?v.solution:v.reponse));
-      if(has(q)&&(over&&attempt===1||!has(bl[k].q))) bl[k].q=q; if(has(s)&&(over&&attempt===1||!has(bl[k].s))) bl[k].s=s};
-    put(0,d&&d.vf);put(1,d&&d.mix);((d&&d.sp)||[]).slice(0,3).forEach((v,k)=>put(2+k,v));
-  }
+  if(over) bl.forEach(x=>{x.q='';x.s=''});
+  const parts=[
+    {k:0,t:'Rédige UNIQUEMENT l’exercice « vf » (Vrai ou faux). Réponds par {"vf":{"q":"…","s":"…"}} et rien d’autre.'},
+    {k:1,t:'Rédige UNIQUEMENT l’exercice « mix » (questions directes, phrases à compléter, relier par des flèches). Réponds par {"mix":{"q":"…","s":"…"}} et rien d’autre.'},
+    {k:2,t:'Rédige UNIQUEMENT la situation-problème n°1 (la plus simple des trois). Réponds par {"sp":[{"q":"…","s":"…"}]} et rien d’autre.'},
+    {k:3,t:'Rédige UNIQUEMENT la situation-problème n°2 (difficulté moyenne, sur d’autres séances que la n°1 si possible). Réponds par {"sp":[{"q":"…","s":"…"}]} et rien d’autre.'},
+    {k:4,t:'Rédige UNIQUEMENT la situation-problème n°3 (la plus complète, qui mobilise l’ensemble de la leçon). Réponds par {"sp":[{"q":"…","s":"…"}]} et rien d’autre.'}
+  ].filter(x=>over||!(has(bl[x.k].q)&&has(bl[x.k].s)));
+  let fatal=null,nx=0;
+  const doPart=async pt=>{
+    for(let attempt=1;attempt<=2&&!fatal&&!(has(bl[pt.k].q)&&has(bl[pt.k].s)&&attempt>1);attempt++){
+      try{
+        const d=await ask(prompt+'\n\nIMPORTANT : '+pt.t+(attempt>1?' La réponse précédente était incomplète : fournis « q » (énoncé) ET « s » (solution) en texte.':''));
+        const v=pt.k===0?d&&d.vf:pt.k===1?d&&d.mix:((d&&d.sp)||[])[0]||(d&&d.q?d:null);
+        if(!v||typeof v!=='object') continue;
+        const q=tx(v.q!==undefined?v.q:(v.enonce!==undefined?v.enonce:v.question)),sl=tx(v.s!==undefined?v.s:(v.solution!==undefined?v.solution:v.reponse));
+        if(has(q)) bl[pt.k].q=q; if(has(sl)) bl[pt.k].s=sl;
+        if(has(bl[pt.k].q)&&has(bl[pt.k].s)) return;
+      }catch(e){
+        if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'||e.code==='network')){fatal=e;return}
+      }
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(3,parts.length)},async()=>{while(nx<parts.length&&!fatal){await doPart(parts[nx++])}}));
+  if(fatal&&fatal.code==='cancelled') throw fatal;
+  GEN.bilWhy=fatal?String(fatal.message||fatal.code).slice(0,160):'';
   return bl.some(x=>has(x.q));
 }
 /* =========================================================
@@ -2658,7 +2717,7 @@ function stepSeances(f){
    <p class="muted small" style="margin:0 0 10px">À partir de la répartition des capacités (étape 2), l’application rédige pour chaque séance la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier.</p>
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
-   <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
+   <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${GEMLOG.length?'<details style="margin-top:8px"><summary class="muted small">Détails techniques (journal des requêtes)</summary><pre class="small" style="white-space:pre-wrap;margin:6px 0 0">'+esc(GEMLOG.slice(-25).join('\n'))+'</pre></details>':''}${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
   return `${gen}${toolbar()}<div class="row" style="margin-bottom:12px"><button class="btn alt sm" data-addseance="1">Ajouter une séance</button><span class="muted small">${f.seances.length} séance(s)</span></div>${body}${bilUI}${fin}`;
 }
 function stepApercu(f){
@@ -2848,7 +2907,7 @@ root.addEventListener('click',async e=>{
     return}
   if(b.id==='claudeClear'){DB.ai.ckey='';DB.ai.provider='';save();setGen('Clé Claude effacée.');render2();return}
   if(b.dataset&&b.dataset.clearguide){f.guide='';touch();render();return}
-  if(b.id==='stopGen'){GEN.stop=true;setGen('Arrêt en cours…');return}
+  if(b.id==='stopGen'){GEN.stop=true;setGen('Arrêt en cours…');abortAllFetches();return}
   if(b.id==='repartCaps'){
     if(f.seances.some(x=>has(x.situation))) askConfirm(b,'rep',()=>repartirCaps(f),'Les séances déjà rédigées ne correspondront plus à la nouvelle répartition (utilisez ensuite « Tout régénérer »). Continuer ?');
     else repartirCaps(f);
