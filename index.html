@@ -943,7 +943,7 @@ function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.on
 async function geminiCheck(r){
   if(r.ok) return r.json();
   let msg='',j=null; try{j=await r.json();msg=(j.error&&j.error.message)||''}catch(e){}
-  const e={code:'http_'+r.status,message:msg,raw:JSON.stringify(j||{})};
+  const e={code:'http_'+r.status,httpStatus:r.status,googleStatus:(j&&j.error&&j.error.status)||'',googleMessage:msg,raw:JSON.stringify(j||{})};
   if(r.status===400&&/api key/i.test(msg)) e.message='Clé invalide. Vérifiez qu’elle est copiée en entier dans les Réglages.';
   else if(r.status===403) e.message='Clé refusée ou service non autorisé dans votre compte. '+msg;
   else if(r.status===429) {
@@ -1097,7 +1097,7 @@ async function geminiJson(prompt,opts){
           if(Object.keys(busySeen).length>=busyLimit){
             keys.forEach((unused,n)=>{const idx=n+1;if(!GEM.keyStates[idx])GEM.keyStates[idx]='NON TESTÉE — arrêt après surcharge Google'});
             gemKeyState(0);
-            throw {code:'service_busy',message:'Google a répondu, mais son service de génération est temporairement surchargé ou indisponible. Le problème ne permet pas de conclure que vos clés sont invalides ou que leur quota journalier est épuisé. La rotation a été arrêtée après '+Object.keys(busySeen).length+' clés testées pour éviter des essais inutiles. Les autres clés sont indiquées comme non testées. Attendez 1 à 3 minutes, puis relancez : la fiche et les textes déjà rédigés sont conservés.'};
+            throw {code:'service_busy',httpStatus:e.httpStatus||0,googleStatus:e.googleStatus||'',googleMessage:e.googleMessage||e.message||'',raw:e.raw||'',message:'Google a répondu, mais son service de génération est temporairement surchargé ou indisponible. Le problème ne permet pas de conclure que vos clés sont invalides ou que leur quota journalier est épuisé. La rotation a été arrêtée après '+Object.keys(busySeen).length+' clés testées pour éviter des essais inutiles. Les autres clés sont indiquées comme non testées. Attendez 1 à 3 minutes, puis relancez : la fiche et les textes déjà rédigés sont conservés.'};
           }
           continue;
         }
@@ -2989,12 +2989,12 @@ root.addEventListener('click',async e=>{
         try{
           const r=await geminiFetch(gBase()+'/v1beta/models?pageSize=1',{headers:gHeaders(ks[i])},12000);
           const ms=Date.now()-t0;
-          let quota='';if(r.status===429){try{const jj=await r.clone().json();const raw=JSON.stringify(jj);quota=/PerDay|per day|daily|requests_per_day|generate_content_free_tier_requests_per_day/i.test(raw)?'⚠ quota journalier atteint':'⚠ limite temporaire/par minute atteinte';}catch(_){quota='⚠ limite 429 (quota à préciser)'}}L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':r.status===429?quota:r.status===400||r.status===403?'✖ clé refusée ('+r.status+')':'⚠ réponse '+r.status+' en '+ms+' ms'));
+          let detail='';if(!r.ok){try{const jj=await r.clone().json();const er=jj&&jj.error||{};detail=(er.status?er.status+' — ':'')+(er.message||'');}catch(_){}}L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':'⚠ HTTP '+r.status+(detail?' · '+detail.slice(0,220):'')+' ('+ms+' ms)'));
         }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)'))}
         put(L.join('\n')+'\nTest en cours…');
       }
       try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse avec la clé '+(((GEM.keyIndex||0)+1))+'/'+ks.length+(DB.ai.model?' · modèle '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
-      catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,200))}
+      catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,240));if(e&&e.httpStatus)L.push('Détail Google : HTTP '+e.httpStatus+(e.googleStatus?' · '+e.googleStatus:'')+(e.googleMessage?' · '+e.googleMessage:'').slice(0,320));else if(e&&e.raw)L.push('Détail technique Google : '+String(e.raw).slice(0,500));else if(e&&e.code)L.push('Code interne : '+e.code);}
       L.push('Conclusion : « clé joignable » confirme seulement que Google répond au test de connexion. Le test de rédaction vérifie séparément la génération. Une surcharge ou un délai de Google ne signifie ni clé invalide ni quota journalier épuisé.');
       put(L.join('\n'));b.disabled=false;
     })();
