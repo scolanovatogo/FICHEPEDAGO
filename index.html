@@ -1,4 +1,5 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light}body{margin:0;font-size:14px}[hidden]{display:none!important}img{max-width:100%}</style></head><body><title>Fiches pédagogiques</title>
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light}body{margin:0;font-size:14px}[hidden]{display:none!important}img{max-width:100%}.pbar{height:8px;border-radius:6px;background:#e5e7eb;overflow:hidden;margin:4px 0 6px}.pbar i{display:block;height:100%;background:#2e7d32;transition:width .4s}
+</style></head><body><title>Fiches pédagogiques</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Tinos:ital,wght@0,400;0,700;1,400;1,700&display=swap">
@@ -994,11 +995,13 @@ function pacificResetText(){
 }
 function gemAllDay(keys,models){const arr=[];for(const m of models||[])for(const k of keys)arr.push(k+'|'+m);return arr.length>0&&arr.every(h=>GEM.hot[h]>Date.now()&&GEM.day&&GEM.day[h])}
 async function gemPause(sec,why){
+  const mine={why:String(why||'').replace(/\s+$/,''),until:Date.now()+sec*1000};
   for(let t=sec;t>0;t--){
     if(GEN.stop) throw {code:'cancelled',message:'Arrêté.'};
-    setGen(why+' Reprise automatique dans '+t+' s… (ne fermez pas la page)');
+    if(GEN.prog){GEN.pause=mine;paintProg()}else setGen(why+' Reprise automatique dans '+t+' s… (ne fermez pas la page)');
     await geminiWait(1000);
   }
+  if(GEN.pause===mine) GEN.pause=null;
 }
 async function gemModels(key){
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
@@ -1319,6 +1322,25 @@ async function importFile(file){
   }catch(e){setGen(errCopy(e),true)}
   finally{ GEN.running=false; lockGen(false); render2(); }
 }
+function fmtT(ms){const t=Math.max(0,Math.round(ms/1000));return t<60?t+' s':Math.floor(t/60)+' min '+String(t%60).padStart(2,'0')+' s'}
+function paintProg(){
+  const els=document.querySelectorAll('.genprog');if(!els.length) return;
+  const P=GEN.prog;if(!P){els.forEach(e=>{e.innerHTML=''});return}
+  const n=P.items.length-1,done=P.items.slice(0,n).filter(x=>x.st==='ok').length,now=Date.now();
+  let h='<div class="pbar"><i style="width:'+Math.round(P.items.filter(x=>x.st==='ok').length/P.items.length*100)+'%"></i></div>'
+   +'<div class="small"><b>'+done+' séance(s) sur '+n+' rédigée(s)</b> · temps écoulé : '+fmtT(now-P.t0)+'</div>';
+  if(GEN.pause) h+='<div class="small" style="color:#b45309;margin-top:4px">⏸ Pause automatique : '+esc(GEN.pause.why)+' Reprise dans '+Math.max(0,Math.ceil((GEN.pause.until-now)/1000))+' s.</div>';
+  h+=P.items.map((x,i)=>{
+    const name=i<n?'Séance '+(i+1):'Exercices de synthèse';
+    const st=x.st==='ok'?'✔ terminée ('+fmtT(x.dt||0)+')':x.st==='fail'?'✖ non rédigée':x.st==='run'?'⏳ en cours : '+esc(x.step||'rédaction')+' ('+fmtT(now-x.t0)+')':'○ en attente';
+    return '<div class="small">'+name+' — '+st+'</div>'}).join('');
+  els.forEach(e=>{e.innerHTML=h});
+}
+function pstart(i){const P=GEN.prog;if(P&&P.items[i]){P.items[i].st='run';P.items[i].t0=Date.now();P.items[i].step='rédaction du contenu';paintProg()}}
+function pstep(i,t){const P=GEN.prog;if(P&&P.items[i]){P.items[i].step=t;paintProg()}}
+function pend(i,ok){const P=GEN.prog;if(P&&P.items[i]){P.items[i].st=ok?'ok':'fail';P.items[i].dt=Date.now()-(P.items[i].t0||Date.now());paintProg()}}
+function pbegin(n){GEN.prog={t0:Date.now(),items:Array.from({length:n+1},()=>({st:'wait'}))};GEN.pause=null;clearInterval(GEN.ptimer);GEN.ptimer=setInterval(paintProg,1000);paintProg()}
+function pfinish(){clearInterval(GEN.ptimer);GEN.ptimer=null;GEN.pause=null;paintProg();GEN.prog=null;setTimeout(paintProg,0)}
 function lockGen(on){document.querySelectorAll('[data-lock]').forEach(b=>{b.disabled=on})}
 /* ---------- plan et rédaction des séances ---------- */
 const capsText=f=>f.capacites.map((c,i)=>(i+1)+'. '+c.cap+' — '+c.contenus.replace(/\n/g,' ')).join('\n');
@@ -1786,6 +1808,7 @@ ${desc}`;
   }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal')) throw e }
   if(d&&typeof d==='object'){
     try{
+      pstep(i,'vérification des calculs');
       const v=await verifyCalculs(f,s,d,A);
       if(v&&v.ok===false&&v.corriges&&typeof v.corriges==='object'){
         const allowed=A?['synthese','essentiel','exoApp','exoMaison']:['resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
@@ -1808,6 +1831,7 @@ ${desc}`;
   else{put(s.m.prereq,'prof',d.prereqProf);put(s.m.prereq,'eleve',d.prereqEleve);put(s,'consignes',d.consignes);put(s,'resolution',d.resolution);put(s,'trace',d.trace);put(s,'exoApp',d.exoApp);put(s,'exoAppSol',d.exoAppSol);put(s,'evalQ',d.evalQ);put(s,'evalR',d.evalR);put(s,'exoMaison',d.exoMaison);put(s,'exoMaisonSol',d.exoMaisonSol)}
   let axisDone=false;
   if(needsAxis(f,s)&&(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))){
+    pstep(i,'tracé de la figure');
     try{const ims=await genCourseFigures(f,i); if(ims.length){s.figs=ims;axisDone=true}}
     catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
   }
@@ -1890,32 +1914,34 @@ async function generateAll(f,o){
     touch();
     const nk=geminiKeys().length;const conc=Math.max(1,Math.min(n,nk>=5?4:nk>1?3:2));
     let next=0,done=0,fatal=null;
+    pbegin(n);
     const doOne=async i=>{
-      let ok=false,last=null;
+      let ok=false,last=null;pstart(i);
       for(let attempt=1;attempt<=2&&!ok&&!fatal&&!GEN.stop;attempt++){
         try{await genSeanceContent(f,i,o);touch();ok=true}
         catch(e){last=e;if(e&&(e.code==='rate_limited'||e.code==='cancelled'||e.code==='service_busy'||e.code==='not_granted'||e.code==='network'||e.code==='fatal'||/^http_4/.test(e.code||'')))break;
           if(attempt<2){await geminiWait(900)}
         }
       }
-      done++;
-      if(ok){setGen('Séances rédigées : '+done+' sur '+n+'…');return}
+      done++;pend(i,ok);
+      if(ok) return;
       if(GEN.stop&&!last) return;
       failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':'');
       if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')&&!fatal) fatal=last;
     };
-    setGen('Rédaction des séances (plusieurs à la fois) : 0 sur '+n+'…');
+    setGen('Rédaction des séances en cours : le détail s’affiche ci-dessous.');
     await Promise.all(Array.from({length:conc},async()=>{
       while(next<n&&!fatal&&!GEN.stop){const i=next++;await doOne(i)}
     }));
-    if(fatal) throw fatal;
+    if(fatal){pfinish();throw fatal}
     if(GEN.stop){setGen('Arrêté après '+done+' séance(s). Ce qui est rédigé est conservé.')}
     let bilNote='';
     if(!GEN.stop){
-      setGen('Rédaction des exercices de synthèse de la leçon…');
+      setGen('Rédaction des exercices de synthèse de la leçon…');pstart(n);
       try{await genBilan(f,o);touch()}catch(e){if(e&&e.code==='cancelled') throw e; bilNote=' Les exercices de synthèse n’ont pas pu être rédigés (bouton « Rédiger les exercices de synthèse »).'}
       if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets'+(GEN.bilWhy?' (motif : '+GEN.bilWhy+')':'')+' : cliquez sur « Rédiger les exercices de synthèse » pour compléter les manquants.';
     }
+    pend(n,ensureBilan(f).every(x=>has(x.q)&&has(x.s)));pfinish();
     if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
     else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Ouvrez cette séance à l’étape 3 et cliquez sur « Rédiger cette séance automatiquement » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
     if(!GEN.stop){step=3;openSeances=new Set([0])}
@@ -2717,6 +2743,8 @@ function stepSeances(f){
    <p class="muted small" style="margin:0 0 10px">À partir de la répartition des capacités (étape 2), l’application rédige pour chaque séance la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier.</p>
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
+   <div class="genprog" style="margin-top:8px"></div>
+   ${aiKind()==='gemini'?'<div style="margin-top:8px"><button class="btn sm alt" id="netTest">Tester ma connexion et mes clés</button><div id="nettest" class="small" style="margin-top:6px;white-space:pre-wrap"></div></div>':''}
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${GEMLOG.length?'<details style="margin-top:8px"><summary class="muted small">Détails techniques (journal des requêtes)</summary><pre class="small" style="white-space:pre-wrap;margin:6px 0 0">'+esc(GEMLOG.slice(-25).join('\n'))+'</pre></details>':''}${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
   return `${gen}${toolbar()}<div class="row" style="margin-bottom:12px"><button class="btn alt sm" data-addseance="1">Ajouter une séance</button><span class="muted small">${f.seances.length} séance(s)</span></div>${body}${bilUI}${fin}`;
 }
@@ -2907,6 +2935,27 @@ root.addEventListener('click',async e=>{
     return}
   if(b.id==='claudeClear'){DB.ai.ckey='';DB.ai.provider='';save();setGen('Clé Claude effacée.');render2();return}
   if(b.dataset&&b.dataset.clearguide){f.guide='';touch();render();return}
+  if(b.id==='netTest'){
+    const out=document.getElementById('nettest');const put=t=>{if(out)out.textContent=t};
+    b.disabled=true;put('Test en cours…');
+    (async()=>{
+      const ks=geminiKeys(),L=[];
+      if(typeof navigator!=='undefined'&&navigator.onLine===false){put('✖ Pas de connexion Internet sur cet appareil.');b.disabled=false;return}
+      for(let i=0;i<ks.length;i++){
+        const t0=Date.now();
+        try{
+          const r=await geminiFetch(gBase()+'/v1beta/models?pageSize=1',{headers:gHeaders(ks[i])},12000);
+          const ms=Date.now()-t0;
+          L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':r.status===429?'⚠ quota atteint (la clé fonctionne mais doit patienter)':r.status===400||r.status===403?'✖ clé refusée ('+r.status+')':'⚠ réponse '+r.status+' en '+ms+' ms'));
+        }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)'))}
+        put(L.join('\n')+'\nTest en cours…');
+      }
+      try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse du modèle'+(DB.ai.model?' '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
+      catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,200))}
+      L.push('Conclusion : si les clés sont joignables en moins d’une seconde ou deux, votre réseau est bon ; une longue attente vient alors de la rédaction par Google, pas de la connexion.');
+      put(L.join('\n'));b.disabled=false;
+    })();
+    return}
   if(b.id==='stopGen'){GEN.stop=true;setGen('Arrêt en cours…');abortAllFetches();return}
   if(b.id==='repartCaps'){
     if(f.seances.some(x=>has(x.situation))) askConfirm(b,'rep',()=>repartirCaps(f),'Les séances déjà rédigées ne correspondront plus à la nouvelle répartition (utilisez ensuite « Tout régénérer »). Continuer ?');
