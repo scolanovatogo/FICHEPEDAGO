@@ -1030,7 +1030,7 @@ async function gemModels(key){
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   const available=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
   if(saved&&available.includes(saved)) glog('modèle enregistré '+saved+' : le catalogue actuel est privilégié pour éviter un modèle lent ou indisponible');
-  return available.slice(0,7);
+  return available.slice(0,3);
 }
 function fixJsonText(t){
   return String(t)
@@ -1067,7 +1067,7 @@ async function geminiJson(prompt,opts){
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
-  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];/* Priorité : tester le même modèle sur chaque projet avant de changer de modèle. */for(const m of models)for(const key of k)c.push([key,m]);return c};
+  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const rotated=[...keys.slice(st),...keys.slice(0,st)];const k=rotated.slice(0,Math.min(5,rotated.length));const c=[];/* Rotation limitée : cinq clés au maximum par modèle, puis changement de modèle. */for(const m of models.slice(0,3))for(const key of k)c.push([key,m]);return c};
   for(let round=0;isTest?round<1:true;round++){
     let soonest=0;
     for(const [key,model] of order()){
@@ -1083,7 +1083,7 @@ async function geminiJson(prompt,opts){
       glog('utilisation de la clé '+keyNo+'/'+keys.length+' · '+model);
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?30000:60000));
       }catch(e){
         if(e&&e.name==='AbortError'&&stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='NE RÉPOND PAS (délai dépassé)';gemKeyState(keyNo);
@@ -1106,7 +1106,7 @@ async function geminiJson(prompt,opts){
           GEM.keyStates[keyNo]=perDay?'QUOTA JOURNALIER ATTEINT':'LIMITE TEMPORAIRE / PAR MINUTE';gemKeyState(keyNo);
           const d=retryDelayOf(e)||65;
           /* Respecter le délai exact communiqué par Google. Pour un quota journalier sans délai exploitable, réessayer dans 24 h. */GEM.hot[hk]=Date.now()+(perDay?(d||24*3600)+2:(d+2))*1000;GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
-          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,7)}catch(_){}}
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,3)}catch(_){}}
           continue;                      // même demande, clé suivante sans recommencer la séance
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
@@ -1114,9 +1114,9 @@ async function geminiJson(prompt,opts){
           GEM.keyStates[keyNo]='SERVEURS GOOGLE SURCHARGÉS (incident temporaire)';gemKeyState(keyNo);
           busySeen[key]=true;
           GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;
-          GEM.hot[hk]=Date.now()+Math.min(45,8*nb)*1000;
+          GEM.hot[hk]=Date.now()+Math.min(45,8*nb)*1000;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;
           glog('Google indisponible · clé '+keyNo+'/'+keys.length+' · '+model+' · nouvelle tentative limitée');
-          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model&&!(GEM.dead[n]>Date.now()))].slice(0,7)}catch(_){}
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model&&!(GEM.dead[n]>Date.now()))].slice(0,3)}catch(_){}
             if(models.length>1){glog('modèle '+model+' surchargé : essai des autres modèles');redo=true;break}}
           // Continuer la rotation : les clés peuvent appartenir à des projets Google distincts.
           // Une surcharge sur quelques clés ne prouve pas que les autres projets sont indisponibles.
@@ -1135,7 +1135,7 @@ async function geminiJson(prompt,opts){
           if(DB.ai.model===model){DB.ai.model='';save()}
           try{
             if(!GEM.list||!GEM.list.length||models.length<=1){const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now()}
-            models=(GEM.list||[]).filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7);
+            models=(GEM.list||[]).filter(n=>!(GEM.dead[n]>Date.now())).slice(0,3);
           }catch(_){models=models.filter(n=>n!==model)}
           if(!models.length) throw {code:'model_gone',message:'Aucun modèle Google n’est disponible pour vos clés pour le moment. Réessayez plus tard.'};
           redo=true;break;
@@ -2020,7 +2020,7 @@ async function generateAll(f,o){
     for(const i of todo){
       if(GEN.stop) break;
       pstart(i);let ok=false,last=null;
-      for(let attempt=1;attempt<=4&&!ok&&!GEN.stop;attempt++){
+      for(let attempt=1;attempt<=3&&!ok&&!GEN.stop;attempt++){
         try{
           await genSeanceContent(f,i,{overwrite:false});
           ok=complete(f.seances[i]);
@@ -2030,10 +2030,10 @@ async function generateAll(f,o){
           last=e;
           if(e&&e.code==='cancelled') break;
           const transient=e&&['service_busy','network','timeout','rate_limited'].includes(e.code);
-          if(!transient||attempt===4||GEN.stop) break;
-          const wait=e.code==='rate_limited'?60000:Math.min(60000,10000*Math.pow(2,attempt-1));
+          if(!transient||attempt===3||GEN.stop) break;
+          const wait=e.code==='rate_limited'?60000:Math.min(60000,15000*Math.pow(2,attempt-1));
           f.genJob.status='paused';f.genJob.lastError=String(e.message||e.code||'Erreur');f.genJob.updated=Date.now();saveNow();
-          setGen('Séance '+(i+1)+' : service temporairement indisponible. Nouvelle tentative dans '+Math.round(wait/1000)+' s (tentative '+attempt+'/5)…');
+          setGen('Séance '+(i+1)+' : service temporairement indisponible. Nouvelle tentative dans '+Math.round(wait/1000)+' s (tentative '+attempt+'/3)…');
           await geminiWait(wait);
         }
       }
