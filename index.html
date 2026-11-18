@@ -865,7 +865,7 @@ async function initSample(){
 let KP={open:false,skip:0};
 function keyPromptMaybe(e){
   const c=e&&e.code; if(KP.open) return;
-  if(c==='rate_limited'){ if(aiKind()==='anthropic'||/Claude/.test(String(e.message||''))) return; if(Date.now()<KP.skip) return; setTimeout(()=>keyPrompt(/JOUR/.test(String(e.message||''))?'day':'minute'),0) }
+  if(c==='rate_limited'){ if(aiKind()==='anthropic'||aiKind()==='openrouter'||aiKind()==='groq'||/Claude/.test(String(e.message||''))) return; if(Date.now()<KP.skip) return; setTimeout(()=>keyPrompt(/JOUR/.test(String(e.message||''))?'day':'minute'),0) }
   else if(c==='no_ai'){ setTimeout(()=>keyPrompt('none'),0) }
 }
 function keyPrompt(why){
@@ -936,9 +936,9 @@ function ownKeys(){const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return
 function maskKey(k){k=String(k||'');return k.length<=10?'••••••••':k.slice(0,4)+'••••••••••••'+k.slice(-4)}
 function usingProxy(){return !!(DB.ai&&String(DB.ai.proxy||'').trim())&&!ownKeys().length}
 function geminiKeys(){return usingProxy()?['proxy']:ownKeys()}
-function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
+function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; if(compatKey('openrouter')) return 'openrouter'; if(compatKey('groq')) return 'groq'; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
-  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',claude:'Claude'}[k];
+  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',openrouter:'OpenRouter (modèles gratuits)',groq:'Groq (gratuit)',claude:'Claude'}[k];
   return 'Lecture du document : locale (PDF avec texte, photo par reconnaissance de texte)'+(k==='gemini'?' + lecture assistée':nm?' + '+nm:'')+' · Rédaction des séances : '+(nm||(k==='free'?'service gratuit sans compte (expérimental)':'désactivée (voir Réglages)'));
 }
 function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=()=>rej(new Error('Lecture du fichier impossible'));r.onload=()=>res(String(r.result).split(',')[1]);r.readAsDataURL(b)})}
@@ -1258,6 +1258,101 @@ async function anthropicJson(prompt,opts){
   }
   throw lastErr||{code:'service_busy',message:'Claude est momentanément indisponible. Réessayez dans quelques minutes.'};
 }
+/* ---------- OpenRouter et Groq (API compatible OpenAI, appel direct depuis le navigateur) ---------- */
+const COMPAT={
+  openrouter:{nom:'OpenRouter',url:'https://openrouter.ai/api/v1',pref:[],extraHeaders:{'HTTP-Referer':'https://scolanovatogo.github.io','X-Title':'Fiches pédagogiques'}},
+  groq:{nom:'Groq',url:'https://api.groq.com/openai/v1',pref:['llama-3.3-70b-versatile','openai/gpt-oss-120b','openai/gpt-oss-20b','llama-3.1-8b-instant'],extraHeaders:{}}
+};
+const CMP={models:{},noJson:{},dead:{}};
+function compatCfg(pv){DB.ai.compat=DB.ai.compat||{};return DB.ai.compat[pv]=DB.ai.compat[pv]||{key:'',model:''}}
+function compatKey(pv){return String((DB.ai&&DB.ai.compat&&DB.ai.compat[pv]&&DB.ai.compat[pv].key)||'').trim()}
+async function compatCheck(r,pv,model){
+  if(r.ok) return r.json();
+  let raw='',msg='';
+  try{raw=await r.text();const j=JSON.parse(raw);msg=(j.error&&(j.error.message||(typeof j.error==='string'?j.error:'')))||j.message||''}catch(e){}
+  const nm=COMPAT[pv].nom,e={code:'http_'+r.status,raw,message:msg||('Erreur '+nm+' ('+r.status+')'),status:r.status};
+  if(r.status===401) {e.code='fatal';e.message='Clé '+nm+' invalide ou supprimée. Vérifiez qu’elle est copiée en entier dans Réglages.'}
+  else if(r.status===402) {e.code='fatal';e.message='Ce modèle demande des crédits sur votre compte '+nm+'. Utilisez un modèle gratuit (nom finissant par :free sur OpenRouter).'}
+  else if(r.status===403) {e.code='fatal';e.message='Accès refusé par '+nm+'. '+msg}
+  else if(r.status===404||r.status===400&&/model/i.test(msg)&&/not found|not exist|decommission|no endpoints|unavailable|deprecated/i.test(msg)) {e.code='model_gone';e.message='Le modèle « '+model+' » n’est pas disponible. '+msg}
+  else if(r.status===413) {e.code='too_big';e.message='La demande est trop volumineuse pour l’offre gratuite de '+nm+' (limite de jetons par minute). Essayez un autre modèle dans Réglages.'}
+  else if(r.status===429) {e.code='rate_limited';e.message='Limite gratuite de '+nm+' atteinte ('+(pv==='openrouter'?'environ 20 requêtes par minute et 50 par jour pour tout le compte':'limite par minute ou par jour')+'). Patientez puis recommencez : ce qui est déjà rédigé est conservé.';const ra=+r.headers.get('retry-after');if(ra>0)e.retryAfter=ra}
+  else if(r.status>=500) {e.code='service_busy';e.message='Les serveurs de '+nm+' sont momentanément surchargés (erreur '+r.status+').'}
+  throw e;
+}
+async function compatModels(pv){
+  const cfg=compatCfg(pv),user=String(cfg.model||'').trim();
+  if(user) return [user];
+  if(CMP.models[pv]&&CMP.models[pv].length) return CMP.models[pv].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
+  let list=[];
+  try{
+    if(pv==='openrouter'){
+      const r=await geminiFetch(COMPAT[pv].url+'/models',{},15000);const j=r.ok?await r.json():{data:[]};
+      list=(j.data||[]).filter(m=>/:free$/.test(m.id)&&!/vision|image|audio|embed|moderat|guard/i.test(m.id+' '+((m.architecture||{}).modality||''))&&((m.architecture||{}).output_modalities||['text']).join().includes('text'))
+        .sort((a,b)=>(b.context_length||0)-(a.context_length||0)||String(a.id).localeCompare(b.id)).map(m=>m.id);
+      // Modèles généralistes d’abord (meilleure rédaction en français), puis les autres par taille de contexte.
+      const fav=/llama-3\.3-70b|gpt-oss-120b|gemma-3|qwen3?-(?:next|235|72|32)|deepseek|mistral|glm|kimi|nemotron/i;
+      list=[...list.filter(x=>fav.test(x)),...list.filter(x=>!fav.test(x))];
+    }else{
+      const r=await geminiFetch(COMPAT[pv].url+'/models',{headers:{Authorization:'Bearer '+compatKey(pv)}},15000);const j=r.ok?await r.json():{data:[]};
+      const ids=(j.data||[]).map(m=>m.id).filter(id=>!/whisper|tts|guard|embed|playai|orpheus|distil/i.test(id));
+      list=[...COMPAT[pv].pref.filter(x=>ids.includes(x)),...ids.filter(x=>!COMPAT[pv].pref.includes(x))];
+    }
+  }catch(_){}
+  if(!list.length) list=pv==='groq'?COMPAT.groq.pref.slice():['meta-llama/llama-3.3-70b-instruct:free'];
+  CMP.models[pv]=list.slice(0,6);
+  return CMP.models[pv].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
+}
+async function compatJson(pv,prompt,opts){
+  opts=opts||{};
+  const cfg=compatCfg(pv),key=compatKey(pv),nm=COMPAT[pv].nom;
+  if(!key) throw {code:'no_ai',message:NO_AI};
+  if(typeof navigator!=='undefined'&&navigator.onLine===false) throw {code:'network',message:'Pas de connexion Internet : activez le Wi-Fi ou les données mobiles, puis réessayez.'};
+  let models=await compatModels(pv);
+  if(!models.length){CMP.models[pv]=null;CMP.dead={};models=await compatModels(pv)}
+  const stopped=()=>GEN.stop||(opts.cancel&&opts.cancel.stop);
+  let lastErr=null,paused=false,tmo=0,badJ=0;
+  for(let mi=0;mi<models.length;mi++){
+    const model=models[mi];
+    for(let attempt=0;attempt<2;attempt++){
+      if(stopped()&&!opts.test) throw {code:'cancelled',message:'Arrêté.'};
+      const useJson=!CMP.noJson[pv+'|'+model];
+      const body={model,messages:[{role:'system',content:'Tu es un conseiller pédagogique expert. Tu réponds uniquement par un objet JSON valide, sans texte autour ni balises de code.'},{role:'user',content:prompt}],temperature:opts.temp||0.45,max_tokens:opts.test?64:8000};
+      if(useJson&&!opts.test) body.response_format={type:'json_object'};
+      glog(nm+' · '+model+(attempt?' (nouvelle tentative)':''));
+      GEN.keyLabel=nm+' · '+model;try{gemKeyActive(1,1,model)}catch(_){}
+      let r;
+      try{
+        r=await geminiFetch(COMPAT[pv].url+'/chat/completions',{method:'POST',headers:Object.assign({'Content-Type':'application/json',Authorization:'Bearer '+key},COMPAT[pv].extraHeaders),body:JSON.stringify(body)},opts.test?25000:120000);
+      }catch(e){
+        if(e&&e.name==='AbortError'){
+          if(stopped()&&!opts.test) throw {code:'cancelled',message:'Arrêté.'};
+          lastErr={code:'timeout',message:nm+' met trop de temps à répondre.'};glog(nm+' · '+model+' : délai dépassé');if(++tmo>=3||opts.test) throw lastErr;break}
+        throw {code:'network',message:'Connexion à '+nm+' impossible : vérifiez votre connexion Internet.'}
+      }
+      let j;
+      try{j=await compatCheck(r,pv,model)}catch(e){
+        if(e&&e.name==='AbortError'){lastErr={code:'timeout',message:nm+' n’a pas fini de répondre.'};if(++tmo>=3||opts.test) throw lastErr;break}
+        lastErr=e;
+        if(e.code==='fatal'||e.code==='too_big'&&opts.test) throw e;
+        if(e.status===400&&useJson&&/response_format|json/i.test((e.raw||'')+(e.message||''))){CMP.noJson[pv+'|'+model]=1;glog(model+' : sans mode JSON, nouvelle tentative');attempt--;continue}
+        if(e.code==='rate_limited'){
+          if(!paused&&!opts.test){paused=true;await gemPause(Math.min(65,e.retryAfter||20),nm+' demande une courte pause.');continue}
+          throw e;
+        }
+        if(e.code==='model_gone'||e.code==='service_busy'||e.code==='too_big'){glog(nm+' · '+model+' : '+e.code+' → modèle suivant');CMP.dead[pv+'|'+model]=Date.now()+(e.code==='model_gone'?24:0.2)*3600e3;break}
+        throw e;
+      }
+      if(opts.test) return {ok:true,model};
+      const txt=String((((j.choices||[])[0]||{}).message||{}).content||'').trim().replace(/^<think>[\s\S]*?<\/think>/,'').replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+      const tryParse=x=>{try{return JSON.parse(fixJsonText(x))}catch(e){return JSON.parse(x)}};
+      try{return cleanDeep(tryParse(txt))}catch(e){const m=/\{[\s\S]*\}/.exec(txt);if(m){try{return cleanDeep(tryParse(m[0]))}catch(e2){}}
+        glog(nm+' · '+model+' : réponse illisible ('+txt.length+' caractères)');
+        lastErr={code:'invalid_json',message:'Réponse non exploitable de '+nm+'.'};if(++badJ>=2) throw lastErr;break}
+    }
+  }
+  throw lastErr||{code:'service_busy',message:nm+' est momentanément indisponible. Réessayez dans quelques minutes.'};
+}
 async function freeJson(prompt){
   let r;
   const controller=new AbortController();
@@ -1275,13 +1370,54 @@ async function freeJson(prompt){
   let txt=String((((j.choices||[])[0]||{}).message||{}).content||'').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
   try{return JSON.parse(txt)}catch(e){ const m=/\{[\s\S]*\}/.exec(txt); if(m){try{return JSON.parse(m[0])}catch(e2){}} throw {code:'invalid_json',message:'Réponse non exploitable du service gratuit. Recommencez.'} }
 }
-async function ask(prompt,opts){
-  const k=aiKind();
-  if(k==='free') return freeJson(prompt);
+const CHAIN={cool:{}};
+function aiChain(withImages){
+  const out=[],add=k=>{if(k&&!out.includes(k))out.push(k)};
+  const prim=DB.ai&&DB.ai.provider;
+  const has={gemini:geminiKeys().length>0,openrouter:!!compatKey('openrouter'),groq:!!compatKey('groq'),anthropic:!!(DB.ai&&DB.ai.ckey&&prim==='anthropic')};
+  if(prim&&has[prim]) add(prim);
+  ['gemini','openrouter','groq'].forEach(k=>{if(has[k])add(k)});
+  return withImages?out.filter(k=>k==='gemini'||k==='anthropic'):out;
+}
+const AI_NAME={gemini:'Google Gemini',openrouter:'OpenRouter',groq:'Groq',anthropic:'Claude'};
+function runProvider(k,prompt,opts){
   if(k==='anthropic') return anthropicJson(prompt,opts);
   if(k==='gemini') return geminiJson(prompt,opts);
+  return compatJson(k,prompt,opts);
+}
+async function ask(prompt,opts){
+  opts=opts||{};
+  const k=aiKind();
+  if(k==='free') return freeJson(prompt);
   if(k==='claude') return claudeJson(prompt,opts);
-  throw {code:'no_ai',message:NO_AI};
+  if(!k) throw {code:'no_ai',message:NO_AI};
+  const imgs=!!(opts.images&&opts.images.length);
+  let chain=aiChain(imgs);
+  if(!chain.length){
+    if(imgs) throw {code:'fatal',message:'Cette IA ne lit pas les photos. Importez le programme en PDF ou saisissez-le à la main, ou ajoutez une clé Gemini pour la lecture des photos.'};
+    throw {code:'no_ai',message:NO_AI};
+  }
+  if(opts.test||chain.length===1) return runProvider(chain[0],prompt,opts);
+  // Services en « repos » après un échec récent : on les essaie en dernier.
+  const now=Date.now();
+  chain=[...chain.filter(c=>!(CHAIN.cool[c]>now)),...chain.filter(c=>CHAIN.cool[c]>now)];
+  let first=null;
+  for(let i=0;i<chain.length;i++){
+    const c=chain[i],last=i===chain.length-1;
+    try{
+      const r=await runProvider(c,prompt,Object.assign({},opts,last?{}:{fast:true}));
+      delete CHAIN.cool[c];
+      return r;
+    }catch(e){
+      if(e&&e.code==='cancelled') throw e;
+      if(GEN.stop) throw e;
+      if(!first) first=e;
+      CHAIN.cool[c]=Date.now()+4*60e3;
+      if(last) throw (first&&first!==e&&chain.length>1)?Object.assign({},first,{message:first.message+' Les autres services enregistrés ont aussi échoué : '+(e.message||'')}):e;
+      glog(AI_NAME[c]+' indisponible ('+(e&&e.code||'erreur')+') → passage à '+AI_NAME[chain[i+1]]);
+      setGen(AI_NAME[c]+' ne répond plus : passage automatique à '+AI_NAME[chain[i+1]]+'…');
+    }
+  }
 }
 /* ---------- lecture de PDF ---------- */
 async function pdfLib(){
@@ -2902,6 +3038,25 @@ function renderSet(){
    <label class="f" for="claudeModel" style="max-width:520px;margin-top:8px">Modèle<input type="text" id="claudeModel" autocomplete="off" value="${esc(DB.ai.cmodel||'claude-sonnet-5-5')}" placeholder="claude-sonnet-5-5"></label>
    <div class="row" style="margin-top:10px"><button class="btn" id="claudeSave">Enregistrer et tester</button>${DB.ai.ckey?'<button class="btn danger" id="claudeClear">Effacer la clé Claude</button>':''}</div>
    <div class="note" style="margin-top:12px">Le dernier service enregistré (rédaction gratuite ou Claude) est celui qui rédige. La clé reste dans ce navigateur, sur cet appareil : ne partagez pas un fichier contenant votre clé et n’utilisez pas cette fonction sur un ordinateur public. Les textes envoyés partent chez Anthropic.</div>
+  </section>
+  <section class="card"><h2>OpenRouter <small>modèles gratuits, sans carte bancaire</small></h2>
+   <p class="small" style="margin:0 0 10px">Alternative à Google quand il est surchargé. Seuls les modèles dont le nom finit par <b>:free</b> sont utilisés. Limite gratuite : environ 20 requêtes par minute et 50 par jour pour tout le compte (créer plusieurs clés sur le même compte n’augmente pas la limite).</p>
+   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
+    <li>Ouvrez <a href="https://openrouter.ai" target="_blank" rel="noopener">openrouter.ai ↗</a>, créez un compte, puis « API Keys » → « Create ».</li>
+    <li>Choisissez « Sans expiration » et « Aucune limite », puis copiez la clé (elle commence par sk-or-).</li></ol>
+   <label class="f" for="cmpKey_openrouter" style="max-width:520px">Clé OpenRouter<input type="password" id="cmpKey_openrouter" autocomplete="new-password" value="" placeholder="${compatKey('openrouter')?esc('Clé enregistrée : '+maskKey(compatKey('openrouter'))+' (laissez vide pour la conserver)'):'sk-or-…'}"></label>
+   <label class="f" for="cmpModel_openrouter" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique parmi les modèles gratuits)<input type="text" id="cmpModel_openrouter" autocomplete="off" value="${esc(compatCfg('openrouter').model||'')}" placeholder="automatique"></label>
+   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="openrouter">Enregistrer et tester</button>${compatKey('openrouter')?'<button class="btn danger" data-cmpclear="openrouter">Effacer la clé OpenRouter</button>':''}</div>
+  </section>
+  <section class="card"><h2>Groq <small>gratuit, très rapide, sans carte bancaire</small></h2>
+   <p class="small" style="margin:0 0 10px">Groq fait fonctionner des modèles ouverts (Llama, GPT-OSS) très vite. L’offre gratuite a des limites de jetons par minute et par jour, plus serrées que Google pour les longues séances : si une séance échoue, relancez-la après une minute.</p>
+   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
+    <li>Ouvrez <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys ↗</a> et connectez-vous (Google, GitHub ou e-mail).</li>
+    <li>Appuyez sur « Create API Key », nommez-la, copiez-la (elle commence par gsk_).</li></ol>
+   <label class="f" for="cmpKey_groq" style="max-width:520px">Clé Groq<input type="password" id="cmpKey_groq" autocomplete="new-password" value="" placeholder="${compatKey('groq')?esc('Clé enregistrée : '+maskKey(compatKey('groq'))+' (laissez vide pour la conserver)'):'gsk_…'}"></label>
+   <label class="f" for="cmpModel_groq" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_groq" autocomplete="off" value="${esc(compatCfg('groq').model||'')}" placeholder="automatique (llama-3.3-70b-versatile…)"></label>
+   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="groq">Enregistrer et tester</button>${compatKey('groq')?'<button class="btn danger" data-cmpclear="groq">Effacer la clé Groq</button>':''}</div>
+   <div class="note" style="margin-top:12px">Ordre automatique : Google Gemini d’abord, puis OpenRouter, puis Groq. Quand un service est bloqué (quota, surcharge), l’application passe toute seule au suivant : plus besoin d’effacer des clés. Les clés restent dans ce navigateur, sur cet appareil. Les textes envoyés partent chez le service choisi. Seul Claude (payant) n’est utilisé que si vous l’avez choisi.</div>
   </section>`;
 }
 function renderProg(){
@@ -3043,6 +3198,19 @@ root.addEventListener('click',async e=>{
     catch(e){Object.assign(DB.ai,before);save();setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
+  if(b.dataset&&b.dataset.cmpsave){
+    const pv=b.dataset.cmpsave,cfg=compatCfg(pv),nm=COMPAT[pv].nom;
+    const v=(document.getElementById('cmpKey_'+pv).value||'').trim()||cfg.key||'';
+    const m=(document.getElementById('cmpModel_'+pv).value||'').trim();
+    if(!v){setGen('Aucune clé '+nm+' saisie.',true);return}
+    const before={key:cfg.key,model:cfg.model,provider:DB.ai.provider};
+    cfg.key=v;cfg.model=m;CMP.models[pv]=null;CMP.dead={};save();
+    b.disabled=true;setGen('Test de la connexion à '+nm+'…');
+    try{const t=await compatJson(pv,'Réponds uniquement par {"ok":true}',{test:true});setGen('Connexion réussie (modèle '+t.model+'). '+nm+' sert de relais automatique quand Google est bloqué.');render2()}
+    catch(e){cfg.key=before.key;cfg.model=before.model;save();setGen(errCopy(e),true)}
+    finally{b.disabled=false}
+    return}
+  if(b.dataset&&b.dataset.cmpclear){const pv=b.dataset.cmpclear;compatCfg(pv).key='';save();setGen('Clé '+COMPAT[pv].nom+' effacée.');render2();return}
   if(b.id==='claudeClear'){DB.ai.ckey='';DB.ai.provider='';save();setGen('Clé Claude effacée.');render2();return}
   if(b.dataset&&b.dataset.clearguide){f.guide='';touch();render();return}
   if(b.id==='netTest'||b.id==='netTest2'){
