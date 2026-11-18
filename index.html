@@ -3045,7 +3045,10 @@ root.addEventListener('click',async e=>{
               if(r.ok){okN++;line='✔ peut rédiger ('+sec+' s)'}
               else{let raw='';try{raw=JSON.stringify(await r.json())}catch(_){}
                 const lw=raw.toLowerCase();
-                line=r.status===429?(/per.?day|perday|daily/.test(lw)?'⚠ quota du JOUR atteint (revient à 8 h UTC)':'⚠ limite par minute atteinte (patientez 1 minute)')
+                const ids=[...new Set([...raw.matchAll(/"quotaId"\s*:\s*"([^"]+)"/g)].map(m=>m[1]))];
+                const hasDay=ids.some(x=>/day/i.test(x))||(!ids.length&&/per.?day|perday|daily/.test(lw)),hasMin=ids.some(x=>/minute/i.test(x));
+                const why=ids.length?' ['+ids.map(x=>x.replace(/-FreeTier$/,'')).join(' ; ')+']':'';
+                line=r.status===429?(hasDay?'⚠ quota du JOUR atteint (revient à 8 h UTC)'+(hasMin?' + limite par minute':''):'⚠ limite par minute seulement (patientez 1 minute ; le quota du jour n’est pas épuisé)')+why
                   :(r.status===403||r.status===401||(r.status===400&&/api key/.test(lw)))?'✖ clé refusée / service non activé pour son projet'
                   :r.status===404?'⚠ modèle introuvable pour cette clé'
                   :[500,502,503,504,529].includes(r.status)?'⚠ serveurs Google surchargés (temporaire)':'⚠ erreur HTTP '+r.status}
