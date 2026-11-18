@@ -293,12 +293,14 @@ function loadDB(){
 }
 let saveT=null;
 function setStatus(t,bad){const el=document.getElementById('savestate'); if(el){el.textContent=t;el.className='save-state'+(bad?' bad':'');}}
+function saveNow(){
+  clearTimeout(saveT);saveT=null;
+  try{localStorage.setItem(KEY,JSON.stringify(DB));setStatus(memOnly?'Non enregistré (navigateur bloqué)':'Enregistré',memOnly);return true}
+  catch(e){setStatus('Mémoire du navigateur pleine ou bloquée : exportez votre fiche',true);return false}
+}
 function save(){
   clearTimeout(saveT);
-  saveT=setTimeout(()=>{
-    try{localStorage.setItem(KEY,JSON.stringify(DB));setStatus(memOnly?'Non enregistré (navigateur bloqué)':'Enregistré',memOnly);}
-    catch(e){setStatus('Mémoire du navigateur pleine ou bloquée : exportez votre fiche',true);}
-  },350);
+  saveT=setTimeout(saveNow,350);
 }
 const F=()=>DB.fiches.find(f=>f.id===DB.cur);
 
@@ -963,7 +965,11 @@ function abortAllFetches(){LIVE.forEach(c=>{try{c.abort()}catch(e){}});LIVE.clea
 function geminiFetch(url,options,timeoutMs){
   const controller=new AbortController();LIVE.add(controller);
   const timer=setTimeout(()=>controller.abort(),timeoutMs||12000);
-  return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>{clearTimeout(timer);LIVE.delete(controller)});
+  const done=()=>{clearTimeout(timer);LIVE.delete(controller)};
+  // Le délai reste actif jusqu’à la fin de la LECTURE de la réponse : sinon un corps de réponse qui n’arrive jamais bloque tout indéfiniment.
+  return fetch(url,Object.assign({},options||{},{signal:controller.signal})).then(r=>{
+    for(const m of ['json','text','blob','arrayBuffer']){if(typeof r[m]!=='function') continue;const o=r[m].bind(r);r[m]=()=>o().finally(done)}
+    return r},e=>{done();throw e});
 }
 function gBase(){return String((usingProxy()&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
 function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};if(key&&key!=='proxy')h['x-goog-api-key']=key;return h}
@@ -971,12 +977,14 @@ async function geminiModelList(key){
   let r;
   try{r=await geminiFetch(gBase()+'/v1beta/models?pageSize=200',{headers:gHeaders(key||DB.ai.key)},12000)}
   catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Le service de rédaction met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}}
-  const j=await geminiCheck(r);
+  let j;try{j=await geminiCheck(r)}catch(e){if(e&&e.name==='AbortError') throw {code:'timeout',message:'Le service de rédaction met trop de temps à répondre pendant la recherche des modèles.'};throw e}
   const list=(j.models||[])
     .filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
     .map(m=>String(m.name||'').replace(/^models\//,''))
     .filter(n=>/^gemini-/i.test(n)&&!/image|tts|live|audio|embedding|robotics|experimental|thinking|customtools|computer/i.test(n));
   const score=n=>(/preview/.test(n)?10:0)+(/^gemini-[\d.]+-flash$/.test(n)?0:/flash/.test(n)&&!/lite/.test(n)?1:/flash/.test(n)?2:3);
+  // Priorité aux versions Flash complètes les plus récentes, puis aux versions Lite.
+  // Ne pas placer systématiquement Gemini 2.5 en tête : certaines clés le signalent introuvable.
   return [...new Set(list)].sort((a,b)=>score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
 }
 async function geminiModel(){
@@ -1015,12 +1023,14 @@ async function gemPause(sec,why){
   if(GEN.pause===mine) GEN.pause=null;
 }
 async function gemModels(key){
-  // Démarrage rapide : réutilise d'abord le modèle déjà choisi et enregistré.
-  // La découverte complète n'est faite qu'en cas de quota ou de modèle indisponible.
+  // Toujours consulter le catalogue Google et privilégier les modèles Flash récents.
+  // Un ancien modèle mémorisé ne doit pas bloquer la rédaction s'il est encore listé
+  // mais ne répond plus correctement pour ce projet.
   const saved=String(DB.ai&&DB.ai.model||'').trim();
-  if(saved&&!(GEM.dead[saved]>Date.now())) return [saved];
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
-  return GEM.list.filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7);
+  const available=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
+  if(saved&&available.includes(saved)) glog('modèle enregistré '+saved+' : le catalogue actuel est privilégié pour éviter un modèle lent ou indisponible');
+  return available.slice(0,3);
 }
 function fixJsonText(t){
   return String(t)
@@ -1045,6 +1055,7 @@ async function geminiJson(prompt,opts){
   if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé gratuite dans Réglages.'};
   // Les états affichés doivent décrire cette tentative, pas conserver les résultats d'une ancienne rotation.
   GEM.keyStates={}; gemKeyState(0);
+  if(DB.ai&&DB.ai.dead) for(const [m,t] of Object.entries(DB.ai.dead)) if(t>Date.now()&&!(GEM.dead[m]>=t)) GEM.dead[m]=t;
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
   let tmo=0;
@@ -1056,7 +1067,7 @@ async function geminiJson(prompt,opts){
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
-  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const k=[...keys.slice(st),...keys.slice(0,st)];const c=[];/* Priorité : tester le même modèle sur chaque projet avant de changer de modèle. */for(const m of models)for(const key of k)c.push([key,m]);return c};
+  const order=()=>{const st=((GEM.keyIndex||0)%keys.length);const rotated=[...keys.slice(st),...keys.slice(0,st)];const k=rotated.slice(0,Math.min(5,rotated.length));const c=[];/* Rotation limitée : cinq clés au maximum par modèle, puis changement de modèle. */for(const m of models.slice(0,3))for(const key of k)c.push([key,m]);return c};
   for(let round=0;isTest?round<1:true;round++){
     let soonest=0;
     for(const [key,model] of order()){
@@ -1072,7 +1083,7 @@ async function geminiJson(prompt,opts){
       glog('utilisation de la clé '+keyNo+'/'+keys.length+' · '+model);
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?40000:90000));
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?30000:60000));
       }catch(e){
         if(e&&e.name==='AbortError'&&stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
         if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='NE RÉPOND PAS (délai dépassé)';gemKeyState(keyNo);
@@ -1083,13 +1094,19 @@ async function geminiJson(prompt,opts){
       }
       let j;
       try{j=await geminiCheck(r)}catch(e){
+        if(e&&e.name==='AbortError'){
+          if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
+          lastError={code:'timeout',message:'Le service de rédaction a commencé à répondre mais n’a pas fini d’envoyer sa réponse.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='RÉPONSE INCOMPLÈTE (délai dépassé)';gemKeyState(keyNo);glog('clé '+keyNo+'/'+keys.length+' · '+model+' : réponse incomplète (délai)');
+          if(++tmo>=3&&!isTest) throw {code:'service_busy',message:'Le service de génération Google n’a pas fini de répondre après 3 délais d’attente. Réessayez dans quelques minutes.'};
+          continue;
+        }
         lastError=e;
         if(e.code==='rate_limited'){
           const perDay=!!e.perDay||/PerDay|per day|daily|requests_per_day|generate_content_free_tier_requests_per_day|quota.?day/i.test((e.raw||'')+' '+(e.message||''));
           GEM.keyStates[keyNo]=perDay?'QUOTA JOURNALIER ATTEINT':'LIMITE TEMPORAIRE / PAR MINUTE';gemKeyState(keyNo);
           const d=retryDelayOf(e)||65;
           /* Respecter le délai exact communiqué par Google. Pour un quota journalier sans délai exploitable, réessayer dans 24 h. */GEM.hot[hk]=Date.now()+(perDay?(d||24*3600)+2:(d+2))*1000;GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
-          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,7)}catch(_){}}
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,3)}catch(_){}}
           continue;                      // même demande, clé suivante sans recommencer la séance
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
@@ -1097,8 +1114,10 @@ async function geminiJson(prompt,opts){
           GEM.keyStates[keyNo]='SERVEURS GOOGLE SURCHARGÉS (incident temporaire)';gemKeyState(keyNo);
           busySeen[key]=true;
           GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;
-          GEM.hot[hk]=Date.now()+Math.min(45,8*nb)*1000;
+          GEM.hot[hk]=Date.now()+Math.min(45,8*nb)*1000;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;
           glog('Google indisponible · clé '+keyNo+'/'+keys.length+' · '+model+' · nouvelle tentative limitée');
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model&&!(GEM.dead[n]>Date.now()))].slice(0,3)}catch(_){}
+            if(models.length>1){glog('modèle '+model+' surchargé : essai des autres modèles');redo=true;break}}
           // Continuer la rotation : les clés peuvent appartenir à des projets Google distincts.
           // Une surcharge sur quelques clés ne prouve pas que les autres projets sont indisponibles.
           continue;
@@ -1111,12 +1130,12 @@ async function geminiJson(prompt,opts){
         }
         if(e.code==='model_gone'){
           GEM.keyStates[keyNo]='MODÈLE INDISPONIBLE (essai d’un autre modèle)';gemKeyState(keyNo);
-          GEM.dead[model]=Date.now()+24*3600e3;
+          GEM.dead[model]=Date.now()+24*3600e3;DB.ai.dead=DB.ai.dead||{};DB.ai.dead[model]=GEM.dead[model];save();
           glog('modèle '+model+' refusé (introuvable) : abandonné pour toutes les clés');
           if(DB.ai.model===model){DB.ai.model='';save()}
           try{
             if(!GEM.list||!GEM.list.length||models.length<=1){const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now()}
-            models=(GEM.list||[]).filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7);
+            models=(GEM.list||[]).filter(n=>!(GEM.dead[n]>Date.now())).slice(0,3);
           }catch(_){models=models.filter(n=>n!==model)}
           if(!models.length) throw {code:'model_gone',message:'Aucun modèle Google n’est disponible pour vos clés pour le moment. Réessayez plus tard.'};
           redo=true;break;
@@ -1975,64 +1994,75 @@ async function repartirCaps(f){
 }
 async function generateAll(f,o){
   if(GEN.running) return;
+  o=o||{};
   if(!f.capacites.some(c=>has(c.cap))){setGen('Ajoutez d’abord les capacités et contenus (étape 2).',true);return}
-  GEN.running=true;GEN.stop=false;GEN.figMissing=[];GEN.keyLabel='';GEM.keyStates={};GEM.hot={};GEM.day={};GEM.bz={};GEM.badKey={};lockGen(true);await acquireGenWakeLock();
-  const n=f.seances.length;let failed=[],failWhy='',snap=null;
+  if(!f.seances.every(x=>has(x.capTitre)&&has(x.contenus))){setGen('Répartissez d’abord les capacités : cliquez sur « Répartir les capacités sur les séances » (étape 2).',true);return}
+  if(!aiKind()){setGen('Pour rédiger automatiquement, activez la rédaction automatique dans Réglages.',true);return}
+  GEN.running=true;GEN.stop=false;GEN.figMissing=[];GEN.keyLabel='';GEM.keyStates={};lockGen(true);await acquireGenWakeLock();
+  const complete=s=>f.tpl==='A'
+    ? ['situation','synthese','essentiel','exoApp','exoMaison'].every(k=>has(s[k]))
+    : ['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'].every(k=>has(s[k]));
+  let failed=[],failWhy='',bilNote='';
   try{
-    if(!f.seances.every(x=>has(x.capTitre)&&has(x.contenus))){setGen('Répartissez d’abord les capacités : cliquez sur « Répartir les capacités sur les séances » (étape 2).',true);return}
-    if(!aiKind()){
-      setGen('Pour que l’application rédige les situations d’apprentissage, la résolution, l’essentiel à retenir et les exercices, activez la rédaction automatique dans Réglages (clé gratuite).',true);
-      return;
+    if(o.overwrite===true){
+      setGen('Réinitialisation demandée : remplacement des textes existants…');
+      resetGenerated(f,true);f.genJob=null;saveNow();
     }
-    setGen('Réinitialisation de la fiche avant la nouvelle rédaction…');
-    snap={s:JSON.parse(JSON.stringify(f.seances)),b:JSON.parse(JSON.stringify(f.bilan||[]))};
-    resetGenerated(f,true);o=Object.assign({},o,{overwrite:true});touch();
-    {const sh=document.getElementById('sheets');if(sh) sh.innerHTML='';}
+    const pending=()=>f.seances.map((s,i)=>i).filter(i=>!complete(f.seances[i]));
+    let todo=pending();
+    f.genJob={version:1,status:'running',total:f.seances.length,completed:f.seances.length-todo.length,started:f.genJob?.started||Date.now(),updated:Date.now(),lastError:''};
+    saveNow();
+    {const sh=document.getElementById('sheets');if(sh)sh.innerHTML='';}
     if(view==='fiche'){render2();lockGen(true)}
-    rememberProgram(f);
-    touch();
-    const conc=1; // une séance à la fois, dans l’ordre : la clé en cours sert jusqu’à sa limite, puis la suivante prend le relais
-    let next=0,done=0,fatal=null;
-    pbegin(n);
-    const doOne=async i=>{
-      let ok=false,last=null;pstart(i);
-      for(let attempt=1;attempt<=2&&!ok&&!fatal&&!GEN.stop;attempt++){
-        try{await genSeanceContent(f,i,o);touch();ok=true}
-        catch(e){last=e;if(e&&(e.code==='rate_limited'||e.code==='cancelled'||e.code==='service_busy'||e.code==='not_granted'||e.code==='network'||e.code==='fatal'||/^http_4/.test(e.code||'')))break;
-          if(attempt<2){await geminiWait(900)}
+    rememberProgram(f);touch();saveNow();
+    pbegin(f.seances.length);
+    setGen(todo.length?'Reprise de la rédaction : '+todo.length+' séance(s) restent à préparer.':'Toutes les séances sont déjà rédigées. Vérification des exercices de synthèse…');
+    for(const i of todo){
+      if(GEN.stop) break;
+      pstart(i);let ok=false,last=null;
+      for(let attempt=1;attempt<=3&&!ok&&!GEN.stop;attempt++){
+        try{
+          await genSeanceContent(f,i,{overwrite:false});
+          ok=complete(f.seances[i]);
+          if(!ok) throw {code:'incomplete',message:'La réponse reçue est incomplète.'};
+          touch();f.genJob.completed=f.seances.length-pending().length;f.genJob.updated=Date.now();f.genJob.lastError='';saveNow();
+        }catch(e){
+          last=e;
+          if(e&&e.code==='cancelled') break;
+          const transient=e&&['service_busy','network','timeout','rate_limited'].includes(e.code);
+          if(!transient||attempt===3||GEN.stop) break;
+          const wait=e.code==='rate_limited'?60000:Math.min(60000,15000*Math.pow(2,attempt-1));
+          f.genJob.status='paused';f.genJob.lastError=String(e.message||e.code||'Erreur');f.genJob.updated=Date.now();saveNow();
+          setGen('Séance '+(i+1)+' : service temporairement indisponible. Nouvelle tentative dans '+Math.round(wait/1000)+' s (tentative '+attempt+'/3)…');
+          await geminiWait(wait);
         }
       }
-      done++;pend(i,ok);
-      if(ok) return;
-      if(GEN.stop&&!last) return;
-      failed.push(i+1);if(GEN.prog&&GEN.prog.items[i]){GEN.prog.items[i].why=String((last&&(last.message||last.code))||'raison inconnue')}failWhy=String((last&&(last.message||last.code))||'raison inconnue').slice(0,240)+(last&&last.code?' ['+last.code+']':'');
-      if(last&&(last.code==='rate_limited'||last.code==='service_busy'||last.code==='cancelled'||last.code==='fatal')&&!fatal) fatal=last;
-    };
-    setGen('Rédaction des séances en cours : le détail s’affiche ci-dessous.');
-    await Promise.all(Array.from({length:conc},async()=>{
-      while(next<n&&!fatal&&!GEN.stop){const i=next++;await doOne(i)}
-    }));
-    if(fatal){pfinish();throw fatal}
-    if(GEN.stop){setGen('Arrêté après '+done+' séance(s). Ce qui est rédigé est conservé.')}
-    let bilNote='';
-    if(!GEN.stop){
-      setGen('Rédaction des exercices de synthèse de la leçon…');pstart(n);
-      try{await genBilan(f,o);touch()}catch(e){if(e&&e.code==='cancelled') throw e; bilNote=' Les exercices de synthèse n’ont pas pu être rédigés (bouton « Rédiger les exercices de synthèse »).'}
-      if(!bilNote&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse sont incomplets'+(GEN.bilWhy?' (motif : '+GEN.bilWhy+')':'')+' : cliquez sur « Rédiger les exercices de synthèse » pour compléter les manquants.';
+      pend(i,ok);
+      if(!ok){
+        if(GEN.stop) break;
+        failed.push(i+1);failWhy=String((last&&(last.message||last.code))||'réponse incomplète').slice(0,240);
+        f.genJob.lastError=failWhy;f.genJob.status='paused';f.genJob.updated=Date.now();saveNow();
+        if(last&&['rate_limited','service_busy','network','timeout'].includes(last.code)) break;
+      }
     }
-    pend(n,ensureBilan(f).every(x=>has(x.q)&&has(x.s)));pfinish();
-    if(GEN.figMissing&&GEN.figMissing.length&&!failed.length){setGen('Fiche préparée. Séance(s) '+GEN.figMissing.join(', ')+' : la figure n’a pas pu être dessinée, choisissez-en une parmi les propositions d’images (étape 3).');GEN.figMissing=[]}
-    else if(!GEN.stop) setGen(failed.length?('Terminé, sauf la séance '+failed.join(', ')+' (motif : '+failWhy+'). Ouvrez cette séance à l’étape 3 et cliquez sur « Rédiger cette séance automatiquement » pour la compléter.'):'Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,failed.length>0||!!bilNote);
-    if(!GEN.stop){step=3;openSeances=new Set([0])}
-  }catch(e){setGen(errCopy(e),true)}
-  finally{
-    if(snap&&!GEN.stop){
-      /* en cas d'échec, on remet l'ancien contenu des séances que la nouvelle rédaction n'a pas pu produire */
-      f.seances.forEach((x,i)=>{if(!has(x.situation)&&snap.s[i]&&has(snap.s[i].situation)) f.seances[i]=snap.s[i]});
-      if(!(f.bilan||[]).some(x=>has(x.q))&&snap.b.some(x=>has(x.q))) f.bilan=snap.b;
-      touch();
+    if(GEN.stop){f.genJob.status='paused';f.genJob.lastError='Arrêt demandé';setGen('Arrêt effectué. Les séances terminées sont enregistrées. Cliquez de nouveau sur « Préparer les séances » pour reprendre.');}
+    else if(pending().length){f.genJob.status='paused';setGen('Préparation en pause : séance(s) non terminée(s) '+pending().map(i=>i+1).join(', ')+'. Les textes déjà terminés sont enregistrés. Cliquez de nouveau sur « Préparer les séances » pour reprendre.',true);}
+    else{
+      setGen('Rédaction des exercices de synthèse de la leçon…');pstart(f.seances.length);
+      try{if(!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) await genBilan(f,{overwrite:false});touch();}
+      catch(e){if(e&&e.code==='cancelled')throw e;bilNote=' Les exercices de synthèse n’ont pas pu être rédigés ; vous pourrez les reprendre séparément.';}
+      if(!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse restent incomplets ; utilisez le bouton dédié pour les compléter.';
+      f.genJob.status=bilNote?'paused':'done';f.genJob.updated=Date.now();f.genJob.lastError=bilNote;saveNow();
+      setGen('Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,!!bilNote);step=3;openSeances=new Set([0]);
     }
-    GEN.running=false;await releaseGenWakeLock();lockGen(false);if(view==='fiche'){render2();runPendingImageSearches(f)}}
+    pfinish();
+  }catch(e){
+    if(f.genJob){f.genJob.status='paused';f.genJob.lastError=String(e&& (e.message||e.code)||'Erreur');f.genJob.updated=Date.now();saveNow();}
+    setGen(errCopy(e)+' Les séances déjà terminées sont conservées. Cliquez de nouveau sur « Préparer les séances » pour reprendre.',true);
+  }finally{
+    if(f.genJob&&f.genJob.status==='running'){f.genJob.status='paused';f.genJob.updated=Date.now();saveNow();}
+    GEN.running=false;await releaseGenWakeLock();lockGen(false);if(view==='fiche'){render2();runPendingImageSearches(f)}
+  }
 }
 async function fillSeance(i){
   const f=F(); const st=document.getElementById('ai-'+i);
@@ -2824,7 +2854,7 @@ function stepSeances(f){
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div id="genkey-status" class="muted small" role="status" style="margin-top:5px;white-space:pre-line">${esc(GEN.keyLabel||'Aucune clé utilisée pour le moment.')}</div>
    <div class="genprog" style="margin-top:8px"></div>
-   ${aiKind()==='gemini'?'<div style="margin-top:8px"><button class="btn sm alt" id="netTest">Tester ma connexion et mes clés</button> <button class="btn sm alt" id="netTest2">Vérifier la rédaction de chaque clé</button><div id="nettest" class="small" style="margin-top:6px;white-space:pre-wrap"></div></div>':''}
+   ${aiKind()==='gemini'?'<div style="margin-top:8px"><button class="btn sm alt" id="netTest">Tester ma connexion et mes clés</button> <button class="btn sm alt" id="netTest2">Vérifier les clés sans consommer le quota</button><div id="nettest" class="small" style="margin-top:6px;white-space:pre-wrap"></div></div>':''}
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${GEMLOG.length?'<details style="margin-top:8px"><summary class="muted small">Détails techniques (journal des requêtes)</summary><pre class="small" style="white-space:pre-wrap;margin:6px 0 0">'+esc(GEMLOG.slice(-25).join('\n'))+'</pre></details>':''}${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
   return `${gen}${toolbar()}<div class="row" style="margin-bottom:12px"><button class="btn alt sm" data-addseance="1">Ajouter une séance</button><span class="muted small">${f.seances.length} séance(s)</span></div>${body}${bilUI}${fin}`;
 }
@@ -3018,63 +3048,33 @@ root.addEventListener('click',async e=>{
   if(b.id==='netTest'||b.id==='netTest2'){
     const deep=b.id==='netTest2';const b2=document.getElementById(deep?'netTest':'netTest2');
     const out=document.getElementById('nettest');const put=t=>{if(out)out.textContent=t};
-    b.disabled=true;if(b2)b2.disabled=true;put('Test en cours…');
+    b.disabled=true;if(b2)b2.disabled=true;put('Vérification en cours…');
     (async()=>{
       const ks=geminiKeys(),L=[];
-      if(typeof navigator!=='undefined'&&navigator.onLine===false){put('✖ Pas de connexion Internet sur cet appareil.');b.disabled=false;return}
-      for(let i=0;i<ks.length;i++){
-        const t0=Date.now();
-        try{
-          const r=await geminiFetch(gBase()+'/v1beta/models?pageSize=1',{headers:gHeaders(ks[i])},12000);
-          const ms=Date.now()-t0;
-          let detail='';if(!r.ok){try{const jj=await r.clone().json();const er=jj&&jj.error||{};detail=(er.status?er.status+' — ':'')+(er.message||'');}catch(_){}}L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':'⚠ HTTP '+r.status+(detail?' · '+detail.slice(0,220):'')+' ('+ms+' ms)'));
-        }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)'))}
-        put(L.join('\n')+'\nTest en cours…');
-      }
-      if(!deep){L.push('Pour savoir quelles clés peuvent RÉDIGER (quota du jour), utilisez « Vérifier la rédaction de chaque clé » (une très petite requête par clé).');put(L.join('\n'));b.disabled=false;if(b2)b2.disabled=false;return}
-      if(ks.length>1||ks[0]!=='proxy'){
-        let mdls=[];
-        try{mdls=(await geminiModelList(ks[0])).filter(n=>!(GEM.dead[n]>Date.now()))}catch(_){}
-        const first=String(DB.ai&&DB.ai.model||'').trim();
-        mdls=[...new Set([first,...mdls].filter(Boolean))].slice(0,3);
-        const probe=async(key,mdl)=>{
-          const t2=Date.now();
-          try{
-            const r=await geminiFetch(gBase()+'/v1beta/models/'+mdl+':generateContent',{method:'POST',headers:gHeaders(key,true),body:JSON.stringify({contents:[{role:'user',parts:[{text:'Réponds par le mot ok.'}]}],generationConfig:{maxOutputTokens:30}})},20000);
-            const sec=((Date.now()-t2)/1000).toFixed(1);
-            if(r.ok) return {ok:true,line:'✔ peut rédiger avec '+mdl+' ('+sec+' s)'};
-            let raw='';try{raw=JSON.stringify(await r.json())}catch(_){}
-            const lw=raw.toLowerCase();
-            const ids=[...new Set([...raw.matchAll(/"quotaId"\s*:\s*"([^"]+)"/g)].map(m=>m[1]))];
-            const hasDay=ids.some(x=>/day/i.test(x))||(!ids.length&&/per.?day|perday|daily/.test(lw)),hasMin=ids.some(x=>/minute/i.test(x));
-            if(r.status===429) return {ok:false,quota:true,line:mdl+' : '+(hasDay?'quota du JOUR atteint'+(hasMin?' + minute':''):'limite par minute seulement (le quota du jour n’est pas épuisé)')};
-            if(r.status===403||r.status===401||(r.status===400&&/api key/.test(lw))) return {ok:false,line:'✖ clé refusée / service non activé pour son projet',stop:true};
-            if(r.status===404) return {ok:false,line:mdl+' : introuvable'};
-            return {ok:false,line:mdl+' : '+([500,502,503,504,529].includes(r.status)?'serveurs Google surchargés':'erreur HTTP '+r.status)};
-          }catch(e){return {ok:false,line:mdl+' : '+(e&&e.name==='AbortError'?'pas de réponse après 20 s':'réseau'),stop:true}}
-        };
-        L.push('— Test de rédaction de chaque clé (modèles essayés : '+mdls.join(', ')+') —');
-        let okN=0;
+      try{
+        if(typeof navigator!=='undefined'&&navigator.onLine===false){put('✖ Pas de connexion Internet sur cet appareil.');return}
         for(let i=0;i<ks.length;i++){
-          put(L.join('\n')+'\nTest de rédaction clé '+(i+1)+'/'+ks.length+'…');
-          const parts=[];let good=null;
-          for(const m of mdls){
-            const r=await probe(ks[i],m);
-            if(r.ok){good=r;break}
-            parts.push(r.line);
-            if(r.stop||!r.quota) break;
-            await geminiWait(300);
-          }
-          if(good){okN++;L.push('Clé '+(i+1)+' : '+good.line+(parts.length?' (après : '+parts.join(' ; ')+')':''))}
-          else L.push('Clé '+(i+1)+' : ⚠ '+parts.join(' ; '));
-          await geminiWait(300);
+          const t0=Date.now();
+          try{
+            const r=await geminiFetch(gBase()+'/v1beta/models?pageSize=1',{headers:gHeaders(ks[i])},12000);
+            const ms=Date.now()-t0;let detail='';
+            if(!r.ok){try{const jj=await r.clone().json();const er=jj&&jj.error||{};detail=(er.status?er.status+' — ':'')+(er.message||'')}catch(_){}}
+            L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':'⚠ HTTP '+r.status+(detail?' · '+detail.slice(0,180):'')+' ('+ms+' ms)'));
+          }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s':'✖ service injoignable (réseau)'))}
+          put(L.join('\n')+'\nVérification en cours…');
         }
-        L.push('→ '+okN+' clé(s) sur '+ks.length+' peuvent rédiger maintenant (chaque modèle a son propre quota du jour : l’application bascule seule sur un autre modèle).');
-      }
-      try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse avec la clé '+(((GEM.keyIndex||0)+1))+'/'+ks.length+(DB.ai.model?' · modèle '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
-      catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,240));if(e&&e.httpStatus)L.push('Détail Google : HTTP '+e.httpStatus+(e.googleStatus?' · '+e.googleStatus:'')+(e.googleMessage?' · '+e.googleMessage:'').slice(0,320));else if(e&&e.raw)L.push('Détail technique Google : '+String(e.raw).slice(0,500));else if(e&&e.code)L.push('Code interne : '+e.code);}
-      L.push('Conclusion : « clé joignable » confirme seulement que Google répond au test de connexion. Le test de rédaction vérifie séparément la génération. Une surcharge ou un délai de Google ne signifie ni clé invalide ni quota journalier épuisé.');
-      put(L.join('\n'));b.disabled=false;if(b2)b2.disabled=false;
+        if(deep){
+          let mdls=[];
+          try{if(ks.length)mdls=await geminiModelList(ks[0]);}catch(e){L.push('Liste des modèles : impossible à récupérer ('+(e.message||'erreur réseau')+').')}
+          L.push('Modèles compatibles annoncés par Google : '+(mdls.length?mdls.slice(0,8).join(', '):'non déterminés'));
+          L.push('AUCUNE génération de texte n’a été lancée. Cette vérification ne consomme donc pas de requête generateContent et ne vide pas le quota de rédaction.');
+          L.push('Important : un test réel de rédaction consomme une requête Google. Pour éviter l’épuisement des quotas, l’application ne teste plus une génération sur chaque clé.');
+        }else{
+          L.push('Ce test vérifie uniquement la connexion. Il ne lance aucune génération et ne consomme pas le quota de rédaction.');
+        }
+        put(L.join('\n'));
+      }catch(e){put(L.join('\n')+'\nErreur pendant le test : '+String(e.message||e))}
+      finally{b.disabled=false;if(b2)b2.disabled=false;}
     })();
     return}
   if(b.id==='stopGen'){GEN.stop=true;setGen('Arrêt en cours…');abortAllFetches();return}
