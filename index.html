@@ -983,9 +983,9 @@ async function geminiModelList(key){
     .map(m=>String(m.name||'').replace(/^models\//,''))
     .filter(n=>/^gemini-/i.test(n)&&!/image|tts|live|audio|embedding|robotics|experimental|thinking|customtools|computer/i.test(n));
   const score=n=>(/preview/.test(n)?10:0)+(/^gemini-[\d.]+-flash$/.test(n)?0:/flash/.test(n)&&!/lite/.test(n)?1:/flash/.test(n)?2:3);
-  // Modèles stables d’abord (moins surchargés que les tout derniers), puis les plus récents.
-  const stab=n=>/^gemini-2\.5-flash$/.test(n)?0:/^gemini-2\.5-flash-lite$/.test(n)?1:2;
-  return [...new Set(list)].sort((a,b)=>stab(a)-stab(b)||score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
+  // Priorité aux versions Flash complètes les plus récentes, puis aux versions Lite.
+  // Ne pas placer systématiquement Gemini 2.5 en tête : certaines clés le signalent introuvable.
+  return [...new Set(list)].sort((a,b)=>score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
 }
 async function geminiModel(){
   if(DB.ai.model) return DB.ai.model;
@@ -1023,17 +1023,14 @@ async function gemPause(sec,why){
   if(GEN.pause===mine) GEN.pause=null;
 }
 async function gemModels(key){
-  // Démarrage rapide : réutilise d'abord le modèle déjà choisi et enregistré.
-  // La découverte complète n'est faite qu'en cas de quota ou de modèle indisponible.
+  // Toujours consulter le catalogue Google et privilégier les modèles Flash récents.
+  // Un ancien modèle mémorisé ne doit pas bloquer la rédaction s'il est encore listé
+  // mais ne répond plus correctement pour ce projet.
   const saved=String(DB.ai&&DB.ai.model||'').trim();
-  // Le catalogue Google est interrogé sans generateContent : on évite de rester bloqué
-  // sur un ancien modèle enregistré qui n'existe plus pour ce projet.
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   const available=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
-  if(saved&&available.includes(saved)) return [saved,...available.filter(n=>n!==saved)].slice(0,7);
-  if(available.length){if(saved)glog('ancien modèle indisponible ; sélection du catalogue Google');return available.slice(0,7)}
-  if(saved&&!(GEM.dead[saved]>Date.now())) return [saved];
-  return [];
+  if(saved&&available.includes(saved)) glog('modèle enregistré '+saved+' : le catalogue actuel est privilégié pour éviter un modèle lent ou indisponible');
+  return available.slice(0,7);
 }
 function fixJsonText(t){
   return String(t)
@@ -2023,7 +2020,7 @@ async function generateAll(f,o){
     for(const i of todo){
       if(GEN.stop) break;
       pstart(i);let ok=false,last=null;
-      for(let attempt=1;attempt<=5&&!ok&&!GEN.stop;attempt++){
+      for(let attempt=1;attempt<=4&&!ok&&!GEN.stop;attempt++){
         try{
           await genSeanceContent(f,i,{overwrite:false});
           ok=complete(f.seances[i]);
@@ -2033,7 +2030,7 @@ async function generateAll(f,o){
           last=e;
           if(e&&e.code==='cancelled') break;
           const transient=e&&['service_busy','network','timeout','rate_limited'].includes(e.code);
-          if(!transient||attempt===5||GEN.stop) break;
+          if(!transient||attempt===4||GEN.stop) break;
           const wait=e.code==='rate_limited'?60000:Math.min(60000,10000*Math.pow(2,attempt-1));
           f.genJob.status='paused';f.genJob.lastError=String(e.message||e.code||'Erreur');f.genJob.updated=Date.now();saveNow();
           setGen('Séance '+(i+1)+' : service temporairement indisponible. Nouvelle tentative dans '+Math.round(wait/1000)+' s (tentative '+attempt+'/5)…');
