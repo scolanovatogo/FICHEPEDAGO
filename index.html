@@ -2824,7 +2824,7 @@ function stepSeances(f){
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
    <div id="genkey-status" class="muted small" role="status" style="margin-top:5px;white-space:pre-line">${esc(GEN.keyLabel||'Aucune clé utilisée pour le moment.')}</div>
    <div class="genprog" style="margin-top:8px"></div>
-   ${aiKind()==='gemini'?'<div style="margin-top:8px"><button class="btn sm alt" id="netTest">Tester ma connexion et mes clés</button><div id="nettest" class="small" style="margin-top:6px;white-space:pre-wrap"></div></div>':''}
+   ${aiKind()==='gemini'?'<div style="margin-top:8px"><button class="btn sm alt" id="netTest">Tester ma connexion et mes clés</button> <button class="btn sm alt" id="netTest2">Vérifier la rédaction de chaque clé</button><div id="nettest" class="small" style="margin-top:6px;white-space:pre-wrap"></div></div>':''}
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${GEMLOG.length?'<details style="margin-top:8px"><summary class="muted small">Détails techniques (journal des requêtes)</summary><pre class="small" style="white-space:pre-wrap;margin:6px 0 0">'+esc(GEMLOG.slice(-25).join('\n'))+'</pre></details>':''}${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
   return `${gen}${toolbar()}<div class="row" style="margin-bottom:12px"><button class="btn alt sm" data-addseance="1">Ajouter une séance</button><span class="muted small">${f.seances.length} séance(s)</span></div>${body}${bilUI}${fin}`;
 }
@@ -3015,9 +3015,10 @@ root.addEventListener('click',async e=>{
     return}
   if(b.id==='claudeClear'){DB.ai.ckey='';DB.ai.provider='';save();setGen('Clé Claude effacée.');render2();return}
   if(b.dataset&&b.dataset.clearguide){f.guide='';touch();render();return}
-  if(b.id==='netTest'){
+  if(b.id==='netTest'||b.id==='netTest2'){
+    const deep=b.id==='netTest2';const b2=document.getElementById(deep?'netTest':'netTest2');
     const out=document.getElementById('nettest');const put=t=>{if(out)out.textContent=t};
-    b.disabled=true;put('Test en cours…');
+    b.disabled=true;if(b2)b2.disabled=true;put('Test en cours…');
     (async()=>{
       const ks=geminiKeys(),L=[];
       if(typeof navigator!=='undefined'&&navigator.onLine===false){put('✖ Pas de connexion Internet sur cet appareil.');b.disabled=false;return}
@@ -3030,39 +3031,50 @@ root.addEventListener('click',async e=>{
         }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)'))}
         put(L.join('\n')+'\nTest en cours…');
       }
+      if(!deep){L.push('Pour savoir quelles clés peuvent RÉDIGER (quota du jour), utilisez « Vérifier la rédaction de chaque clé » (une très petite requête par clé).');put(L.join('\n'));b.disabled=false;if(b2)b2.disabled=false;return}
       if(ks.length>1||ks[0]!=='proxy'){
-        let mdl=String(DB.ai&&DB.ai.model||'').trim();
-        try{if(!mdl||GEM.dead[mdl]>Date.now()){const ls=await geminiModelList(ks[0]);mdl=(ls.filter(n=>!(GEM.dead[n]>Date.now()))[0])||''}}catch(_){}
-        if(mdl){
-          L.push('— Test de rédaction de chaque clé (modèle '+mdl+', très petite requête) —');
-          let okN=0;
-          for(let i=0;i<ks.length;i++){
-            put(L.join('\n')+'\nTest de rédaction clé '+(i+1)+'/'+ks.length+'…');
-            const t2=Date.now();let line='';
-            try{
-              const r=await geminiFetch(gBase()+'/v1beta/models/'+mdl+':generateContent',{method:'POST',headers:gHeaders(ks[i],true),body:JSON.stringify({contents:[{role:'user',parts:[{text:'Réponds par le mot ok.'}]}],generationConfig:{maxOutputTokens:30}})},20000);
-              const sec=((Date.now()-t2)/1000).toFixed(1);
-              if(r.ok){okN++;line='✔ peut rédiger ('+sec+' s)'}
-              else{let raw='';try{raw=JSON.stringify(await r.json())}catch(_){}
-                const lw=raw.toLowerCase();
-                const ids=[...new Set([...raw.matchAll(/"quotaId"\s*:\s*"([^"]+)"/g)].map(m=>m[1]))];
-                const hasDay=ids.some(x=>/day/i.test(x))||(!ids.length&&/per.?day|perday|daily/.test(lw)),hasMin=ids.some(x=>/minute/i.test(x));
-                const why=ids.length?' ['+ids.map(x=>x.replace(/-FreeTier$/,'')).join(' ; ')+']':'';
-                line=r.status===429?(hasDay?'⚠ quota du JOUR atteint (revient à 8 h UTC)'+(hasMin?' + limite par minute':''):'⚠ limite par minute seulement (patientez 1 minute ; le quota du jour n’est pas épuisé)')+why
-                  :(r.status===403||r.status===401||(r.status===400&&/api key/.test(lw)))?'✖ clé refusée / service non activé pour son projet'
-                  :r.status===404?'⚠ modèle introuvable pour cette clé'
-                  :[500,502,503,504,529].includes(r.status)?'⚠ serveurs Google surchargés (temporaire)':'⚠ erreur HTTP '+r.status}
-            }catch(e){line=e&&e.name==='AbortError'?'⚠ pas de réponse après 20 s':'✖ réseau'}
-            L.push('Clé '+(i+1)+' : '+line);
-            await geminiWait(400);
+        let mdls=[];
+        try{mdls=(await geminiModelList(ks[0])).filter(n=>!(GEM.dead[n]>Date.now()))}catch(_){}
+        const first=String(DB.ai&&DB.ai.model||'').trim();
+        mdls=[...new Set([first,...mdls].filter(Boolean))].slice(0,3);
+        const probe=async(key,mdl)=>{
+          const t2=Date.now();
+          try{
+            const r=await geminiFetch(gBase()+'/v1beta/models/'+mdl+':generateContent',{method:'POST',headers:gHeaders(key,true),body:JSON.stringify({contents:[{role:'user',parts:[{text:'Réponds par le mot ok.'}]}],generationConfig:{maxOutputTokens:30}})},20000);
+            const sec=((Date.now()-t2)/1000).toFixed(1);
+            if(r.ok) return {ok:true,line:'✔ peut rédiger avec '+mdl+' ('+sec+' s)'};
+            let raw='';try{raw=JSON.stringify(await r.json())}catch(_){}
+            const lw=raw.toLowerCase();
+            const ids=[...new Set([...raw.matchAll(/"quotaId"\s*:\s*"([^"]+)"/g)].map(m=>m[1]))];
+            const hasDay=ids.some(x=>/day/i.test(x))||(!ids.length&&/per.?day|perday|daily/.test(lw)),hasMin=ids.some(x=>/minute/i.test(x));
+            if(r.status===429) return {ok:false,quota:true,line:mdl+' : '+(hasDay?'quota du JOUR atteint'+(hasMin?' + minute':''):'limite par minute seulement (le quota du jour n’est pas épuisé)')};
+            if(r.status===403||r.status===401||(r.status===400&&/api key/.test(lw))) return {ok:false,line:'✖ clé refusée / service non activé pour son projet',stop:true};
+            if(r.status===404) return {ok:false,line:mdl+' : introuvable'};
+            return {ok:false,line:mdl+' : '+([500,502,503,504,529].includes(r.status)?'serveurs Google surchargés':'erreur HTTP '+r.status)};
+          }catch(e){return {ok:false,line:mdl+' : '+(e&&e.name==='AbortError'?'pas de réponse après 20 s':'réseau'),stop:true}}
+        };
+        L.push('— Test de rédaction de chaque clé (modèles essayés : '+mdls.join(', ')+') —');
+        let okN=0;
+        for(let i=0;i<ks.length;i++){
+          put(L.join('\n')+'\nTest de rédaction clé '+(i+1)+'/'+ks.length+'…');
+          const parts=[];let good=null;
+          for(const m of mdls){
+            const r=await probe(ks[i],m);
+            if(r.ok){good=r;break}
+            parts.push(r.line);
+            if(r.stop||!r.quota) break;
+            await geminiWait(300);
           }
-          L.push('→ '+okN+' clé(s) sur '+ks.length+' peuvent rédiger maintenant.');
+          if(good){okN++;L.push('Clé '+(i+1)+' : '+good.line+(parts.length?' (après : '+parts.join(' ; ')+')':''))}
+          else L.push('Clé '+(i+1)+' : ⚠ '+parts.join(' ; '));
+          await geminiWait(300);
         }
+        L.push('→ '+okN+' clé(s) sur '+ks.length+' peuvent rédiger maintenant (chaque modèle a son propre quota du jour : l’application bascule seule sur un autre modèle).');
       }
       try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse avec la clé '+(((GEM.keyIndex||0)+1))+'/'+ks.length+(DB.ai.model?' · modèle '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
       catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,240));if(e&&e.httpStatus)L.push('Détail Google : HTTP '+e.httpStatus+(e.googleStatus?' · '+e.googleStatus:'')+(e.googleMessage?' · '+e.googleMessage:'').slice(0,320));else if(e&&e.raw)L.push('Détail technique Google : '+String(e.raw).slice(0,500));else if(e&&e.code)L.push('Code interne : '+e.code);}
       L.push('Conclusion : « clé joignable » confirme seulement que Google répond au test de connexion. Le test de rédaction vérifie séparément la génération. Une surcharge ou un délai de Google ne signifie ni clé invalide ni quota journalier épuisé.');
-      put(L.join('\n'));b.disabled=false;
+      put(L.join('\n'));b.disabled=false;if(b2)b2.disabled=false;
     })();
     return}
   if(b.id==='stopGen'){GEN.stop=true;setGen('Arrêt en cours…');abortAllFetches();return}
