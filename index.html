@@ -1099,6 +1099,8 @@ async function geminiJson(prompt,opts){
           GEM.bz=GEM.bz||{};const nb=GEM.bz[hk]=(GEM.bz[hk]||0)+1;
           GEM.hot[hk]=Date.now()+Math.min(45,8*nb)*1000;
           glog('Google indisponible · clé '+keyNo+'/'+keys.length+' · '+model+' · nouvelle tentative limitée');
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model&&!(GEM.dead[n]>Date.now()))].slice(0,7)}catch(_){}
+            if(models.length>1){glog('modèle '+model+' surchargé : essai des autres modèles');redo=true;break}}
           // Continuer la rotation : les clés peuvent appartenir à des projets Google distincts.
           // Une surcharge sur quelques clés ne prouve pas que les autres projets sont indisponibles.
           continue;
@@ -3049,8 +3051,8 @@ root.addEventListener('click',async e=>{
             const hasDay=ids.some(x=>/day/i.test(x))||(!ids.length&&/per.?day|perday|daily/.test(lw)),hasMin=ids.some(x=>/minute/i.test(x));
             if(r.status===429) return {ok:false,quota:true,line:mdl+' : '+(hasDay?'quota du JOUR atteint'+(hasMin?' + minute':''):'limite par minute seulement (le quota du jour n’est pas épuisé)')};
             if(r.status===403||r.status===401||(r.status===400&&/api key/.test(lw))) return {ok:false,line:'✖ clé refusée / service non activé pour son projet',stop:true};
-            if(r.status===404) return {ok:false,line:mdl+' : introuvable'};
-            return {ok:false,line:mdl+' : '+([500,502,503,504,529].includes(r.status)?'serveurs Google surchargés':'erreur HTTP '+r.status)};
+            if(r.status===404) return {ok:false,next:true,line:mdl+' : introuvable'};
+            return {ok:false,next:true,line:mdl+' : '+([500,502,503,504,529].includes(r.status)?'serveurs Google surchargés (erreur '+r.status+')':'erreur HTTP '+r.status)};
           }catch(e){return {ok:false,line:mdl+' : '+(e&&e.name==='AbortError'?'pas de réponse après 20 s':'réseau'),stop:true}}
         };
         L.push('— Test de rédaction de chaque clé (modèles essayés : '+mdls.join(', ')+') —');
@@ -3062,7 +3064,7 @@ root.addEventListener('click',async e=>{
             const r=await probe(ks[i],m);
             if(r.ok){good=r;break}
             parts.push(r.line);
-            if(r.stop||!r.quota) break;
+            if(r.stop||!(r.quota||r.next)) break;
             await geminiWait(300);
           }
           if(good){okN++;L.push('Clé '+(i+1)+' : '+good.line+(parts.length?' (après : '+parts.join(' ; ')+')':''))}
