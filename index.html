@@ -963,7 +963,11 @@ function abortAllFetches(){LIVE.forEach(c=>{try{c.abort()}catch(e){}});LIVE.clea
 function geminiFetch(url,options,timeoutMs){
   const controller=new AbortController();LIVE.add(controller);
   const timer=setTimeout(()=>controller.abort(),timeoutMs||12000);
-  return fetch(url,Object.assign({},options||{},{signal:controller.signal})).finally(()=>{clearTimeout(timer);LIVE.delete(controller)});
+  const done=()=>{clearTimeout(timer);LIVE.delete(controller)};
+  // Le délai reste actif jusqu’à la fin de la LECTURE de la réponse : sinon un corps de réponse qui n’arrive jamais bloque tout indéfiniment.
+  return fetch(url,Object.assign({},options||{},{signal:controller.signal})).then(r=>{
+    for(const m of ['json','text','blob','arrayBuffer']){if(typeof r[m]!=='function') continue;const o=r[m].bind(r);r[m]=()=>o().finally(done)}
+    return r},e=>{done();throw e});
 }
 function gBase(){return String((usingProxy()&&DB.ai.proxy)||'https://generativelanguage.googleapis.com').trim().replace(/\/+$/,'')}
 function gHeaders(key,json){const h=json?{'Content-Type':'application/json'}:{};if(key&&key!=='proxy')h['x-goog-api-key']=key;return h}
@@ -971,7 +975,7 @@ async function geminiModelList(key){
   let r;
   try{r=await geminiFetch(gBase()+'/v1beta/models?pageSize=200',{headers:gHeaders(key||DB.ai.key)},12000)}
   catch(e){throw {code:e&&e.name==='AbortError'?'timeout':'network',message:e&&e.name==='AbortError'?'Le service de rédaction met trop de temps à répondre pendant la recherche des modèles (12 secondes). Vérifiez la connexion puis réessayez.':'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'}}
-  const j=await geminiCheck(r);
+  let j;try{j=await geminiCheck(r)}catch(e){if(e&&e.name==='AbortError') throw {code:'timeout',message:'Le service de rédaction met trop de temps à répondre pendant la recherche des modèles.'};throw e}
   const list=(j.models||[])
     .filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
     .map(m=>String(m.name||'').replace(/^models\//,''))
@@ -1059,6 +1063,7 @@ async function geminiJson(prompt,opts){
   if(!keys.length) throw {code:'no_ai',message:'Ajoutez au moins une clé gratuite dans Réglages.'};
   // Les états affichés doivent décrire cette tentative, pas conserver les résultats d'une ancienne rotation.
   GEM.keyStates={}; gemKeyState(0);
+  if(DB.ai&&DB.ai.dead) for(const [m,t] of Object.entries(DB.ai.dead)) if(t>Date.now()&&!(GEM.dead[m]>=t)) GEM.dead[m]=t;
   const parts=[{text:prompt}];
   for(const b of (opts.images||[])) parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await blobB64(b)}});
   let tmo=0;
@@ -1097,6 +1102,12 @@ async function geminiJson(prompt,opts){
       }
       let j;
       try{j=await geminiCheck(r)}catch(e){
+        if(e&&e.name==='AbortError'){
+          if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
+          lastError={code:'timeout',message:'Le service de rédaction a commencé à répondre mais n’a pas fini d’envoyer sa réponse.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='RÉPONSE INCOMPLÈTE (délai dépassé)';gemKeyState(keyNo);glog('clé '+keyNo+'/'+keys.length+' · '+model+' : réponse incomplète (délai)');
+          if(++tmo>=3&&!isTest) throw {code:'service_busy',message:'Le service de génération Google n’a pas fini de répondre après 3 délais d’attente. Réessayez dans quelques minutes.'};
+          continue;
+        }
         lastError=e;
         if(e.code==='rate_limited'){
           const perDay=!!e.perDay||/PerDay|per day|daily|requests_per_day|generate_content_free_tier_requests_per_day|quota.?day/i.test((e.raw||'')+' '+(e.message||''));
@@ -1127,7 +1138,7 @@ async function geminiJson(prompt,opts){
         }
         if(e.code==='model_gone'){
           GEM.keyStates[keyNo]='MODÈLE INDISPONIBLE (essai d’un autre modèle)';gemKeyState(keyNo);
-          GEM.dead[model]=Date.now()+24*3600e3;
+          GEM.dead[model]=Date.now()+24*3600e3;DB.ai.dead=DB.ai.dead||{};DB.ai.dead[model]=GEM.dead[model];save();
           glog('modèle '+model+' refusé (introuvable) : abandonné pour toutes les clés');
           if(DB.ai.model===model){DB.ai.model='';save()}
           try{
