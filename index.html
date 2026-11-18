@@ -1288,10 +1288,10 @@ async function compatModels(pv){
   try{
     if(pv==='openrouter'){
       const r=await geminiFetch(COMPAT[pv].url+'/models',{},15000);const j=r.ok?await r.json():{data:[]};
-      list=(j.data||[]).filter(m=>/:free$/.test(m.id)&&!/vision|image|audio|embed|moderat|guard/i.test(m.id+' '+((m.architecture||{}).modality||''))&&((m.architecture||{}).output_modalities||['text']).join().includes('text'))
+      list=(j.data||[]).filter(m=>/:free$/.test(m.id)&&!/vision|image|audio|embed|moderat|guard|nemotron|ultra|thinking|reason|-r1|r1-|405b|\bvl\b/i.test(m.id+' '+((m.architecture||{}).modality||''))&&((m.architecture||{}).output_modalities||['text']).join().includes('text'))
         .sort((a,b)=>(b.context_length||0)-(a.context_length||0)||String(a.id).localeCompare(b.id)).map(m=>m.id);
       // Modèles généralistes d’abord (meilleure rédaction en français), puis les autres par taille de contexte.
-      const fav=/llama-3\.3-70b|gpt-oss-120b|gemma-3|qwen3?-(?:next|235|72|32)|deepseek|mistral|glm|kimi|nemotron/i;
+      const fav=/llama-3\.3-70b|gemma-3|mistral|gpt-oss-120b|qwen/i;
       list=[...list.filter(x=>fav.test(x)),...list.filter(x=>!fav.test(x))];
     }else{
       const r=await geminiFetch(COMPAT[pv].url+'/models',{headers:{Authorization:'Bearer '+compatKey(pv)}},15000);const j=r.ok?await r.json():{data:[]};
@@ -1323,7 +1323,7 @@ async function compatJson(pv,prompt,opts){
       GEN.keyLabel=nm+' · '+model;try{gemKeyActive(1,1,model)}catch(_){}
       let r;
       try{
-        r=await geminiFetch(COMPAT[pv].url+'/chat/completions',{method:'POST',headers:Object.assign({'Content-Type':'application/json',Authorization:'Bearer '+key},COMPAT[pv].extraHeaders),body:JSON.stringify(body)},opts.test?25000:120000);
+        r=await geminiFetch(COMPAT[pv].url+'/chat/completions',{method:'POST',headers:Object.assign({'Content-Type':'application/json',Authorization:'Bearer '+key},COMPAT[pv].extraHeaders),body:JSON.stringify(body)},opts.test?25000:80000);
       }catch(e){
         if(e&&e.name==='AbortError'){
           if(stopped()&&!opts.test) throw {code:'cancelled',message:'Arrêté.'};
@@ -2003,6 +2003,11 @@ Réponds uniquement par {"ok":true} si tout est exact. Sinon {"ok":false,"corrig
   return await ask(p,{fast:true});
 }
 async function genSeanceContent(f,i,o){
+  const s0=f.seances[i];s0.genPartial=true;
+  await genSeanceContent0(f,i,o);
+  delete s0.genPartial;
+}
+async function genSeanceContent0(f,i,o){
   const s=f.seances[i],A=f.tpl==='A';
   const prev=f.seances.slice(0,i).map((x,k)=>(k+1)+'. '+x.capTitre+(has(x.contenus)?' ['+String(x.contenus).replace(/\s*\n\s*/g,' ').slice(0,160)+']':'')).join(' | ');
   const prevSit=f.seances.slice(0,i).map((x,k)=>has(x.situation)?(k+1)+'. '+String(x.situation).slice(0,110):'').filter(Boolean);
@@ -2102,7 +2107,7 @@ function resetGenerated(f,keepPlan){
   f.seances.forEach(s=>{
     if(has(s.situation)) s.prevSit=[String(s.situation).replace(/\s+/g,' ').slice(0,200)].concat(s.prevSit||[]).slice(0,3);
     for(const k of ['capNum','capTitre','contenus','situation','img','imgKey','synthese','resolution','essentiel','exoApp','exoMaison','consignes','trace','traceImg','imgEss','figs','exoAppSol','evalQ','evalR','exoMaisonSol']){ if(keepPlan&&(k==='capNum'||k==='capTitre'||k==='contenus')) continue; s[k]=b[k] }
-    delete s.autoImgSearch;
+    delete s.autoImgSearch;delete s.genPartial;
     const mm=A?[['remob',['prof','eleve']],['appro',['eleve']]]:[['prereq',['prof','eleve']]];
     mm.forEach(([m,ks])=>{if(s.m&&s.m[m]&&DEF[f.tpl]&&DEF[f.tpl][m]) ks.forEach(k=>{s.m[m][k]=DEF[f.tpl][m][k]})});
   });
@@ -2135,9 +2140,9 @@ async function generateAll(f,o){
   if(!f.seances.every(x=>has(x.capTitre)&&has(x.contenus))){setGen('Répartissez d’abord les capacités : cliquez sur « Répartir les capacités sur les séances » (étape 2).',true);return}
   if(!aiKind()){setGen('Pour rédiger automatiquement, activez la rédaction automatique dans Réglages.',true);return}
   GEN.running=true;GEN.stop=false;GEN.figMissing=[];GEN.keyLabel='';GEM.keyStates={};lockGen(true);await acquireGenWakeLock();
-  const complete=s=>f.tpl==='A'
+  const complete=s=>!s.genPartial&&(f.tpl==='A'
     ? ['situation','synthese','essentiel','exoApp','exoMaison'].every(k=>has(s[k]))
-    : ['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'].every(k=>has(s[k]));
+    : ['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'].every(k=>has(s[k])));
   let failed=[],failWhy='',bilNote='';
   try{
     if(o.overwrite===true){
@@ -2150,6 +2155,7 @@ async function generateAll(f,o){
     saveNow();
     {const sh=document.getElementById('sheets');if(sh)sh.innerHTML='';}
     if(view==='fiche'){render2();lockGen(true)}
+    glog('Services dans l’ordre : '+(aiChain(false).map(c=>AI_NAME[c]).join(' → ')||'aucun'));
     rememberProgram(f);touch();saveNow();
     pbegin(f.seances.length);
     setGen(todo.length?'Reprise de la rédaction : '+todo.length+' séance(s) restent à préparer.':'Toutes les séances sont déjà rédigées. Vérification des exercices de synthèse…');
