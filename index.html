@@ -944,8 +944,8 @@ async function geminiCheck(r){
   if(r.ok) return r.json();
   let msg='',j=null; try{j=await r.json();msg=(j.error&&j.error.message)||''}catch(e){}
   const e={code:'http_'+r.status,httpStatus:r.status,googleStatus:(j&&j.error&&j.error.status)||'',googleMessage:msg,raw:JSON.stringify(j||{})};
-  if(r.status===400&&/api key/i.test(msg)) e.message='Clé invalide. Vérifiez qu’elle est copiée en entier dans les Réglages.';
-  else if(r.status===403) e.message='Clé refusée ou service non autorisé dans votre compte. '+msg;
+  if(r.status===400&&/api key/i.test(msg)){e.code='key_bad';e.message='Clé invalide. Vérifiez qu’elle est copiée en entier dans les Réglages.'}
+  else if(r.status===401||r.status===403){e.code='key_bad';e.message='Clé refusée ou service non autorisé dans votre compte. '+(/has not been used|disabled|SERVICE_DISABLED/i.test(msg)?'Le service « Generative Language API » n’est pas activé pour le projet de cette clé : créez plutôt la clé sur aistudio.google.com/apikey (projet créé automatiquement). ':'')+msg}
   else if(r.status===429) {
     e.code='rate_limited';
     // Google renvoie des 429 pour plusieurs limites différentes : ne pas les confondre.
@@ -1052,7 +1052,7 @@ async function geminiJson(prompt,opts){
   const isTest=!!opts.test, fast=!!opts.fast, t0=Date.now(), stopped=()=>GEN.stop||(opts.cancel&&opts.cancel.stop);
   const thinkCfg=m=>{if(GEM.noThink&&GEM.noThink[m]||/pro/.test(m)) return {};const v=/gemini-(\d+)/.exec(m);return (v&&+v[1]>=3)?{thinkingConfig:{thinkingLevel:'low'}}:{thinkingConfig:{thinkingBudget:0}}};
   let redo=false;
-  let waits=0,badJ=0,lastError=null,models,busySeen={};
+  let waits=0,badJ=0,lastBad=null,lastError=null,models,busySeen={};
   try{models=await gemModels(GEM.good&&keys.includes(GEM.good)?GEM.good:keys[0])}
   catch(e){if(e&&(e.name==='TypeError'||e.code==='network'))throw {code:'network',message:'Connexion au service de rédaction impossible : vérifiez votre connexion Internet.'};throw e}
   if(!models.length) throw {code:'rate_limited',message:'Aucun modèle disponible avec cette clé.'};
@@ -1062,6 +1062,7 @@ async function geminiJson(prompt,opts){
     for(const [key,model] of order()){
       const hk=key+'|'+model;
       if(GEM.dead[model]>Date.now()) continue;
+      if(GEM.badKey&&GEM.badKey[key]>Date.now()) continue;
       if(GEM.hot[hk]>Date.now()){const w=Math.ceil((GEM.hot[hk]-Date.now())/1000);soonest=soonest?Math.min(soonest,w):w;continue}
       const at=Math.max(Date.now(),(GEM.klast[key]||0)+GEM.gap); GEM.klast[key]=at; const gap=at-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
@@ -1102,6 +1103,12 @@ async function geminiJson(prompt,opts){
           // Une surcharge sur quelques clés ne prouve pas que les autres projets sont indisponibles.
           continue;
         }
+        if(e.code==='key_bad'){
+          GEM.badKey=GEM.badKey||{};GEM.badKey[key]=Date.now()+3600e3;lastBad=e;
+          GEM.keyStates[keyNo]='CLÉ INUTILISABLE (ignorée) : '+String(e.message||'').slice(0,110);gemKeyState(keyNo);
+          glog('clé '+keyNo+'/'+keys.length+' refusée par Google : ignorée pour cette préparation');
+          continue;
+        }
         if(e.code==='model_gone'){
           GEM.keyStates[keyNo]='MODÈLE INDISPONIBLE (essai d’un autre modèle)';gemKeyState(keyNo);
           GEM.dead[model]=Date.now()+24*3600e3;
@@ -1132,6 +1139,7 @@ async function geminiJson(prompt,opts){
         continue}
     }
     if(redo){redo=false;round--;continue}
+    if(keys.every(k=>GEM.badKey&&GEM.badKey[k]>Date.now())&&lastBad) throw lastBad;
     if(isTest) break;
     // Tous les projets/clés ont épuisé leur quota journalier pour les modèles testés :
     // arrêter proprement et afficher la demande d'ajout de nouvelles clés.
@@ -1968,7 +1976,7 @@ async function repartirCaps(f){
 async function generateAll(f,o){
   if(GEN.running) return;
   if(!f.capacites.some(c=>has(c.cap))){setGen('Ajoutez d’abord les capacités et contenus (étape 2).',true);return}
-  GEN.running=true;GEN.stop=false;GEN.figMissing=[];GEN.keyLabel='';GEM.keyStates={};GEM.hot={};GEM.day={};GEM.bz={};lockGen(true);await acquireGenWakeLock();
+  GEN.running=true;GEN.stop=false;GEN.figMissing=[];GEN.keyLabel='';GEM.keyStates={};GEM.hot={};GEM.day={};GEM.bz={};GEM.badKey={};lockGen(true);await acquireGenWakeLock();
   const n=f.seances.length;let failed=[],failWhy='',snap=null;
   try{
     if(!f.seances.every(x=>has(x.capTitre)&&has(x.contenus))){setGen('Répartissez d’abord les capacités : cliquez sur « Répartir les capacités sur les séances » (étape 2).',true);return}
@@ -2814,7 +2822,7 @@ function stepSeances(f){
    <p class="muted small" style="margin:0 0 10px">À partir de la répartition des capacités (étape 2), l’application rédige pour chaque séance la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices. Chaque nouvelle préparation efface d’abord les séances et les exercices de synthèse, puis les rédige à nouveau en entier. Les séances sont traitées une par une ; la clé actuellement utilisée est affichée pendant la rédaction. Si une clé atteint sa limite, la clé suivante reprend la même séance.</p>
    <div class="row"><button class="btn" id="genAll" data-lock="1">Préparer les séances</button><button class="btn alt" id="genAllOver" data-lock="1">Tout régénérer</button>${GEN.running?'<button class="btn danger" id="stopGen">Arrêter</button>':''}</div>
    <div class="status genstatus${GEN.err?' err':' muted'}" role="status" style="margin-top:10px">${esc(GEN.msg||'')}</div>
-   <div id="genkey-status" class="muted small" role="status" style="margin-top:5px">${esc(GEN.keyLabel||'Aucune clé utilisée pour le moment.')}</div>
+   <div id="genkey-status" class="muted small" role="status" style="margin-top:5px;white-space:pre-line">${esc(GEN.keyLabel||'Aucune clé utilisée pour le moment.')}</div>
    <div class="genprog" style="margin-top:8px"></div>
    ${aiKind()==='gemini'?'<div style="margin-top:8px"><button class="btn sm alt" id="netTest">Tester ma connexion et mes clés</button><div id="nettest" class="small" style="margin-top:6px;white-space:pre-wrap"></div></div>':''}
    <div class="muted small" style="margin-top:6px">${esc(diagText())}</div>${GEMLOG.length?'<details style="margin-top:8px"><summary class="muted small">Détails techniques (journal des requêtes)</summary><pre class="small" style="white-space:pre-wrap;margin:6px 0 0">'+esc(GEMLOG.slice(-25).join('\n'))+'</pre></details>':''}${aiKind()?'':'<div style="margin-top:8px"><button class="btn sm" data-view="set">Activer la rédaction automatique</button></div>'}</section>`;
@@ -3021,6 +3029,32 @@ root.addEventListener('click',async e=>{
           let detail='';if(!r.ok){try{const jj=await r.clone().json();const er=jj&&jj.error||{};detail=(er.status?er.status+' — ':'')+(er.message||'');}catch(_){}}L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(r.ok?'✔ joignable en '+ms+' ms':'⚠ HTTP '+r.status+(detail?' · '+detail.slice(0,220):'')+' ('+ms+' ms)'));
         }catch(e){L.push((ks.length>1?'Clé '+(i+1)+' : ':'Connexion : ')+(e&&e.name==='AbortError'?'✖ aucune réponse après 12 s (réseau trop lent ou bloqué)':'✖ service injoignable (réseau)'))}
         put(L.join('\n')+'\nTest en cours…');
+      }
+      if(ks.length>1||ks[0]!=='proxy'){
+        let mdl=String(DB.ai&&DB.ai.model||'').trim();
+        try{if(!mdl||GEM.dead[mdl]>Date.now()){const ls=await geminiModelList(ks[0]);mdl=(ls.filter(n=>!(GEM.dead[n]>Date.now()))[0])||''}}catch(_){}
+        if(mdl){
+          L.push('— Test de rédaction de chaque clé (modèle '+mdl+', très petite requête) —');
+          let okN=0;
+          for(let i=0;i<ks.length;i++){
+            put(L.join('\n')+'\nTest de rédaction clé '+(i+1)+'/'+ks.length+'…');
+            const t2=Date.now();let line='';
+            try{
+              const r=await geminiFetch(gBase()+'/v1beta/models/'+mdl+':generateContent',{method:'POST',headers:gHeaders(ks[i],true),body:JSON.stringify({contents:[{role:'user',parts:[{text:'Réponds par le mot ok.'}]}],generationConfig:{maxOutputTokens:30}})},20000);
+              const sec=((Date.now()-t2)/1000).toFixed(1);
+              if(r.ok){okN++;line='✔ peut rédiger ('+sec+' s)'}
+              else{let raw='';try{raw=JSON.stringify(await r.json())}catch(_){}
+                const lw=raw.toLowerCase();
+                line=r.status===429?(/per.?day|perday|daily/.test(lw)?'⚠ quota du JOUR atteint (revient à 8 h UTC)':'⚠ limite par minute atteinte (patientez 1 minute)')
+                  :(r.status===403||r.status===401||(r.status===400&&/api key/.test(lw)))?'✖ clé refusée / service non activé pour son projet'
+                  :r.status===404?'⚠ modèle introuvable pour cette clé'
+                  :[500,502,503,504,529].includes(r.status)?'⚠ serveurs Google surchargés (temporaire)':'⚠ erreur HTTP '+r.status}
+            }catch(e){line=e&&e.name==='AbortError'?'⚠ pas de réponse après 20 s':'✖ réseau'}
+            L.push('Clé '+(i+1)+' : '+line);
+            await geminiWait(400);
+          }
+          L.push('→ '+okN+' clé(s) sur '+ks.length+' peuvent rédiger maintenant.');
+        }
       }
       try{const t1=Date.now();await geminiJson('Réponds uniquement par {"ok":true}',{test:true});L.push('Rédaction : ✔ réponse avec la clé '+(((GEM.keyIndex||0)+1))+'/'+ks.length+(DB.ai.model?' · modèle '+DB.ai.model:'')+' en '+((Date.now()-t1)/1000).toFixed(1)+' s')}
       catch(e){L.push('Rédaction : ✖ '+String((e&&e.message)||'échec').slice(0,240));if(e&&e.httpStatus)L.push('Détail Google : HTTP '+e.httpStatus+(e.googleStatus?' · '+e.googleStatus:'')+(e.googleMessage?' · '+e.googleMessage:'').slice(0,320));else if(e&&e.raw)L.push('Détail technique Google : '+String(e.raw).slice(0,500));else if(e&&e.code)L.push('Code interne : '+e.code);}
