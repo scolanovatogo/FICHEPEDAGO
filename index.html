@@ -977,7 +977,9 @@ async function geminiModelList(key){
     .map(m=>String(m.name||'').replace(/^models\//,''))
     .filter(n=>/^gemini-/i.test(n)&&!/image|tts|live|audio|embedding|robotics|experimental|thinking|customtools|computer/i.test(n));
   const score=n=>(/preview/.test(n)?10:0)+(/^gemini-[\d.]+-flash$/.test(n)?0:/flash/.test(n)&&!/lite/.test(n)?1:/flash/.test(n)?2:3);
-  return [...new Set(list)].sort((a,b)=>score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
+  // Modèles stables d’abord (moins surchargés que les tout derniers), puis les plus récents.
+  const stab=n=>/^gemini-2\.5-flash$/.test(n)?0:/^gemini-2\.5-flash-lite$/.test(n)?1:2;
+  return [...new Set(list)].sort((a,b)=>stab(a)-stab(b)||score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
 }
 async function geminiModel(){
   if(DB.ai.model) return DB.ai.model;
@@ -1018,6 +1020,18 @@ async function gemModels(key){
   // Démarrage rapide : réutilise d'abord le modèle déjà choisi et enregistré.
   // La découverte complète n'est faite qu'en cas de quota ou de modèle indisponible.
   const saved=String(DB.ai&&DB.ai.model||'').trim();
+  const STABLE=/^gemini-2\.5-flash(-lite)?$/;
+  if(saved&&STABLE.test(saved)&&!(GEM.dead[saved]>Date.now())) return [saved];
+  if(saved&&!GEM.prefDone&&!(GEM.dead[saved]>Date.now())){
+    // Une seule fois par session : préférer un modèle stable (moins sollicité) au dernier modèle enregistré.
+    GEM.prefDone=true;
+    try{
+      const ls=await geminiModelList(key);GEM.list=ls;GEM.listAt=Date.now();
+      const st=ls.find(n=>STABLE.test(n)&&!(GEM.dead[n]>Date.now()));
+      if(st){DB.ai.model=st;save();glog('modèle stable choisi en premier : '+st+' (au lieu de '+saved+')');return [st]}
+    }catch(_){}
+    return [saved];
+  }
   if(saved&&!(GEM.dead[saved]>Date.now())) return [saved];
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   return GEM.list.filter(n=>!(GEM.dead[n]>Date.now())).slice(0,7);
