@@ -162,91 +162,37 @@ function progParse(rows){
   m=/s[ée]ances?\s*[:：]\s*(\d+)/i.exec(all)||/(\d+)\s*s[ée]ances/i.exec(all); if(m){out.nbSeances=+m[1];out.nbSeancesLu=true}
   m=/\bclasse\s*[:：]\s*([^\s|]+)/i.exec(all); if(m) out.classe=m[1];
   if(hIdx<0) return out;
-  const hr=rows[hIdx], body=[];
-  for(let i=hIdx+1;i<rows.length;i++){
-    if(/^(r[ée]partition|strat[ée]gie|d[ée]roulement|situation d|moments? didactiques?)/i.test(rows[i].text)) break;
-    body.push(rows[i]);
-  }
-  if(!body.length) return out;
-  /* Détermine la séparation des colonnes à partir des espaces horizontaux répétés. */
+  /* séparation des colonnes : on cherche où commence la colonne de droite d'après les grands vides des lignes */
+  const hr=rows[hIdx];
+  const body=[];
+  for(let i=hIdx+1;i<rows.length;i++){ if(/^(r[ée]partition|strat[ée]gie|d[ée]roulement|situation d|moments? didactiques?)/i.test(rows[i].text)) break; body.push(rows[i]) }
   const cand=[];
-  for(const rw of body){
-    const its=rw.its||[]; let best=0,bx=null;
-    for(let k=1;k<its.length;k++){
-      const g=its[k].x-(its[k-1].x+(its[k-1].w||0));
-      if(g>best){best=g;bx=its[k].x}
-    }
-    if(best>18&&bx!==null)cand.push(Math.round(bx/4)*4);
-  }
+  for(const rw of body){const its=rw.its;let best=0,bx=null;for(let k=1;k<its.length;k++){const g=its[k].x-(its[k-1].x+(its[k-1].w||0));if(g>best){best=g;bx=its[k].x}}if(best>18&&bx!==null)cand.push(Math.round(bx/4)*4)}
   let split;
-  if(cand.length){
-    const cnt={};cand.forEach(c=>cnt[c]=(cnt[c]||0)+1);
-    const top=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0]; split=+top-3;
-  }else{
-    const ci=(hr.its||[]).find(t=>/^contenu/i.test(t.s));
-    const xs=body.flatMap(r=>(r.its||[]).map(t=>t.x));
-    const mn=Math.min(...xs),mx=Math.max(...body.map(r=>{const a=r.its||[],l=a[a.length-1];return l?l.x+(l.w||0):0}));
-    split=ci?Math.max(mn+20,(mn+ci.x)/2):mn+(mx-mn)*0.5;
-  }
-  const left=[],right=[];
-  for(const r of body){
-    if(/capacit/i.test(r.text)&&/contenu/i.test(r.text)&&r.text.length<60) continue;
-    const its=r.its||[];
-    const L=clean(joinIts(its.filter(t=>t.x<split-1)));
-    const R=clean(joinIts(its.filter(t=>t.x>=split-1)));
-    if(L) left.push({y:r.y,text:L});
-    if(R) right.push({y:r.y,text:R});
-  }
-  /* Les cellules de gauche peuvent être fusionnées sur plusieurs lignes.
-     On regroupe les lignes proches et on sépare les capacités par les grands blancs verticaux. */
-  const gaps=[];
-  for(let i=1;i<left.length;i++){const g=left[i].y-left[i-1].y;if(g>2&&g<100)gaps.push(g)}
-  gaps.sort((a,b)=>a-b);
-  const lineStep=gaps.length?gaps[Math.floor(gaps.length/2)]:40;
-  const breakGap=Math.max(55,lineStep*1.45);
-  let cap=null;
-  for(const it of left){
-    if(!cap||it.y-cap._lastY>breakGap){
-      cap={capacite:it.text,contenus:[],_ys:[],_firstY:it.y,_lastY:it.y};out.capacites.push(cap);
-    }else cap.capacite+=' '+it.text;
-    cap._ys.push(it.y);cap._lastY=it.y;
-  }
-  if(!out.capacites.length) return out;
-  out.capacites.forEach(c=>{c._center=c._ys.reduce((a,b)=>a+b,0)/c._ys.length;delete c._ys});
-  /* On traite la colonne de droite séparément : dans les tableaux scolaires,
-     une cellule de contenu peut commencer plus haut que la capacité correspondante
-     ou être fusionnée sur plusieurs capacités. Chaque ligne est donc rattachée
-     à la capacité dont le centre vertical est le plus proche. */
-  /* Les intitulés non précédés d’une puce ouvrent une section de contenu.
-     Une section peut couvrir plusieurs capacités lorsque la cellule est fusionnée. */
-  const sections=[]; let section=null;
+  if(cand.length){const cnt={};cand.forEach(c=>cnt[c]=(cnt[c]||0)+1);const top=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];split=+top-3}
+  else{const ci=hr.its.find(t=>/^contenu/i.test(t.s));const xs=rows.flatMap(r=>[r.its[0].x]);const mn=Math.min(...xs);const mx=Math.max(...rows.map(r=>{const l=r.its[r.its.length-1];return l.x+(l.w||0)}));split=ci?Math.max(mn+20,(mn+ci.x)/2):mn+(mx-mn)*0.33}
+  const diffs=[]; for(let i=1;i<body.length;i++){const d=body[i].y-body[i-1].y; if(d>2&&d<40) diffs.push(d)}
+  diffs.sort((a,b)=>a-b); const base=diffs.length?diffs[Math.floor(diffs.length*0.25)]:14;
+  let cur=null,lastLeftY=null;
   const bullet=/^[-•–·*▪●]\s*/;
-  for(const it of right){
-    const raw=it.text.trim(); if(!raw) continue;
-    const isBullet=bullet.test(raw), t=raw.replace(bullet,'').trim();
-    if(!t) continue;
-    const continuation=!isBullet&&(/^[a-zà-ÿ(,;:]/.test(t)||(section&&/[\-‐‑]$/.test(section.items.at(-1)?.text||'')));
-    if(!section||(!isBullet&&!continuation)){
-      section={y:it.y,items:[]};sections.push(section);
+  for(const r of body){
+    if(/capacit/i.test(r.text)&&/contenu/i.test(r.text)&&r.text.length<45) continue;
+    const L=clean(joinIts(r.its.filter(t=>t.x<split-1))), Rt=clean(joinIts(r.its.filter(t=>t.x>=split-1)));
+    if(L){
+      const startsUpper=/^[A-ZÀ-ÖØ-Þ0-9]/.test(L);
+      const gap=lastLeftY===null?999:r.y-lastLeftY;
+      if(!cur||(startsUpper&&gap>base*1.18)){cur={capacite:L,contenus:[]};out.capacites.push(cur)}
+      else cur.capacite+=' '+L;
+      lastLeftY=r.y;
     }
-    const prev=section.items.at(-1);
-    if(continuation&&prev) prev.text=prev.text.replace(/[\-‐‑]$/,'')+' '+t;
-    else section.items.push({text:t});
-  }
-  for(let si=0;si<sections.length;si++){
-    const sec=sections[si], nextY=sections[si+1]?.y??Infinity;
-    let targets=[];
-    out.capacites.forEach((c,i)=>{if(c._center>=sec.y-1&&c._center<nextY)targets.push(i)});
-    if(!targets.length){
-      let best=0,dist=Infinity;
-      out.capacites.forEach((c,i)=>{const d=Math.abs(sec.y-c._center);if(d<dist){dist=d;best=i}});
-      targets=[best];
-    }
-    for(const idx of targets){
-      out.capacites[idx].contenus.push(...sec.items.map(x=>x.text));
+    if(Rt){
+      if(!cur){cur={capacite:'',contenus:[]};out.capacites.push(cur)}
+      if(bullet.test(Rt)) cur.contenus.push(Rt.replace(bullet,''));
+      else if(cur.contenus.length&&/^[a-zà-ÿ(]/.test(Rt)) cur.contenus[cur.contenus.length-1]+=' '+Rt;
+      else cur.contenus.push(Rt);
     }
   }
-  out.capacites=out.capacites.map(c=>({capacite:clean(c.capacite),contenus:c.contenus.map(clean).filter(Boolean)})).filter(c=>c.capacite||c.contenus.length);
+  out.capacites=out.capacites.filter(c=>c.capacite||c.contenus.length);
   return out;
 }
 if(typeof module!=='undefined') module.exports={progRows,progParse};
@@ -593,7 +539,7 @@ function blockHTML(b){
 /* =========================================================
    Pagination (A4) : découpe les blocs et les lignes de tableau
    ========================================================= */
-const PAGE_H=1123,CONTENT_H=1123-36-62;
+const PAGE_H=1123,CONTENT_H=1123-36-68;
 function lhOf(k){return (!k||k>=.95)?1.27:(k>=.85?1.2:1.14)}
 const cellLen=c=>(c.lines||[]).reduce((a,x)=>a+String(x).length+30,0);
 function rowSplittable(r){return !!(r.cells&&r.cells.length&&r.cells.every(c=>!c.img&&!c.sub&&!(c.rs>1)&&!c.vm)&&r.cells.some(c=>cellLen(c)>=260))}
@@ -666,7 +612,7 @@ function paginate(doc,k){
       let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
       const kp=(rows[e].keep&&e+1<rows.length)?(rowSplittable(rows[e+1])?Math.min(rowH[e+1],80):rowH[e+1]):0;
       let need=h+kp+(chunk?0:m.headH);
-      if(i===e&&!kp&&used>0&&used+need>CONTENT_H){
+      if(i===e&&!kp&&used+need>CONTENT_H){
         const room=CONTENT_H-used-(chunk?0:m.headH);
         if(room>=60&&rowSplittable(rows[i])){
           const sp=splitRowFit(b,rows[i],room,M);
@@ -990,9 +936,9 @@ function ownKeys(){const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return
 function maskKey(k){k=String(k||'');return k.length<=10?'••••••••':k.slice(0,4)+'••••••••••••'+k.slice(-4)}
 function usingProxy(){return !!(DB.ai&&String(DB.ai.proxy||'').trim())&&!ownKeys().length}
 function geminiKeys(){return usingProxy()?['proxy']:ownKeys()}
-function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; for(const c of ['cerebras','mistral','groq','openrouter']) if(compatKey(c)) return c; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
+function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; for(const c of ['cloudflare','mistral','groq','openrouter']) if(compatKey(c)&&(c!=='cloudflare'||String((DB.ai&&DB.ai.cfUrl)||'').trim())) return c; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
-  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',openrouter:'OpenRouter (modèles gratuits)',groq:'Groq (gratuit)',cerebras:'Cerebras (gratuit)',mistral:'Mistral (gratuit)',claude:'Claude'}[k];
+  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',openrouter:'OpenRouter (modèles gratuits)',groq:'Groq (gratuit)',mistral:'Mistral (gratuit)',cloudflare:'Cloudflare Workers AI (gratuit)',claude:'Claude'}[k];
   return 'Lecture du document : locale (PDF avec texte, photo par reconnaissance de texte)'+(k==='gemini'?' + lecture assistée':nm?' + '+nm:'')+' · Rédaction des séances : '+(nm||(k==='free'?'service gratuit sans compte (expérimental)':'désactivée (voir Réglages)'));
 }
 function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=()=>rej(new Error('Lecture du fichier impossible'));r.onload=()=>res(String(r.result).split(',')[1]);r.readAsDataURL(b)})}
@@ -1076,6 +1022,10 @@ async function gemPause(sec,why){
   }
   if(GEN.pause===mine) GEN.pause=null;
 }
+function gemPerf(model,ms,ok){
+  DB.ai.perf=DB.ai.perf||{}; const p=DB.ai.perf[model]||{ms:ms,n:0,bad:0,t:0};
+  p.ms=p.n?Math.round(p.ms*0.6+ms*0.4):ms; p.n++; if(!ok) p.bad++; p.t=Date.now(); DB.ai.perf[model]=p; save();
+}
 async function gemModels(key){
   // Toujours consulter le catalogue Google et privilégier les modèles Flash récents.
   // Un ancien modèle mémorisé ne doit pas bloquer la rédaction s'il est encore listé
@@ -1084,7 +1034,12 @@ async function gemModels(key){
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   const available=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
   if(saved&&available.includes(saved)) glog('modèle enregistré '+saved+' : le catalogue actuel est privilégié pour éviter un modèle lent ou indisponible');
-  return available.slice(0,3);
+  /* Ordre : 1) modèles déjà éprouvés sur vos clés et rapides (le plus rapide d'abord) ; 2) modèles pas encore essayés (récents d'abord, comme le catalogue) ; 3) modèles lents ou souvent en échec. Un modèle « introuvable » est déjà écarté ci-dessus. */
+  const perf=(DB.ai&&DB.ai.perf)||{}, fresh=n=>perf[n]&&Date.now()-perf[n].t<14*864e5;
+  const cls=n=>!fresh(n)?1:((perf[n].ms<=70000&&perf[n].bad<=perf[n].n/2)?0:2);
+  const sorted=available.slice().sort((a,b)=>cls(a)-cls(b)||(cls(a)===0?perf[a].ms-perf[b].ms:0));
+  glog('modèles retenus : '+sorted.slice(0,3).map(n=>n+(fresh(n)?' ('+Math.round(perf[n].ms/1000)+' s)':'')).join(', '));
+  return sorted.slice(0,3);
 }
 function fixJsonText(t){
   return String(t)
@@ -1132,15 +1087,16 @@ async function geminiJson(prompt,opts){
       const at=Math.max(Date.now(),(GEM.klast[key]||0)+GEM.gap); GEM.klast[key]=at; const gap=at-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
       if(fast&&Date.now()-t0>80000) throw {code:'fatal',message:'Le service met trop de temps à répondre. Rien n’a été modifié : réessayez dans un instant.'};
+      const tReq=Date.now();
       let r;
       const keyNo=keys.indexOf(key)+1;gemKeyActive(keyNo,keys.length,model);
       glog('utilisation de la clé '+keyNo+'/'+keys.length+' · '+model);
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?30000:60000));
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?30000:(String(prompt).length>3500?120000:60000)));
       }catch(e){
         if(e&&e.name==='AbortError'&&stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
-        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='NE RÉPOND PAS (délai dépassé)';gemKeyState(keyNo);
+        if(e&&e.name==='AbortError'){gemPerf(model,125000,false);lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='NE RÉPOND PAS (délai dépassé)';gemKeyState(keyNo);
           if(++tmo>=3&&!isTest) throw {code:'service_busy',message:'Le service de génération Google n’a pas répondu après 3 délais d’attente. Les clés peuvent être joignables sans que le moteur de rédaction réponde. Ce n’est pas une preuve de quota journalier épuisé ni de clé invalide. Attendez quelques minutes puis réessayez. Ce qui est déjà rédigé est conservé.'};
           continue}
         GEM.keyStates[keyNo]='NE RÉPOND PAS (erreur réseau)';gemKeyState(keyNo);
@@ -1150,7 +1106,7 @@ async function geminiJson(prompt,opts){
       try{j=await geminiCheck(r)}catch(e){
         if(e&&e.name==='AbortError'){
           if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
-          lastError={code:'timeout',message:'Le service de rédaction a commencé à répondre mais n’a pas fini d’envoyer sa réponse.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='RÉPONSE INCOMPLÈTE (délai dépassé)';gemKeyState(keyNo);glog('clé '+keyNo+'/'+keys.length+' · '+model+' : réponse incomplète (délai)');
+          gemPerf(model,125000,false);lastError={code:'timeout',message:'Le service de rédaction a commencé à répondre mais n’a pas fini d’envoyer sa réponse.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='RÉPONSE INCOMPLÈTE (délai dépassé)';gemKeyState(keyNo);glog('clé '+keyNo+'/'+keys.length+' · '+model+' : réponse incomplète (délai)');
           if(++tmo>=3&&!isTest) throw {code:'service_busy',message:'Le service de génération Google n’a pas fini de répondre après 3 délais d’attente. Réessayez dans quelques minutes.'};
           continue;
         }
@@ -1201,6 +1157,7 @@ async function geminiJson(prompt,opts){
       }
       GEM.keyStates[keyNo]='RÉPONSE REÇUE · '+model;gemKeyState(keyNo);
       glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : réponse en '+Math.round((Date.now()-t0)/1000)+' s');
+      if(!isTest) gemPerf(model,Date.now()-tReq,true);
       GEM.keyIndex=keys.indexOf(key);GEM.good=key; if(GEM.bz) GEM.bz[hk]=0; if(DB.ai.model!==model){DB.ai.model=model;save()}
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
@@ -1318,8 +1275,8 @@ async function anthropicJson(prompt,opts){
 const COMPAT={
   openrouter:{nom:'OpenRouter',url:'https://openrouter.ai/api/v1',pref:[],extraHeaders:{'HTTP-Referer':'https://scolanovatogo.github.io','X-Title':'Fiches pédagogiques'}},
   groq:{nom:'Groq',url:'https://api.groq.com/openai/v1',pref:['llama-3.3-70b-versatile','openai/gpt-oss-120b','openai/gpt-oss-20b','llama-3.1-8b-instant'],extraHeaders:{}},
-  cerebras:{nom:'Cerebras',url:'https://api.cerebras.ai/v1',pref:['gpt-oss-120b','llama-3.3-70b','qwen-3-235b-a22b-instruct-2507','llama3.1-8b'],extraHeaders:{}},
-  mistral:{nom:'Mistral',url:'https://api.mistral.ai/v1',pref:['mistral-small-latest','mistral-large-latest','open-mistral-nemo'],extraHeaders:{}}
+  mistral:{nom:'Mistral',url:'https://api.mistral.ai/v1',pref:['mistral-small-latest','mistral-large-latest','open-mistral-nemo'],extraHeaders:{}},
+  cloudflare:{nom:'Cloudflare',get url(){return String((DB.ai&&DB.ai.cfUrl)||'').trim().replace(/\/+$/,'')+'/v1'},pref:['@cf/meta/llama-3.3-70b-instruct-fp8-fast','@cf/meta/llama-3.1-8b-instruct'],extraHeaders:{}}
 };
 const CMP={models:{},noJson:{},dead:{}};
 function compatCfg(pv){DB.ai.compat=DB.ai.compat||{};return DB.ai.compat[pv]=DB.ai.compat[pv]||{key:'',model:''}}
@@ -1338,12 +1295,29 @@ async function compatCheck(r,pv,model){
   else if(r.status>=500) {e.code='service_busy';e.message='Les serveurs de '+nm+' sont momentanément surchargés (erreur '+r.status+').'}
   throw e;
 }
-async function compatModels(pv){
-  const cfg=compatCfg(pv),user=String(cfg.model||'').trim();
-  if(user) return [user];
-  if(CMP.models[pv]&&CMP.models[pv].length) return CMP.models[pv].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
+async function compatModels(pv,vision){
+  const cfg=compatCfg(pv),user=String(cfg.model||'').trim(),ck=pv+(vision?'#v':'');
+  if(user&&!vision) return [user];
+  if(CMP.models[ck]&&CMP.models[ck].length) return CMP.models[ck].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
   let list=[];
   try{
+    if(vision){
+      if(pv==='openrouter'){
+        const r=await geminiFetch(COMPAT[pv].url+'/models',{},15000);const j=r.ok?await r.json():{data:[]};
+        list=(j.data||[]).filter(m=>/:free$/.test(m.id)&&(((m.architecture||{}).input_modalities||[]).includes('image')||/image->text|text\+image/.test((m.architecture||{}).modality||''))&&!/embed|moderat|guard/i.test(m.id))
+          .sort((a,b)=>(b.context_length||0)-(a.context_length||0)).map(m=>m.id);
+        const fav=/gemma-3|qwen.*vl|llama-4|mistral|pixtral|gemini|nemotron.*vl/i;
+        list=[...list.filter(x=>fav.test(x)),...list.filter(x=>!fav.test(x))];
+      }else{
+        const r=await geminiFetch(COMPAT[pv].url+'/models',{headers:{Authorization:'Bearer '+compatKey(pv)}},15000);const j=r.ok?await r.json():{data:[]};
+        const ids=(j.data||[]).map(m=>m.id);
+        const pref=pv==='mistral'?['mistral-small-latest','pixtral-large-latest','mistral-medium-latest','pixtral-12b-latest']:['meta-llama/llama-4-scout-17b-16e-instruct','meta-llama/llama-4-maverick-17b-128e-instruct'];
+        list=[...pref.filter(x=>ids.includes(x)),...(pv==='groq'?ids.filter(x=>/vision|llama-4|scout|maverick/i.test(x)&&!pref.includes(x)):[])];
+        if(!list.length&&!ids.length) list=pref.slice();
+      }
+      CMP.models[ck]=list.slice(0,5);
+      return CMP.models[ck].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
+    }
     if(pv==='openrouter'){
       const r=await geminiFetch(COMPAT[pv].url+'/models',{},15000);const j=r.ok?await r.json():{data:[]};
       list=(j.data||[]).filter(m=>/:free$/.test(m.id)&&!/vision|image|audio|embed|moderat|guard|nemotron|ultra|thinking|reason|-r1|r1-|405b|\bvl\b/i.test(m.id+' '+((m.architecture||{}).modality||''))&&((m.architecture||{}).output_modalities||['text']).join().includes('text'))
@@ -1357,17 +1331,22 @@ async function compatModels(pv){
       list=[...COMPAT[pv].pref.filter(x=>ids.includes(x)),...ids.filter(x=>!COMPAT[pv].pref.includes(x))];
     }
   }catch(_){}
-  if(!list.length) list=pv==='groq'?COMPAT.groq.pref.slice():['meta-llama/llama-3.3-70b-instruct:free'];
-  CMP.models[pv]=list.slice(0,6);
-  return CMP.models[pv].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
+  if(!list.length) list=(pv==='groq'||pv==='cloudflare')?COMPAT[pv].pref.slice():['meta-llama/llama-3.3-70b-instruct:free'];
+  CMP.models[ck]=list.slice(0,6);
+  return CMP.models[ck].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
 }
 async function compatJson(pv,prompt,opts){
   opts=opts||{};
   const cfg=compatCfg(pv),key=compatKey(pv),nm=COMPAT[pv].nom;
   if(!key) throw {code:'no_ai',message:NO_AI};
   if(typeof navigator!=='undefined'&&navigator.onLine===false) throw {code:'network',message:'Pas de connexion Internet : activez le Wi-Fi ou les données mobiles, puis réessayez.'};
-  let models=await compatModels(pv);
-  if(!models.length){CMP.models[pv]=null;CMP.dead={};models=await compatModels(pv)}
+  const imgs=(opts.images||[]).filter(Boolean),vision=imgs.length>0;
+  if(vision&&(pv==='cloudflare'||imgs.some(b=>!/^image\//.test(b.type||'')))) throw {code:'no_vision',message:nm+' ne lit pas ce type de fichier (photos seulement).'};
+  let userContent=prompt;
+  if(vision){userContent=[{type:'text',text:prompt}];for(const b of imgs)userContent.push({type:'image_url',image_url:{url:'data:'+(b.type||'image/jpeg')+';base64,'+await blobB64(b)}})}
+  let models=await compatModels(pv,vision);
+  if(!models.length){CMP.models[pv]=null;CMP.models[pv+'#v']=null;CMP.dead={};models=await compatModels(pv,vision)}
+  if(!models.length) throw {code:'no_vision',message:nm+' n’a pas de modèle gratuit qui lit les photos en ce moment.'};
   const stopped=()=>GEN.stop||(opts.cancel&&opts.cancel.stop);
   let lastErr=null,paused=false,tmo=0,badJ=0;
   for(let mi=0;mi<models.length;mi++){
@@ -1375,13 +1354,13 @@ async function compatJson(pv,prompt,opts){
     for(let attempt=0;attempt<2;attempt++){
       if(stopped()&&!opts.test) throw {code:'cancelled',message:'Arrêté.'};
       const useJson=!CMP.noJson[pv+'|'+model];
-      const body={model,messages:[{role:'system',content:'Tu es un conseiller pédagogique expert. Tu réponds uniquement par un objet JSON valide, sans texte autour ni balises de code.'},{role:'user',content:prompt}],temperature:opts.temp||0.45,max_tokens:opts.test?64:8000};
+      const body={model,messages:[{role:'system',content:'Tu es un conseiller pédagogique expert. Tu réponds uniquement par un objet JSON valide, sans texte autour ni balises de code.'},{role:'user',content:userContent}],temperature:opts.temp||0.45,max_tokens:opts.test?64:8000};
       if(useJson&&!opts.test) body.response_format={type:'json_object'};
       glog(nm+' · '+model+(attempt?' (nouvelle tentative)':''));
       GEN.keyLabel=nm+' · '+model;try{gemKeyActive(1,1,model)}catch(_){}
       let r;
       try{
-        r=await geminiFetch(COMPAT[pv].url+'/chat/completions',{method:'POST',headers:Object.assign({'Content-Type':'application/json',Authorization:'Bearer '+key},COMPAT[pv].extraHeaders),body:JSON.stringify(body)},opts.test?25000:80000);
+        r=await geminiFetch(COMPAT[pv].url+'/chat/completions',{method:'POST',headers:Object.assign({'Content-Type':'application/json',Authorization:'Bearer '+key},COMPAT[pv].extraHeaders),body:JSON.stringify(body)},opts.test?25000:(vision?110000:80000));
       }catch(e){
         if(e&&e.name==='AbortError'){
           if(stopped()&&!opts.test) throw {code:'cancelled',message:'Arrêté.'};
@@ -1432,12 +1411,12 @@ const CHAIN={cool:{}};
 function aiChain(withImages){
   const out=[],add=k=>{if(k&&!out.includes(k))out.push(k)};
   const prim=DB.ai&&DB.ai.provider;
-  const has={gemini:geminiKeys().length>0,openrouter:!!compatKey('openrouter'),groq:!!compatKey('groq'),cerebras:!!compatKey('cerebras'),mistral:!!compatKey('mistral'),anthropic:!!(DB.ai&&DB.ai.ckey&&prim==='anthropic')};
+  const has={gemini:geminiKeys().length>0,openrouter:!!compatKey('openrouter'),groq:!!compatKey('groq'),mistral:!!compatKey('mistral'),cloudflare:!!(compatKey('cloudflare')&&String((DB.ai&&DB.ai.cfUrl)||'').trim()),anthropic:!!(DB.ai&&DB.ai.ckey&&prim==='anthropic')};
   if(prim&&has[prim]) add(prim);
-  ['gemini','cerebras','mistral','groq','openrouter'].forEach(k=>{if(has[k])add(k)});
-  return withImages?out.filter(k=>k==='gemini'||k==='anthropic'):out;
+  ['gemini','cloudflare','mistral','groq','openrouter'].forEach(k=>{if(has[k])add(k)});
+  return withImages?out.filter(k=>k!=='cloudflare'):out;
 }
-const AI_NAME={gemini:'Google Gemini',openrouter:'OpenRouter',groq:'Groq',cerebras:'Cerebras',mistral:'Mistral',anthropic:'Claude'};
+const AI_NAME={gemini:'Google Gemini',openrouter:'OpenRouter',groq:'Groq',mistral:'Mistral',cloudflare:'Cloudflare',anthropic:'Claude'};
 function runProvider(k,prompt,opts){
   if(k==='anthropic') return anthropicJson(prompt,opts);
   if(k==='gemini') return geminiJson(prompt,opts);
@@ -1452,25 +1431,26 @@ async function ask(prompt,opts){
   const imgs=!!(opts.images&&opts.images.length);
   let chain=aiChain(imgs);
   if(!chain.length){
-    if(imgs) throw {code:'fatal',message:'Cette IA ne lit pas les photos. Importez le programme en PDF ou saisissez-le à la main, ou ajoutez une clé Gemini pour la lecture des photos.'};
+    if(imgs) throw {code:'fatal',message:'Aucune IA enregistrée ne lit les photos. Ajoutez une clé Mistral, Groq, OpenRouter ou Gemini dans Réglages, ou saisissez le tableau à la main.'};
     throw {code:'no_ai',message:NO_AI};
   }
   if(opts.test||chain.length===1) return runProvider(chain[0],prompt,opts);
   // Services en « repos » après un échec récent : on les essaie en dernier.
   const now=Date.now();
-  chain=[...chain.filter(c=>!(CHAIN.cool[c]>now)),...chain.filter(c=>CHAIN.cool[c]>now)];
+  const cq=c=>c+(imgs?'#v':'');
+  chain=[...chain.filter(c=>!(CHAIN.cool[cq(c)]>now)),...chain.filter(c=>CHAIN.cool[cq(c)]>now)];
   let first=null;
   for(let i=0;i<chain.length;i++){
     const c=chain[i],last=i===chain.length-1;
     try{
-      const r=await runProvider(c,prompt,Object.assign({},opts,last?{}:{fast:true}));
-      delete CHAIN.cool[c];
+      const r=await runProvider(c,prompt,Object.assign({},opts,(last||String(prompt).length>3500)?{}:{fast:true}));
+      delete CHAIN.cool[cq(c)];
       return r;
     }catch(e){
       if(e&&e.code==='cancelled') throw e;
       if(GEN.stop) throw e;
       if(!first) first=e;
-      CHAIN.cool[c]=Date.now()+8*60e3;
+      CHAIN.cool[cq(c)]=Date.now()+8*60e3;
       if(last) throw (first&&first!==e&&chain.length>1)?Object.assign({},first,{message:first.message+' Les autres services enregistrés ont aussi échoué : '+(e.message||'')}):e;
       glog(AI_NAME[c]+' indisponible ('+(e&&e.code||'erreur')+') → passage à '+AI_NAME[chain[i+1]]);
       setGen(AI_NAME[c]+' ne répond plus : passage automatique à '+AI_NAME[chain[i+1]]+'…');
@@ -1531,14 +1511,102 @@ function applyExtracted(f,d){
   f.photoNote=d.nbSeancesLu?'':'Le nombre de séances n’est pas indiqué dans le document : il a été proposé, ajustez-le à l’étape 1 si besoin.';
   return caps.length;
 }
-let OCR_BUSY=false;
-async function ocrItems(file){
-  if(!window.Tesseract) throw new Error('Le module de reconnaissance de texte n’est pas chargé (connexion Internet nécessaire).');
-  const blob=await canvasBlob(file,2600);
-  const res=await Tesseract.recognize(blob,'fra',{logger:m=>{if(m.status==='recognizing text')setGen('Reconnaissance du texte de la photo : '+Math.round((m.progress||0)*100)+' %')}});
-  const d=res.data; let words=d.words;
+let OCR_BUSY=false,OCR_WORKER=null,OCR_LOADING=null,OCR_Q=Promise.resolve();
+async function ocrLoadLib(){
+  if(window.Tesseract) return;
+  for(const u of ['https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js','https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js','https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js']){
+    try{await new Promise((ok,ko)=>{const sc=document.createElement('script');sc.src=u;sc.onload=ok;sc.onerror=()=>ko(new Error('x'));document.head.appendChild(sc)});if(window.Tesseract) return}catch(e){}
+  }
+  throw new Error('Le module de reconnaissance de texte n’a pas pu se charger (connexion Internet nécessaire).');
+}
+async function ocrWorker(){
+  await ocrLoadLib();
+  if(OCR_WORKER) return OCR_WORKER;
+  if(!OCR_LOADING) OCR_LOADING=(async()=>{
+    const w=await Tesseract.createWorker('fra',1,{logger:m=>{
+      if(m&&m.status==='recognizing text') setGen('Reconnaissance du texte de la photo : '+Math.round((m.progress||0)*100)+' %');
+      else if(m&&/load|initiali/.test(m.status||'')) setGen('Préparation du lecteur de texte (la première fois, le téléchargement peut durer une minute)…');
+    }});
+    OCR_WORKER=w;return w;
+  })().catch(e=>{OCR_LOADING=null;throw new Error('Le lecteur de texte n’a pas pu démarrer (connexion Internet nécessaire la première fois) : '+(e&&e.message||e))});
+  return OCR_LOADING;
+}
+async function ocrBitmap(file){
+  try{return await createImageBitmap(file,{imageOrientation:'from-image'})}catch(e){}
+  const url=URL.createObjectURL(file);
+  try{return await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error('Image illisible'));im.src=url})}
+  finally{setTimeout(()=>URL.revokeObjectURL(url),30000)}
+}
+/* Prétraitement : redressement de l’éclairage (ombres), contraste, binarisation (Otsu), effacement des traits du tableau. */
+async function ocrPrep(file,mode){
+  const bmp=await ocrBitmap(file);
+  const W0=bmp.width||bmp.naturalWidth,H0=bmp.height||bmp.naturalHeight;
+  const target=Math.min(2600,Math.max(1800,W0)),sc=target/W0;
+  const w=Math.max(10,Math.round(W0*sc)),h=Math.max(10,Math.round(H0*sc));
+  const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+  const cx=cv.getContext('2d',{willReadFrequently:true});cx.imageSmoothingQuality='high';cx.fillStyle='#fff';cx.fillRect(0,0,w,h);cx.drawImage(bmp,0,0,w,h);
+  if(bmp.close) try{bmp.close()}catch(e){}
+  const img=cx.getImageData(0,0,w,h),a=img.data,n=w*h,g=new Uint8Array(n);
+  for(let i=0,k=0;i<n;i++,k+=4) g[i]=(a[k]*77+a[k+1]*151+a[k+2]*28)>>8;
+  /* fond estimé sur une grille grossière (maximum local puis lissage) pour supprimer les ombres */
+  const B=8,gw=Math.ceil(w/B),gh=Math.ceil(h/B),grid=new Float32Array(gw*gh);
+  for(let gy=0;gy<gh;gy++)for(let gx=0;gx<gw;gx++){let m=0;const y1=Math.min(h,(gy+1)*B),x1=Math.min(w,(gx+1)*B);for(let y=gy*B;y<y1;y++){const r=y*w;for(let x=gx*B;x<x1;x++){const v=g[r+x];if(v>m)m=v}}grid[gy*gw+gx]=m}
+  const box=(src,rad)=>{const out=new Float32Array(src.length);for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){let t=0,c=0;for(let yy=Math.max(0,y-rad);yy<=Math.min(gh-1,y+rad);yy++)for(let xx=Math.max(0,x-rad);xx<=Math.min(gw-1,x+rad);xx++){t+=src[yy*gw+xx];c++}out[y*gw+x]=t/c}return out};
+  const mx=(src,rad)=>{const out=new Float32Array(src.length);for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){let m=0;for(let yy=Math.max(0,y-rad);yy<=Math.min(gh-1,y+rad);yy++)for(let xx=Math.max(0,x-rad);xx<=Math.min(gw-1,x+rad);xx++){const v=src[yy*gw+xx];if(v>m)m=v}out[y*gw+x]=m}return out};
+  const bg=box(mx(grid,2),2);
+  const nrm=new Uint8Array(n),hist=new Uint32Array(256);
+  for(let y=0;y<h;y++){const fy=Math.min(gh-1,Math.max(0,y/B-0.5)),y0=Math.floor(fy),y1=Math.min(gh-1,y0+1),ty=fy-y0;
+    for(let x=0;x<w;x++){const fx=Math.min(gw-1,Math.max(0,x/B-0.5)),x0=Math.floor(fx),x1=Math.min(gw-1,x0+1),tx=fx-x0;
+      const b=(bg[y0*gw+x0]*(1-tx)+bg[y0*gw+x1]*tx)*(1-ty)+(bg[y1*gw+x0]*(1-tx)+bg[y1*gw+x1]*tx)*ty;
+      let v=g[y*w+x]*255/Math.max(60,b);v=v>255?255:v;nrm[y*w+x]=v;hist[v|0]++}}
+  let out=nrm;
+  if(mode==='bin'){
+    let sum=0;for(let i=0;i<256;i++)sum+=i*hist[i];let sB=0,wB=0,best=0,thr=128;
+    for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=n-wB;if(!wF)break;sB+=t*hist[t];const mB=sB/wB,mF=(sum-sB)/wF,bv=wB*wF*(mB-mF)*(mB-mF);if(bv>best){best=bv;thr=t}}
+    thr=Math.min(thr+8,215);
+    out=new Uint8Array(n);for(let i=0;i<n;i++)out[i]=nrm[i]>thr?255:0;
+    /* effacer les longs traits horizontaux et verticaux (bordures du tableau) */
+    const minH=Math.round(w*0.045),minV=Math.round(h*0.045);
+    for(let y=0;y<h;y++){let run=0;const r=y*w;for(let x=0;x<=w;x++){if(x<w&&out[r+x]===0)run++;else{if(run>=minH)for(let k=x-run;k<x;k++)out[r+k]=255;run=0}}}
+    for(let x=0;x<w;x++){let run=0;for(let y=0;y<=h;y++){if(y<h&&out[y*w+x]===0)run++;else{if(run>=minV)for(let k=y-run;k<y;k++)out[k*w+x]=255;run=0}}}
+  }else{
+    /* étirement du contraste */
+    let lo=0,hi=255,acc=0;for(let i=0;i<256;i++){acc+=hist[i];if(acc>n*0.01){lo=i;break}}acc=0;for(let i=255;i>=0;i--){acc+=hist[i];if(acc>n*0.35){hi=i;break}}
+    const span=Math.max(40,hi-lo);const o2=new Uint8Array(n);for(let i=0;i<n;i++){const v=(nrm[i]-lo)*255/span;o2[i]=v<0?0:v>255?255:v}out=o2;
+  }
+  for(let i=0,k=0;i<n;i++,k+=4){a[k]=a[k+1]=a[k+2]=out[i];a[k+3]=255}
+  cx.putImageData(img,0,0);
+  return await new Promise((res,rej)=>cv.toBlob(b=>b?res(b):rej(new Error('Conversion impossible')),'image/png'));
+}
+function ocrWords(d){
+  let words=d.words;
   if(!words&&d.blocks){words=[];for(const b of d.blocks)for(const p of (b.paragraphs||[]))for(const l of (p.lines||[]))for(const w of (l.words||[]))words.push(w)}
-  return (words||[]).filter(w=>w.text&&w.text.trim()).map(w=>({s:w.text,x:w.bbox.x0,y:(w.bbox.y0+w.bbox.y1)/2,w:w.bbox.x1-w.bbox.x0,h:w.bbox.y1-w.bbox.y0}));
+  return (words||[]).filter(w=>w.text&&w.text.trim()&&!/^[|_\-—–.,'`´:;!]+$/.test(w.text.trim())&&(w.confidence===undefined||w.confidence>=30))
+    .map(w=>({s:w.text,x:w.bbox.x0,y:(w.bbox.y0+w.bbox.y1)/2,w:w.bbox.x1-w.bbox.x0,h:w.bbox.y1-w.bbox.y0}));
+}
+async function ocrOnce(worker,blob,psm){
+  await worker.setParameters({tessedit_pageseg_mode:String(psm),preserve_interword_spaces:'1',user_defined_dpi:'300'});
+  const res=await worker.recognize(blob,{},{blocks:true,text:true});
+  return ocrWords(res.data||{});
+}
+async function ocrItems(file){
+  const job=OCR_Q.then(async()=>{
+    const worker=await ocrWorker();
+    setGen('Amélioration de l’image (éclairage, contraste, traits du tableau)…');
+    const bin=await ocrPrep(file,'bin');
+    let items=await ocrOnce(worker,bin,6);
+    const good=it=>{try{return localData(it).capacites.length>0}catch(e){return false}};
+    if(!good(items)){
+      /* seconde chance : image en niveaux de gris et segmentation automatique de la page */
+      setGen('Seconde lecture de la photo avec un autre réglage…');
+      const gray=await ocrPrep(file,'gray');
+      const alt=await ocrOnce(worker,gray,3);
+      if(good(alt)||alt.length>items.length) items=alt;
+    }
+    return items;
+  });
+  OCR_Q=job.catch(()=>{});
+  return job;
 }
 function localData(items){const d=progParse(progRows(items));return d}
 function guideBlock(f){
@@ -1575,7 +1643,7 @@ async function importGuide(file){
       say('Lecture du document…'); const r=await pdfRead(file,80);
       pages=r.text.split(/--- page \d+ ---\n/).filter(x=>x.trim());
     }else{
-      say('Reconnaissance du texte de la photo (image agrandie et contrastée)…'); const items=await ocrItems(await enhanceForOcr(file).catch(()=>file));
+      say('Reconnaissance du texte de la photo (image agrandie et contrastée)…'); const items=await ocrItems(file);
       pages=[progRows(items).map(x=>x.text).join('\n')];
     }
     if(!pages.join('').trim()){say('Aucun texte lisible dans ce fichier. Prenez une photo plus nette (bien cadrée, de face) ou collez le texte à la main.');return}
@@ -1592,8 +1660,8 @@ async function importFile(file){
   let data=null,how='',aiErr=null,pdf=null;
   try{
     const kind=aiKind();
-    if(kind==='gemini'||kind==='anthropic'){
-      try{ setGen('Lecture du document…'); data=await extractProgramme(f,{images:[isPdf?file:await canvasBlob(file,2200)]},hint.trim()); how=kind==='gemini'?'gemini':'claude'}catch(e){aiErr=e}
+    if(aiChain(true).length&&kind!=='claude'){
+      try{ setGen('Lecture du document…'); data=await extractProgramme(f,{images:[isPdf?file:await canvasBlob(file,2200)]},hint.trim()); how='ia'}catch(e){aiErr=e}
     } else if(kind==='claude'){
       try{
         if(isPdf){setGen('Lecture du PDF…');pdf=pdf||await pdfRead(file,40);
@@ -1735,7 +1803,7 @@ function figsBlock(f,s,i){
 }
 function needsFigure(f,s){
   const txt=[f.disc,f.sub,f.titre,s.contenus,s.capTitre,s.situation].join(' ');
-  return /g[ée]om[ée]tr|phys|chim|techno|pct|svt/i.test([f.disc,f.sub].join(' '))||FIG_REF.test(s.situation||'')||/\b(figure|sch[ée]ma|croquis|triangle|cercle|losange|carr[ée]|rectangle|cube|circuit|plan)\b/i.test(txt);
+  return /g[ée]om[ée]tr|phys|chim|techno|pct|svt/i.test([f.disc,f.sub].join(' '))||FIG_REF.test(s.situation||'')||/\b(figure|sch[ée]ma|croquis|triangle|cercle|losange|carr[ée]|rectangle|cube|circuit|plan|m[ée]diane|m[ée]diatrice|bissectrice|hauteur|orthocentre|inscrit|circonscrit|gravit[ée]|construction)\b/i.test(txt);
 }
 function solidParams(sp){
   const L=Math.max(1,+sp.L||40),l=Math.max(1,+sp.l||20),H=Math.max(1,+sp.h||20);
@@ -1987,7 +2055,7 @@ ${GEO_RULE}
 1) Calcule d’abord mentalement les coordonnées de chaque point dans un repère de 480 × 340 (y vers le bas) pour que la figure respecte EXACTEMENT les données de la situation (milieux, parallèles, perpendiculaires, longueurs proportionnelles, angles droits).
 2) Fond blanc, traits noirs fins (stroke-width 2), texte noir de 18 px, légendes en français.
 3) Nomme chaque point (lettre à côté du point, sans chevaucher les traits), code les angles droits par un petit carré, les segments de même longueur par de petits traits identiques, indique les mesures données (ex. « 8 m »).
-4) Ne montre PAS la réponse de l’exercice (ne trace pas ce que l’élève doit construire ou trouver) ; dessine seulement la configuration de départ.
+4) Ne montre PAS la réponse d’un exercice (ne trace pas ce que l’élève doit construire ou trouver) ; dessine seulement la configuration de départ. EXCEPTION pour un cours de géométrie qui définit des droites ou points remarquables (médiatrices, bissectrices, médianes, hauteurs, centre de gravité, cercle inscrit ou circonscrit, orthocentre) ou une construction : la figure DOIT montrer la construction complète de l’exemple du cours : les droites remarquables tracées, les codages (milieux, angles égaux, angles droits), le point de concours nommé et le cercle s’il y en a un.
 5) Pour les sciences ou la technologie : schéma simple et lisible (appareil, circuit, vues), avec légendes. En dessin technique, les arêtes visibles sont en trait continu et les arêtes cachées en pointillés (stroke-dasharray=7 5) ; en vues de face, de dessus et de gauche, aligne les vues entre elles et garde les mêmes dimensions.
 6) Balises SVG autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan. width="480" height="340" viewBox="0 0 480 340".
 Si aucune figure n’est utile ou possible, mets "svg":"" et propose "query" (recherche Wikimedia Commons).
@@ -2099,7 +2167,7 @@ async function genSeanceContent0(f,i,o){
 ${regleAcquis}
 Ensemble des capacités et contenus de la leçon :
 ${capsText(f)}
-${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
+${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. NIVEAU ET NOTATIONS DU COLLÈGE (à respecter strictement) : n’écris JAMAIS le symbole ∞ ni de notation d’intervalles comme [a ; +∞[ ou ]−∞ ; 2[. La solution d’une inéquation s’écrit en mots et en inégalité simple : « l’ensemble solution est l’ensemble des nombres inférieurs à 2 » (x < 2) ou « supérieurs ou égaux à 3,5 » (x ≥ 3,5) ; on l’illustre par une demi-droite graduée avec une flèche qui indique la direction, sans infini. Pas de racines carrées (√) en classe de 4e. Pour le théorème de Pythagore, utilise uniquement des carrés parfaits familiers : côtés entiers ne dépassant pas 14 et carrés parfaits à portée de main (le plus grand carré utilisé est 14² = 196, de préférence 12² = 144), par exemple les triplets 3-4-5, 6-8-10, 5-12-13, 9-12-15. Dans les solutions, n’emploie aucune notion ni notation que les élèves de la classe n’ont pas étudiée, même si un exercice pourrait être résolu avec elle. CONSTRUCTIONS : quand la séance traite d’une construction ou de droites et points remarquables (médiatrices, bissectrices, médianes, hauteurs, centre de gravité, cercle inscrit ou circonscrit, orthocentre, etc.), l’essentiel à retenir contient la méthode de construction étape par étape avec les instruments du niveau (en 6e, pour la médiatrice : on trouve d’abord le milieu avec la règle graduée, puis on trace la perpendiculaire en ce milieu avec l’équerre), et une figure doit montrer la construction complète faite pour les élèves. Pour les séances de calcul ou de résolution d’équations, aucune esquisse n’est nécessaire sauf si elle aide vraiment à résoudre la situation. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
 RÈGLE ABSOLUE : cette séance traite UNIQUEMENT « contenusDeLaSeance » (clé du JSON ci-dessus). Si une même capacité sert à plusieurs séances, ne reprends JAMAIS le contenu, la situation ni les exemples des séances précédentes (séancesPrecedentes, situationsDejaEcrites) : cette séance apporte des notions NOUVELLES, celles de ses contenus et d’elles seules.
 Réponds uniquement par un objet JSON avec ces clés (valeurs en texte, lignes séparées par \\n) :
 ${desc}`;
@@ -2220,6 +2288,7 @@ async function generateAll(f,o){
     setGen(todo.length?'Reprise de la rédaction : '+todo.length+' séance(s) restent à préparer.':'Toutes les séances sont déjà rédigées. Vérification des exercices de synthèse…');
     for(const i of todo){
       if(GEN.stop) break;
+      if(geminiKeys().length>1) GEM.keyIndex=i%geminiKeys().length;
       pstart(i);let ok=false,last=null;
       for(let attempt=1;attempt<=3&&!ok&&!GEN.stop;attempt++){
         try{
@@ -2505,7 +2574,7 @@ async function genEpreuve(E){
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (partie de type « relier » : 4 éléments numérotés r), s), t), v) dans « gauche » et 4 réponses a), b), c), d) EN DÉSORDRE dans « droite », SANS aucun lien dans l’énoncé ; les liens n’apparaissent que dans « liens », 0,5 pt chacune) ; D) « Réarrange les groupes de mots pour obtenir une propriété ou une définition correcte du cours » (partie de type « reordre », 1 pt) ; E) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
   'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+caps.map(l=>{const o=eprCapParse(l);return '- Capacité : '+o.cap+(o.conts.length?'\n    Contenus enseignés : '+o.conts.join(' ; '):'')}).join('\n')+
-  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd.'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd. NOTATIONS DU COLLÈGE : n’écris jamais le symbole ∞ ni d’intervalles comme [a ; +∞[ ; les solutions d’inéquations s’écrivent en mots ou en inégalités simples (x < 2) avec une demi-droite graduée à flèche. Pas de racines carrées en 4e ; pour Pythagore, uniquement des carrés parfaits faciles (côtés entiers jusqu’à 14, de préférence jusqu’à 12 : 144 au plus grand).'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
@@ -2533,41 +2602,36 @@ async function genEpreuve(E){
 async function eprImportCaps(files){
   const E=eprInit(); const st=document.getElementById('ep-capst');
   const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
-  const k=aiKind(), useAI=(geminiKeys().length>0||k==='anthropic');
-  let lastE=null;
+  const k=aiKind(), useAI=aiChain(true).length>0&&k!=='claude';
   const have=new Set(String(E.caps).split('\n').map(x=>x.trim().toLowerCase()).filter(Boolean));
-  const added=[]; let fails=0, localUsed=false;
+  const added=[]; let fails=0, localUsed=false, lastE=null;
+  const okData=d=>d&&Array.isArray(d.capacites)&&d.capacites.some(c=>has(c&&(c.capacite||c.cap)));
   for(let i=0;i<files.length;i++){
     say('Lecture de l’image '+(i+1)+' sur '+files.length+'…');
-    let d=null, aiError=null;
-    /* L’IA image est essayée en premier lorsqu’une clé compatible est configurée.
-       Une réponse vide ou inexploitable déclenche toujours le moteur OCR local. */
+    let d=null,aiError=null;
     if(useAI){
-      try{d=await extractProgramme({},{images:[await canvasBlob(files[i],2200)]},'');}
-      catch(e){aiError=e; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
+      try{d=await extractProgramme({},{images:[await canvasBlob(files[i],2200)]},'')}
+      catch(e){aiError=e;if(e&&e.code==='cancelled'){say(errCopy(e),true);return}}
     }
-    if(!d||!Array.isArray(d.capacites)||!d.capacites.some(c=>has(c&&(c.capacite||c.cap)))||!d.capacites.some(c=>Array.isArray(c.contenus)?c.contenus.some(has):has(c.contenus))){
+    if(!okData(d)){
       try{
         localUsed=true;
         say('Reconnaissance locale de l’image '+(i+1)+' sur '+files.length+'…');
-        const enhanced=await enhanceForOcr(files[i]).catch(()=>files[i]);
-        const local=localData(await ocrItems(enhanced));
-        if(local&&Array.isArray(local.capacites)&&local.capacites.length)d=local;
-        else if(aiError) lastE=aiError;
-      }catch(e){lastE=e;}
+        const local=localData(await ocrItems(files[i]));
+        if(okData(local)) d=local; else if(aiError) lastE=aiError;
+      }catch(e){lastE=e}
     }
-    const caps=(d&&Array.isArray(d.capacites))?d.capacites:[];
-    let countBefore=added.length;
-    for(const c of caps){
+    let n0=added.length;
+    for(const c of ((d&&d.capacites)||[])){
       const t=eprCapLine(c.capacite||c.cap,c.contenus);
       if(t&&!have.has(t.toLowerCase())){have.add(t.toLowerCase());added.push(t)}
     }
-    if(!caps.some(c=>has(c&&(c.capacite||c.cap)))){fails++;if(aiError&&!lastE)lastE=aiError;}
+    if(added.length===n0){fails++;if(aiError&&!lastE)lastE=aiError}
   }
   if(added.length){E.caps=[...String(E.caps).split('\n').filter(has),...added].join('\n');save();render();
-    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) avec leurs contenus ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(localUsed?' (lecture OCR locale utilisée : relisez attentivement)':'');
+    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) avec leurs contenus ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(localUsed?' (reconnaissance locale utilisée sur au moins une image : relisez attentivement)':'');
     flash(m); if(st2){st2.textContent=m;st2.className='status small muted'}}
-  else say((lastE?errCopy(lastE)+' ':'')+'Aucune capacité reconnue après la lecture par IA et la reconnaissance OCR. Vérifiez que la photo montre bien le tableau « Capacités | Contenus » et que le texte est lisible.',true);
+  else say((lastE?errCopy(lastE)+' ':'')+'Aucune capacité reconnue par l’IA ni par la reconnaissance locale. Prenez la photo bien droite, tableau entier, texte net et bien éclairé, ou saisissez les capacités à la main.',true);
 }
 async function eprCorrect(E,ins){
   const C=E.content;
@@ -3131,15 +3195,20 @@ function renderSet(){
    <label class="f" for="cmpModel_openrouter" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique parmi les modèles gratuits)<input type="text" id="cmpModel_openrouter" autocomplete="off" value="${esc(compatCfg('openrouter').model||'')}" placeholder="automatique"></label>
    <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="openrouter">Enregistrer et tester</button>${compatKey('openrouter')?'<button class="btn danger" data-cmpclear="openrouter">Effacer la clé OpenRouter</button>':''}</div>
   </section>
-  <section class="card"><h2>Cerebras <small>gratuit, très rapide</small></h2>
-   <p class="small" style="margin:0 0 10px">Cerebras fait tourner de grands modèles ouverts à très grande vitesse. L’offre gratuite donne un quota quotidien généreux (à vérifier sur leur site). Ne nécessite pas de carte bancaire.</p>
-   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px"><li>Ouvrez <a href="https://cloud.cerebras.ai" target="_blank" rel="noopener">cloud.cerebras.ai ↗</a> et créez un compte.</li><li>Menu « API Keys » → créer une clé, puis copiez-la (elle commence par csk-).</li></ol>
-   <label class="f" for="cmpKey_cerebras" style="max-width:520px">Clé Cerebras<input type="password" id="cmpKey_cerebras" autocomplete="new-password" value="" placeholder="${compatKey('cerebras')?esc('Clé enregistrée : '+maskKey(compatKey('cerebras'))+' (laissez vide pour la conserver)'):'csk-…'}"></label>
-   <label class="f" for="cmpModel_cerebras" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_cerebras" autocomplete="off" value="${esc(compatCfg('cerebras').model||'')}" placeholder="automatique"></label>
-   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="cerebras">Enregistrer et tester</button>${compatKey('cerebras')?'<button class="btn danger" data-cmpclear="cerebras">Effacer la clé Cerebras</button>':''}</div>
+  <section class="card"><h2>Cloudflare <small>gratuit (Workers AI), sans carte bancaire</small></h2>
+   <p class="small" style="margin:0 0 10px">Cloudflare héberge des modèles ouverts (Llama). L’offre gratuite donne un petit quota par jour : elle sert de relais quand Google est bloqué. Vous créez un petit relais « Worker » dans votre compte Cloudflare, avec le code du fichier <b>cloudflare-worker.js</b>.</p>
+   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
+    <li>Sur <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">dash.cloudflare.com ↗</a> : Workers et Pages → Créer → Créer un Worker, nommez-le (ex. fiches-ia), déployez, puis « Modifier le code » et collez le contenu de <b>cloudflare-worker.js</b>, puis déployez.</li>
+    <li>Paramètres du Worker → Liaisons → Ajouter → <b>Workers AI</b>, nom de variable : <b>AI</b>.</li>
+    <li>Paramètres → Variables et secrets → ajouter un <b>secret</b> nommé <b>APP_PASSWORD</b> avec un mot de passe de votre choix, puis déployez.</li>
+    <li>Collez ci-dessous l’adresse du Worker (https://…workers.dev) et ce même mot de passe.</li></ol>
+   <label class="f" for="cfUrl" style="max-width:520px">Adresse du Worker<input type="text" id="cfUrl" autocomplete="off" value="${esc((DB.ai&&DB.ai.cfUrl)||'')}" placeholder="https://fiches-ia.votre-nom.workers.dev"></label>
+   <label class="f" for="cmpKey_cloudflare" style="max-width:520px;margin-top:8px">Mot de passe du relais (APP_PASSWORD)<input type="password" id="cmpKey_cloudflare" autocomplete="new-password" value="" placeholder="${compatKey('cloudflare')?esc('Mot de passe enregistré : '+maskKey(compatKey('cloudflare'))+' (laissez vide pour le conserver)'):'votre mot de passe'}"></label>
+   <label class="f" for="cmpModel_cloudflare" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_cloudflare" autocomplete="off" value="${esc(compatCfg('cloudflare').model||'')}" placeholder="automatique (@cf/meta/llama-3.3-70b-instruct-fp8-fast…)"></label>
+   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="cloudflare">Enregistrer et tester</button>${compatKey('cloudflare')?'<button class="btn danger" data-cmpclear="cloudflare">Effacer le mot de passe Cloudflare</button>':''}</div>
   </section>
-  <section class="card"><h2>Mistral <small>gratuit (offre « Experiment »)</small></h2>
-   <p class="small" style="margin:0 0 10px">Mistral est une IA française, bonne en français. L’offre gratuite « Experiment » demande une vérification par numéro de téléphone, sans carte bancaire. Les limites sont par minute et par mois.</p>
+  <section class="card"><h2>Mistral <small>gratuit (offre « Experiment »), lit aussi les photos</small></h2>
+   <p class="small" style="margin:0 0 10px">Mistral est une IA française, bonne en français et capable de lire les photos de programmes quand Google est surchargé. L’offre gratuite « Experiment » demande une vérification par téléphone, sans carte bancaire.</p>
    <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px"><li>Ouvrez <a href="https://console.mistral.ai" target="_blank" rel="noopener">console.mistral.ai ↗</a>, créez un compte puis choisissez l’offre « Experiment » (gratuite).</li><li>Menu « API Keys » → « Create new key », puis copiez-la.</li></ol>
    <label class="f" for="cmpKey_mistral" style="max-width:520px">Clé Mistral<input type="password" id="cmpKey_mistral" autocomplete="new-password" value="" placeholder="${compatKey('mistral')?esc('Clé enregistrée : '+maskKey(compatKey('mistral'))+' (laissez vide pour la conserver)'):'clé Mistral'}"></label>
    <label class="f" for="cmpModel_mistral" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_mistral" autocomplete="off" value="${esc(compatCfg('mistral').model||'')}" placeholder="automatique"></label>
@@ -3153,7 +3222,7 @@ function renderSet(){
    <label class="f" for="cmpKey_groq" style="max-width:520px">Clé Groq<input type="password" id="cmpKey_groq" autocomplete="new-password" value="" placeholder="${compatKey('groq')?esc('Clé enregistrée : '+maskKey(compatKey('groq'))+' (laissez vide pour la conserver)'):'gsk_…'}"></label>
    <label class="f" for="cmpModel_groq" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_groq" autocomplete="off" value="${esc(compatCfg('groq').model||'')}" placeholder="automatique (llama-3.3-70b-versatile…)"></label>
    <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="groq">Enregistrer et tester</button>${compatKey('groq')?'<button class="btn danger" data-cmpclear="groq">Effacer la clé Groq</button>':''}</div>
-   <div class="note" style="margin-top:12px">Ordre automatique : Google Gemini d’abord, puis Cerebras, Mistral, Groq et OpenRouter (ceux dont la clé est enregistrée). Quand un service est bloqué (quota, surcharge), l’application passe toute seule au suivant : plus besoin d’effacer des clés. Les clés restent dans ce navigateur, sur cet appareil. Les textes envoyés partent chez le service choisi. Seul Claude (payant) n’est utilisé que si vous l’avez choisi.</div>
+   <div class="note" style="margin-top:12px">Ordre automatique : Google Gemini d’abord, puis Cloudflare, Groq et OpenRouter (ceux qui sont configurés). Quand un service est bloqué (quota, surcharge), l’application passe toute seule au suivant : plus besoin d’effacer des clés. Les clés restent dans ce navigateur, sur cet appareil. Les textes envoyés partent chez le service choisi. Seul Claude (payant) n’est utilisé que si vous l’avez choisi.</div>
   </section>`;
 }
 function renderProg(){
@@ -3300,12 +3369,13 @@ root.addEventListener('click',async e=>{
     const pv=b.dataset.cmpsave,cfg=compatCfg(pv),nm=COMPAT[pv].nom;
     const v=(document.getElementById('cmpKey_'+pv).value||'').trim()||cfg.key||'';
     const m=(document.getElementById('cmpModel_'+pv).value||'').trim();
-    if(!v){setGen('Aucune clé '+nm+' saisie.',true);return}
-    const before={key:cfg.key,model:cfg.model,provider:DB.ai.provider};
-    cfg.key=v;cfg.model=m;CMP.models[pv]=null;CMP.dead={};save();
+    if(!v){setGen(pv==='cloudflare'?'Aucun mot de passe saisi.':'Aucune clé '+nm+' saisie.',true);return}
+    const before={key:cfg.key,model:cfg.model,provider:DB.ai.provider,cfUrl:DB.ai.cfUrl};
+    if(pv==='cloudflare'){const u=(document.getElementById('cfUrl').value||'').trim().replace(/\/+$/,'');if(!/^https:\/\/[^\s]+$/.test(u)){setGen('Saisissez l’adresse complète du Worker, qui commence par https://',true);return}DB.ai.cfUrl=u}
+    cfg.key=v;cfg.model=m;CMP.models[pv]=null;CMP.models[pv+'#v']=null;CMP.dead={};save();
     b.disabled=true;setGen('Test de la connexion à '+nm+'…');
     try{const t=await compatJson(pv,'Réponds uniquement par {"ok":true}',{test:true});setGen('Connexion réussie (modèle '+t.model+'). '+nm+' sert de relais automatique quand Google est bloqué.');render2()}
-    catch(e){cfg.key=before.key;cfg.model=before.model;save();setGen(errCopy(e),true)}
+    catch(e){cfg.key=before.key;cfg.model=before.model;if(pv==='cloudflare') DB.ai.cfUrl=before.cfUrl;save();setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
   if(b.dataset&&b.dataset.cmpclear){const pv=b.dataset.cmpclear;compatCfg(pv).key='';save();setGen('Clé '+COMPAT[pv].nom+' effacée.');render2();return}
