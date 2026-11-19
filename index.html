@@ -2031,7 +2031,23 @@ async function eprFig(spec,dw,keepCredit){
   const im=await svgToPngImage(geoSvg(spec));
   im.dw=(spec&&(spec.droiteGraduee||spec.axe))?Math.max(dw||0,420):(dw||320); if(!keepCredit) im.credit=''; im.geo=spec; return im;
 }
-async function eprFigOf(spec,dw){ if(!spec||typeof spec!=='object') return null; try{return await eprFig(spec,dw,false)}catch(e){return null} }
+async function eprFigOf(spec,dw){
+  if(typeof spec==='string'&&/<svg[\s>]/i.test(spec)) spec={svg:spec};
+  if(!spec||typeof spec!=='object') return null;
+  try{
+    if(typeof spec.svg==='string'&&/<svg[\s>]/i.test(spec.svg)&&!spec.geo){const im=await svgToPngImage(spec.svg);im.dw=Math.max(300,Math.min(dw||340,480));im.credit='';im.svgSrc=spec.svg;return im}
+    return await eprFig(spec,dw,false)
+  }catch(e){return null}
+}
+const EPR_EXP_RULE='DISCIPLINE EXPÉRIMENTALE : la situation d’évaluation DÉCRIT un dispositif expérimental ou un objet technique concret (montage électrique, circuit, expérience de chimie, appareil de mesure, objet du quotidien) et DOIT être accompagnée d’un schéma : remplis « figSit » par {"svg":"<svg …>…</svg>"}. Le SVG : viewBox="0 0 480 300" width="480" height="300", fond blanc, traits noirs fins (stroke="#000" stroke-width="2" fill="none"), texte noir de 15 à 18 px en français (balises autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; aucun style, aucune image). Représente le montage comme au tableau : générateur (pile : deux traits parallèles, le long = borne +), lampe (cercle avec une croix), interrupteur (segment ouvert ou fermé), résistor (rectangle), moteur (cercle avec M), ampèremètre (cercle avec A) et voltmètre (cercle avec V) à leur place correcte, fils en traits droits à angles droits ; verrerie de chimie (tube à essais, bécher, éprouvette graduée, erlenmeyer, ballon, bec) dessinée simplement avec ses légendes ; ajoute les légendes et les valeurs données par la situation. N’y fais PAS apparaître les réponses attendues. Pour une question de l’exercice 3 ou de l’exercice 2 qui s’appuie sur un schéma, utilise aussi le champ « fig » de la partie avec le même format {"svg":"…"}. « figCorrSit » (facultatif) : schéma complété pour le corrigé.\n';
+async function eprExpFigure(E,situation){
+  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau le schéma qui accompagne la situation d’évaluation suivante :\n« '+String(situation||'').slice(0,1200)+' »\n'+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'').replace(/ remplis « figSit » par /,' réponds par ')+'\nRéponds uniquement par un objet JSON {"svg":"<svg …>…</svg>"} : le schéma annoté du dispositif de cette situation, avec les valeurs numériques données.';
+  for(let t=0;t<2;t++){
+    try{const d=await ask(prompt,{temp:0.3});const im=await eprFigOf(d&&(d.svg?{svg:d.svg}:d.figSit||d),340);if(im) return im}
+    catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
+  }
+  return null;
+}
 async function eprMergeParts(old,arr){
   const out=[]; old=old||[];
   for(let i=0;i<arr.length;i++){const x=arr[i]||{},p=normPart(x),o=old[i]||{};
@@ -2487,6 +2503,12 @@ function eprLab(x){const m=/^\s*(?:\*\*)?([A-Za-z0-9]{1,3})(?:\*\*)?\s*[).\-:]/.
 function eprPairs(p){const G=eprLines(p.gauche),D=eprLines(p.droite),map={};
   eprLines(p.liens).forEach(l=>{const m=/([A-Za-z0-9]+)\s*(?:-|–|—|→|⟶|⟷|=|>)+\s*([A-Za-z0-9]+)/.exec(l);if(m)map[m[1].toLowerCase()]=m[2].toLowerCase()});
   return G.map((g,i)=>{const t=map[eprLab(g)];let d=t?D.find(x=>eprLab(x)===t):null;if(!d)d=D[i]||'';return [g,d]})}
+/* Supprime les lignes de pointillés ou de tirets seules en fin de texte (elles donnent l’impression d’une partie coupée). */
+function eprNoRule(t){
+  const isRule=l=>/^[\s.…_\-–—·]{3,}$/.test(String(l));
+  if(Array.isArray(t)){const a=t.slice();while(a.length&&(!String(a[a.length-1]).trim()||isRule(a[a.length-1])))a.pop();return a.filter(l=>!isRule(l))}
+  return eprNoRule(String(t).split('\n')).join('\n');
+}
 function eprPartBlocks(p,corr){
   const out=[];
   const NB={nb:true};
@@ -2498,14 +2520,14 @@ function eprPartBlocks(p,corr){
     else eprPairs(p).forEach(([g,d])=>rows.push(row([cell([g]),cell(['⟶'],{align:'center'}),cell([d])])));
     out.push({t:'tbl',cols:corr?[42,16,42]:[50,50],head:[],rows,gap:6});
   }else if(p.type==='reordre'){
-    const txt=corr?String(p.corrige||''):String(p.enonce||'');
+    const txt=eprNoRule(corr?String(p.corrige||''):String(p.enonce||''));
     if(has(txt))out.push({t:'p',lines:txt.split('\n'),gap:4,indent:true});
     if(corr)out.push({t:'p',lines:['**'+String(p.solution||'')+'**'],gap:6,indent:true});
-    else{out.push({t:'p',lines:[eprLines(p.groupes).join(' / ')],gap:4,indent:true});out.push({t:'p',lines:['…………………………………………………………………………………………………………………………'],gap:6,indent:true})}
+    else out.push({t:'p',lines:[eprLines(p.groupes).join(' / ')],gap:6,indent:true});
   }else{
     const fg=capFig(corr?p.figCorr:p.fig), ls=(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(p.enonce):String(corr?p.corrige:p.enonce).split('\n');
     if(fg){figFlow(ls,fg,{gap:6,lc:{just:false},p:{just:false,indent:true}}).forEach(b=>out.push(b));return out}
-    out.push({t:'p',lines:ls,gap:6,indent:true});
+    out.push({t:'p',lines:eprNoRule(ls),gap:6,indent:true});
   }
   if(corr?p.figCorr:p.fig)out.push({t:'img',img:capFig(corr?p.figCorr:p.fig),gap:6});
   return out;
@@ -2587,7 +2609,7 @@ async function genEpreuve(E){
   'Les niveaux de performance sont CONCRETS : ils citent les données, les calculs et les résultats attendus de CETTE situation, et sont courts (une phrase). Si les totaux obligent à moins de lignes, garde au moins 2 lignes par indicateur.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales, sans « C1 »).':' Il n’y a qu’une seule consigne : n’utilise pas « C1 : ».')+'\n\n'+
   'TYPES SPÉCIAUX (à utiliser pour les parties concernées, avec un champ « type » dans l’objet de la partie) : (1) « relier » : l’énoncé ne contient que la consigne (ex. « Relie par une flèche chaque calcul à son résultat ») ; fournis "type":"relier","gauche":["1) …","2) …"],"droite":["a) …","b) …"] (réponses en DÉSORDRE, jamais face à leur correspondant, avec parfois un intrus) et "liens":["1-c","2-a"] ; NE JAMAIS écrire les liens (⟷, →, tirets) dans l’énoncé ; le corrigé est généré à partir de « liens ». (2) « reordre » : « Réarrange les groupes de mots pour obtenir une phrase correcte » ; prends une propriété, une règle ou une définition EXACTE du cours, découpe-la en 4 à 7 groupes de mots, mélange-les ; fournis "type":"reordre","groupes":["…","…"] (mélangés, jamais dans l’ordre correct) et "solution":"la phrase exacte" ; l’énoncé ne contient que la consigne. Ce type peut aussi figurer dans l’Exercice 3.\n'+
   'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…","fig":facultatif,"figCorr":facultatif}],"figSit":facultatif,"figCorrSit":facultatif,"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
-  (maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+'MISE EN PAGE : l’énoncé de l’épreuve (sans le corrigé) doit tenir sur UNE page, DEUX au maximum, jamais trois : situation brève (6 à 8 lignes), consignes courtes, questions concises, pas de texte inutile. Pour « Choisis la bonne réponse », écris chaque question sur sa ligne, puis toutes ses propositions a), b), c) (et d) si nécessaire, par exemple « Aucune réponse ») sur UNE SEULE ligne, sans retour à la ligne entre les propositions. Pour « relier par des flèches », donne seulement les deux colonnes (gauche numérotée, droite lettrée en désordre).\n'+LATEX_RULE_EPR;
+  (['pct','phys','chim'].includes(E.disc)?EPR_EXP_RULE:'')+(maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+'MISE EN PAGE : l’énoncé de l’épreuve (sans le corrigé) doit tenir sur UNE page, DEUX au maximum, jamais trois : situation brève (6 à 8 lignes), consignes courtes, questions concises, pas de texte inutile. Pour « Choisis la bonne réponse », écris chaque question sur sa ligne, puis toutes ses propositions a), b), c) (et d) si nécessaire, par exemple « Aucune réponse ») sur UNE SEULE ligne, sans retour à la ligne entre les propositions. Pour « relier par des flèches », donne seulement les deux colonnes (gauche numérotée, droite lettrée en désordre).\n'+LATEX_RULE_EPR;
   const hist=Array.isArray(E.hist)?E.hist:[];
   const ex2=eprPickEx2(E.lastEx2||''); E.lastEx2=ex2.keys.slice().sort().join();
   const ctxS=EPR_CTXS[Math.floor(Math.random()*EPR_CTXS.length)];
@@ -2597,6 +2619,7 @@ async function genEpreuve(E){
   E.content={situation:eprS(d.situation),consignes:d.consignes.map(eprS),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,4).map(normGrille)};
   {const C=E.content;
    C.figSit=await eprFigOf(d.figSit,320); C.corrSitFig=await eprFigOf(d.figCorrSit,320);
+   if(!C.figSit&&['pct','phys','chim'].includes(E.disc)){try{C.figSit=await eprExpFigure(E,C.situation)}catch(e){if(e&&e.code==='cancelled')throw e}}
    for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}}
 }
 async function eprImportCaps(files){
