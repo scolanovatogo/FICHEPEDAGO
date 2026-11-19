@@ -162,37 +162,91 @@ function progParse(rows){
   m=/s[ée]ances?\s*[:：]\s*(\d+)/i.exec(all)||/(\d+)\s*s[ée]ances/i.exec(all); if(m){out.nbSeances=+m[1];out.nbSeancesLu=true}
   m=/\bclasse\s*[:：]\s*([^\s|]+)/i.exec(all); if(m) out.classe=m[1];
   if(hIdx<0) return out;
-  /* séparation des colonnes : on cherche où commence la colonne de droite d'après les grands vides des lignes */
-  const hr=rows[hIdx];
-  const body=[];
-  for(let i=hIdx+1;i<rows.length;i++){ if(/^(r[ée]partition|strat[ée]gie|d[ée]roulement|situation d|moments? didactiques?)/i.test(rows[i].text)) break; body.push(rows[i]) }
+  const hr=rows[hIdx], body=[];
+  for(let i=hIdx+1;i<rows.length;i++){
+    if(/^(r[ée]partition|strat[ée]gie|d[ée]roulement|situation d|moments? didactiques?)/i.test(rows[i].text)) break;
+    body.push(rows[i]);
+  }
+  if(!body.length) return out;
+  /* Détermine la séparation des colonnes à partir des espaces horizontaux répétés. */
   const cand=[];
-  for(const rw of body){const its=rw.its;let best=0,bx=null;for(let k=1;k<its.length;k++){const g=its[k].x-(its[k-1].x+(its[k-1].w||0));if(g>best){best=g;bx=its[k].x}}if(best>18&&bx!==null)cand.push(Math.round(bx/4)*4)}
-  let split;
-  if(cand.length){const cnt={};cand.forEach(c=>cnt[c]=(cnt[c]||0)+1);const top=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];split=+top-3}
-  else{const ci=hr.its.find(t=>/^contenu/i.test(t.s));const xs=rows.flatMap(r=>[r.its[0].x]);const mn=Math.min(...xs);const mx=Math.max(...rows.map(r=>{const l=r.its[r.its.length-1];return l.x+(l.w||0)}));split=ci?Math.max(mn+20,(mn+ci.x)/2):mn+(mx-mn)*0.33}
-  const diffs=[]; for(let i=1;i<body.length;i++){const d=body[i].y-body[i-1].y; if(d>2&&d<40) diffs.push(d)}
-  diffs.sort((a,b)=>a-b); const base=diffs.length?diffs[Math.floor(diffs.length*0.25)]:14;
-  let cur=null,lastLeftY=null;
-  const bullet=/^[-•–·*▪●]\s*/;
-  for(const r of body){
-    if(/capacit/i.test(r.text)&&/contenu/i.test(r.text)&&r.text.length<45) continue;
-    const L=clean(joinIts(r.its.filter(t=>t.x<split-1))), Rt=clean(joinIts(r.its.filter(t=>t.x>=split-1)));
-    if(L){
-      const startsUpper=/^[A-ZÀ-ÖØ-Þ0-9]/.test(L);
-      const gap=lastLeftY===null?999:r.y-lastLeftY;
-      if(!cur||(startsUpper&&gap>base*1.18)){cur={capacite:L,contenus:[]};out.capacites.push(cur)}
-      else cur.capacite+=' '+L;
-      lastLeftY=r.y;
+  for(const rw of body){
+    const its=rw.its||[]; let best=0,bx=null;
+    for(let k=1;k<its.length;k++){
+      const g=its[k].x-(its[k-1].x+(its[k-1].w||0));
+      if(g>best){best=g;bx=its[k].x}
     }
-    if(Rt){
-      if(!cur){cur={capacite:'',contenus:[]};out.capacites.push(cur)}
-      if(bullet.test(Rt)) cur.contenus.push(Rt.replace(bullet,''));
-      else if(cur.contenus.length&&/^[a-zà-ÿ(]/.test(Rt)) cur.contenus[cur.contenus.length-1]+=' '+Rt;
-      else cur.contenus.push(Rt);
+    if(best>18&&bx!==null)cand.push(Math.round(bx/4)*4);
+  }
+  let split;
+  if(cand.length){
+    const cnt={};cand.forEach(c=>cnt[c]=(cnt[c]||0)+1);
+    const top=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0]; split=+top-3;
+  }else{
+    const ci=(hr.its||[]).find(t=>/^contenu/i.test(t.s));
+    const xs=body.flatMap(r=>(r.its||[]).map(t=>t.x));
+    const mn=Math.min(...xs),mx=Math.max(...body.map(r=>{const a=r.its||[],l=a[a.length-1];return l?l.x+(l.w||0):0}));
+    split=ci?Math.max(mn+20,(mn+ci.x)/2):mn+(mx-mn)*0.5;
+  }
+  const left=[],right=[];
+  for(const r of body){
+    if(/capacit/i.test(r.text)&&/contenu/i.test(r.text)&&r.text.length<60) continue;
+    const its=r.its||[];
+    const L=clean(joinIts(its.filter(t=>t.x<split-1)));
+    const R=clean(joinIts(its.filter(t=>t.x>=split-1)));
+    if(L) left.push({y:r.y,text:L});
+    if(R) right.push({y:r.y,text:R});
+  }
+  /* Les cellules de gauche peuvent être fusionnées sur plusieurs lignes.
+     On regroupe les lignes proches et on sépare les capacités par les grands blancs verticaux. */
+  const gaps=[];
+  for(let i=1;i<left.length;i++){const g=left[i].y-left[i-1].y;if(g>2&&g<100)gaps.push(g)}
+  gaps.sort((a,b)=>a-b);
+  const lineStep=gaps.length?gaps[Math.floor(gaps.length/2)]:40;
+  const breakGap=Math.max(55,lineStep*1.45);
+  let cap=null;
+  for(const it of left){
+    if(!cap||it.y-cap._lastY>breakGap){
+      cap={capacite:it.text,contenus:[],_ys:[],_firstY:it.y,_lastY:it.y};out.capacites.push(cap);
+    }else cap.capacite+=' '+it.text;
+    cap._ys.push(it.y);cap._lastY=it.y;
+  }
+  if(!out.capacites.length) return out;
+  out.capacites.forEach(c=>{c._center=c._ys.reduce((a,b)=>a+b,0)/c._ys.length;delete c._ys});
+  /* On traite la colonne de droite séparément : dans les tableaux scolaires,
+     une cellule de contenu peut commencer plus haut que la capacité correspondante
+     ou être fusionnée sur plusieurs capacités. Chaque ligne est donc rattachée
+     à la capacité dont le centre vertical est le plus proche. */
+  /* Les intitulés non précédés d’une puce ouvrent une section de contenu.
+     Une section peut couvrir plusieurs capacités lorsque la cellule est fusionnée. */
+  const sections=[]; let section=null;
+  const bullet=/^[-•–·*▪●]\s*/;
+  for(const it of right){
+    const raw=it.text.trim(); if(!raw) continue;
+    const isBullet=bullet.test(raw), t=raw.replace(bullet,'').trim();
+    if(!t) continue;
+    const continuation=!isBullet&&(/^[a-zà-ÿ(,;:]/.test(t)||(section&&/[\-‐‑]$/.test(section.items.at(-1)?.text||'')));
+    if(!section||(!isBullet&&!continuation)){
+      section={y:it.y,items:[]};sections.push(section);
+    }
+    const prev=section.items.at(-1);
+    if(continuation&&prev) prev.text=prev.text.replace(/[\-‐‑]$/,'')+' '+t;
+    else section.items.push({text:t});
+  }
+  for(let si=0;si<sections.length;si++){
+    const sec=sections[si], nextY=sections[si+1]?.y??Infinity;
+    let targets=[];
+    out.capacites.forEach((c,i)=>{if(c._center>=sec.y-1&&c._center<nextY)targets.push(i)});
+    if(!targets.length){
+      let best=0,dist=Infinity;
+      out.capacites.forEach((c,i)=>{const d=Math.abs(sec.y-c._center);if(d<dist){dist=d;best=i}});
+      targets=[best];
+    }
+    for(const idx of targets){
+      out.capacites[idx].contenus.push(...sec.items.map(x=>x.text));
     }
   }
-  out.capacites=out.capacites.filter(c=>c.capacite||c.contenus.length);
+  out.capacites=out.capacites.map(c=>({capacite:clean(c.capacite),contenus:c.contenus.map(clean).filter(Boolean)})).filter(c=>c.capacite||c.contenus.length);
   return out;
 }
 if(typeof module!=='undefined') module.exports={progRows,progParse};
@@ -2482,23 +2536,38 @@ async function eprImportCaps(files){
   const k=aiKind(), useAI=(geminiKeys().length>0||k==='anthropic');
   let lastE=null;
   const have=new Set(String(E.caps).split('\n').map(x=>x.trim().toLowerCase()).filter(Boolean));
-  const added=[]; let fails=0;
+  const added=[]; let fails=0, localUsed=false;
   for(let i=0;i<files.length;i++){
     say('Lecture de l’image '+(i+1)+' sur '+files.length+'…');
-    try{
-      let d;
-      if(useAI) d=await extractProgramme({},{images:[await canvasBlob(files[i],2200)]},'');
-      else d=localData(await ocrItems(await enhanceForOcr(files[i]).catch(()=>files[i])));
-      for(const c of ((d&&d.capacites)||[])){
-        const t=eprCapLine(c.capacite||c.cap,c.contenus);
-        if(t&&!have.has(t.toLowerCase())){have.add(t.toLowerCase());added.push(t)}
-      }
-    }catch(e){fails++;lastE=e; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
+    let d=null, aiError=null;
+    /* L’IA image est essayée en premier lorsqu’une clé compatible est configurée.
+       Une réponse vide ou inexploitable déclenche toujours le moteur OCR local. */
+    if(useAI){
+      try{d=await extractProgramme({},{images:[await canvasBlob(files[i],2200)]},'');}
+      catch(e){aiError=e; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
+    }
+    if(!d||!Array.isArray(d.capacites)||!d.capacites.some(c=>has(c&&(c.capacite||c.cap)))||!d.capacites.some(c=>Array.isArray(c.contenus)?c.contenus.some(has):has(c.contenus))){
+      try{
+        localUsed=true;
+        say('Reconnaissance locale de l’image '+(i+1)+' sur '+files.length+'…');
+        const enhanced=await enhanceForOcr(files[i]).catch(()=>files[i]);
+        const local=localData(await ocrItems(enhanced));
+        if(local&&Array.isArray(local.capacites)&&local.capacites.length)d=local;
+        else if(aiError) lastE=aiError;
+      }catch(e){lastE=e;}
+    }
+    const caps=(d&&Array.isArray(d.capacites))?d.capacites:[];
+    let countBefore=added.length;
+    for(const c of caps){
+      const t=eprCapLine(c.capacite||c.cap,c.contenus);
+      if(t&&!have.has(t.toLowerCase())){have.add(t.toLowerCase());added.push(t)}
+    }
+    if(!caps.some(c=>has(c&&(c.capacite||c.cap)))){fails++;if(aiError&&!lastE)lastE=aiError;}
   }
   if(added.length){E.caps=[...String(E.caps).split('\n').filter(has),...added].join('\n');save();render();
-    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) avec leurs contenus ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(useAI?'':' (lecture locale : relisez attentivement)');
+    const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) avec leurs contenus ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(localUsed?' (lecture OCR locale utilisée : relisez attentivement)':'');
     flash(m); if(st2){st2.textContent=m;st2.className='status small muted'}}
-  else say((lastE?errCopy(lastE)+' ':'')+'Aucune capacité trouvée. Prenez une capture plus nette du tableau « Capacités | Contenus », ou saisissez-les à la main (une ligne : Capacité — contenu ; contenu).',true);
+  else say((lastE?errCopy(lastE)+' ':'')+'Aucune capacité reconnue après la lecture par IA et la reconnaissance OCR. Vérifiez que la photo montre bien le tableau « Capacités | Contenus » et que le texte est lisible.',true);
 }
 async function eprCorrect(E,ins){
   const C=E.content;
