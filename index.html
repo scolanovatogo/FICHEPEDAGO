@@ -539,7 +539,7 @@ function blockHTML(b){
 /* =========================================================
    Pagination (A4) : découpe les blocs et les lignes de tableau
    ========================================================= */
-const PAGE_H=1123,CONTENT_H=1123-36-68;
+const PAGE_H=1123,CONTENT_H=1123-36-62;
 function lhOf(k){return (!k||k>=.95)?1.27:(k>=.85?1.2:1.14)}
 const cellLen=c=>(c.lines||[]).reduce((a,x)=>a+String(x).length+30,0);
 function rowSplittable(r){return !!(r.cells&&r.cells.length&&r.cells.every(c=>!c.img&&!c.sub&&!(c.rs>1)&&!c.vm)&&r.cells.some(c=>cellLen(c)>=260))}
@@ -612,7 +612,7 @@ function paginate(doc,k){
       let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
       const kp=(rows[e].keep&&e+1<rows.length)?(rowSplittable(rows[e+1])?Math.min(rowH[e+1],80):rowH[e+1]):0;
       let need=h+kp+(chunk?0:m.headH);
-      if(i===e&&!kp&&used+need>CONTENT_H){
+      if(i===e&&!kp&&used>0&&used+need>CONTENT_H){
         const room=CONTENT_H-used-(chunk?0:m.headH);
         if(room>=60&&rowSplittable(rows[i])){
           const sp=splitRowFit(b,rows[i],room,M);
@@ -936,9 +936,9 @@ function ownKeys(){const a=Array.isArray(DB.ai&&DB.ai.keys)?DB.ai.keys:[];return
 function maskKey(k){k=String(k||'');return k.length<=10?'••••••••':k.slice(0,4)+'••••••••••••'+k.slice(-4)}
 function usingProxy(){return !!(DB.ai&&String(DB.ai.proxy||'').trim())&&!ownKeys().length}
 function geminiKeys(){return usingProxy()?['proxy']:ownKeys()}
-function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; for(const c of ['cloudflare','groq','openrouter']) if(compatKey(c)&&(c!=='cloudflare'||String((DB.ai&&DB.ai.cfUrl)||'').trim())) return c; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
+function aiKind(){ if(DB.ai&&DB.ai.provider==='anthropic'&&DB.ai.ckey) return 'anthropic'; if(geminiKeys().length) return 'gemini'; for(const c of ['cerebras','mistral','groq','openrouter']) if(compatKey(c)) return c; if(SAMPLE) return 'claude'; if(DB.ai&&DB.ai.free===true) return 'free'; return null }
 function diagText(){
-  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',openrouter:'OpenRouter (modèles gratuits)',groq:'Groq (gratuit)',cloudflare:'Cloudflare Workers AI (gratuit)',claude:'Claude'}[k];
+  const k=aiKind(); const nm={gemini:'automatique (gratuite)',anthropic:'Claude (clé Anthropic)',openrouter:'OpenRouter (modèles gratuits)',groq:'Groq (gratuit)',cerebras:'Cerebras (gratuit)',mistral:'Mistral (gratuit)',claude:'Claude'}[k];
   return 'Lecture du document : locale (PDF avec texte, photo par reconnaissance de texte)'+(k==='gemini'?' + lecture assistée':nm?' + '+nm:'')+' · Rédaction des séances : '+(nm||(k==='free'?'service gratuit sans compte (expérimental)':'désactivée (voir Réglages)'));
 }
 function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=()=>rej(new Error('Lecture du fichier impossible'));r.onload=()=>res(String(r.result).split(',')[1]);r.readAsDataURL(b)})}
@@ -981,8 +981,8 @@ async function geminiModelList(key){
   const list=(j.models||[])
     .filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent'))
     .map(m=>String(m.name||'').replace(/^models\//,''))
-    .filter(n=>/^gemini-/i.test(n)&&!/image|tts|live|audio|embedding|robotics|experimental|thinking|customtools|computer/i.test(n));
-  const score=n=>(/preview/.test(n)?10:0)+(/^gemini-[\d.]+-flash$/.test(n)?0:/flash/.test(n)&&!/lite/.test(n)?1:/flash/.test(n)?2:3);
+    .filter(n=>/^gemini-/i.test(n)&&!/omni|image|tts|live|audio|embedding|robotics|experimental|thinking|customtools|computer|veo|imagen|gemma|learnlm|deep-research|aqa/i.test(n));
+  const score=n=>(/preview|exp/.test(n)?10:0)+(/^gemini-[\d.]+-flash$/.test(n)?0:/^gemini-[\d.]+-flash-lite$/.test(n)?2:/flash/.test(n)&&!/lite/.test(n)?3:/flash/.test(n)?4:9);
   // Priorité aux versions Flash complètes les plus récentes, puis aux versions Lite.
   // Ne pas placer systématiquement Gemini 2.5 en tête : certaines clés le signalent introuvable.
   return [...new Set(list)].sort((a,b)=>score(a)-score(b)||b.localeCompare(a,undefined,{numeric:true}));
@@ -1022,10 +1022,6 @@ async function gemPause(sec,why){
   }
   if(GEN.pause===mine) GEN.pause=null;
 }
-function gemPerf(model,ms,ok){
-  DB.ai.perf=DB.ai.perf||{}; const p=DB.ai.perf[model]||{ms:ms,n:0,bad:0,t:0};
-  p.ms=p.n?Math.round(p.ms*0.6+ms*0.4):ms; p.n++; if(!ok) p.bad++; p.t=Date.now(); DB.ai.perf[model]=p; save();
-}
 async function gemModels(key){
   // Toujours consulter le catalogue Google et privilégier les modèles Flash récents.
   // Un ancien modèle mémorisé ne doit pas bloquer la rédaction s'il est encore listé
@@ -1034,12 +1030,7 @@ async function gemModels(key){
   if(!GEM.list||!GEM.list.length||Date.now()-GEM.listAt>3600e3){GEM.list=await geminiModelList(key);GEM.listAt=Date.now()}
   const available=GEM.list.filter(n=>!(GEM.dead[n]>Date.now()));
   if(saved&&available.includes(saved)) glog('modèle enregistré '+saved+' : le catalogue actuel est privilégié pour éviter un modèle lent ou indisponible');
-  /* Ordre : 1) modèles déjà éprouvés sur vos clés et rapides (le plus rapide d'abord) ; 2) modèles pas encore essayés (récents d'abord, comme le catalogue) ; 3) modèles lents ou souvent en échec. Un modèle « introuvable » est déjà écarté ci-dessus. */
-  const perf=(DB.ai&&DB.ai.perf)||{}, fresh=n=>perf[n]&&Date.now()-perf[n].t<14*864e5;
-  const cls=n=>!fresh(n)?1:((perf[n].ms<=70000&&perf[n].bad<=perf[n].n/2)?0:2);
-  const sorted=available.slice().sort((a,b)=>cls(a)-cls(b)||(cls(a)===0?perf[a].ms-perf[b].ms:0));
-  glog('modèles retenus : '+sorted.slice(0,3).map(n=>n+(fresh(n)?' ('+Math.round(perf[n].ms/1000)+' s)':'')).join(', '));
-  return sorted.slice(0,3);
+  return available.slice(0,3);
 }
 function fixJsonText(t){
   return String(t)
@@ -1087,16 +1078,15 @@ async function geminiJson(prompt,opts){
       const at=Math.max(Date.now(),(GEM.klast[key]||0)+GEM.gap); GEM.klast[key]=at; const gap=at-Date.now(); if(gap>0&&!isTest) await geminiWait(gap);
       if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
       if(fast&&Date.now()-t0>80000) throw {code:'fatal',message:'Le service met trop de temps à répondre. Rien n’a été modifié : réessayez dans un instant.'};
-      const tReq=Date.now();
       let r;
       const keyNo=keys.indexOf(key)+1;gemKeyActive(keyNo,keys.length,model);
       glog('utilisation de la clé '+keyNo+'/'+keys.length+' · '+model);
       try{
         r=await geminiFetch(gBase()+'/v1beta/models/'+model+':generateContent',{method:'POST',headers:gHeaders(key,true),
-          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?30000:(String(prompt).length>3500?120000:60000)));
+          body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:Object.assign({temperature:opts.temp||0.45,maxOutputTokens:16000,responseMimeType:'application/json'},opts.temp?{seed:Math.floor(Math.random()*2e9)}:{},thinkCfg(model))})},isTest?15000:(fast?30000:60000));
       }catch(e){
         if(e&&e.name==='AbortError'&&stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
-        if(e&&e.name==='AbortError'){gemPerf(model,125000,false);lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='NE RÉPOND PAS (délai dépassé)';gemKeyState(keyNo);
+        if(e&&e.name==='AbortError'){lastError={code:'timeout',message:'Le service de rédaction met trop de temps à répondre.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='NE RÉPOND PAS (délai dépassé)';gemKeyState(keyNo);
           if(++tmo>=3&&!isTest) throw {code:'service_busy',message:'Le service de génération Google n’a pas répondu après 3 délais d’attente. Les clés peuvent être joignables sans que le moteur de rédaction réponde. Ce n’est pas une preuve de quota journalier épuisé ni de clé invalide. Attendez quelques minutes puis réessayez. Ce qui est déjà rédigé est conservé.'};
           continue}
         GEM.keyStates[keyNo]='NE RÉPOND PAS (erreur réseau)';gemKeyState(keyNo);
@@ -1106,7 +1096,7 @@ async function geminiJson(prompt,opts){
       try{j=await geminiCheck(r)}catch(e){
         if(e&&e.name==='AbortError'){
           if(stopped()&&!isTest) throw {code:'cancelled',message:'Arrêté.'};
-          gemPerf(model,125000,false);lastError={code:'timeout',message:'Le service de rédaction a commencé à répondre mais n’a pas fini d’envoyer sa réponse.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='RÉPONSE INCOMPLÈTE (délai dépassé)';gemKeyState(keyNo);glog('clé '+keyNo+'/'+keys.length+' · '+model+' : réponse incomplète (délai)');
+          lastError={code:'timeout',message:'Le service de rédaction a commencé à répondre mais n’a pas fini d’envoyer sa réponse.'};GEM.hot[hk]=Date.now()+15000;GEM.keyStates[keyNo]='RÉPONSE INCOMPLÈTE (délai dépassé)';gemKeyState(keyNo);glog('clé '+keyNo+'/'+keys.length+' · '+model+' : réponse incomplète (délai)');
           if(++tmo>=3&&!isTest) throw {code:'service_busy',message:'Le service de génération Google n’a pas fini de répondre après 3 délais d’attente. Réessayez dans quelques minutes.'};
           continue;
         }
@@ -1116,7 +1106,9 @@ async function geminiJson(prompt,opts){
           GEM.keyStates[keyNo]=perDay?'QUOTA JOURNALIER ATTEINT':'LIMITE TEMPORAIRE / PAR MINUTE';gemKeyState(keyNo);
           const d=retryDelayOf(e)||65;
           /* Respecter le délai exact communiqué par Google. Pour un quota journalier sans délai exploitable, réessayer dans 24 h. */GEM.hot[hk]=Date.now()+(perDay?(d||24*3600)+2:(d+2))*1000;GEM.day=GEM.day||{};GEM.day[hk]=perDay;if(keys.length>1)GEM.keyIndex=(keys.indexOf(key)+1)%keys.length;glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : quota '+(perDay?'du JOUR':'par minute')+' atteint ; passage à la clé suivante');
-          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model)].slice(0,3)}catch(_){}}
+          if(perDay){GEM.mday=GEM.mday||{};const nd=GEM.mday[model]=(GEM.mday[model]||0)+1;
+            if((/limit:\s*0\b/.test(e.raw||'')||nd>=4)&&models.filter(n=>n!==model&&!(GEM.dead[n]>Date.now())).length){GEM.dead[model]=Date.now()+6*3600e3;glog('modèle '+model+' : quota journalier nul ou épuisé sur plusieurs clés → autre modèle');redo=true;break}}
+          if(models.length===1){try{const more=await geminiModelList(key);GEM.list=more;GEM.listAt=Date.now();models=[model,...more.filter(n=>n!==model&&!(GEM.dead[n]>Date.now()))].slice(0,3)}catch(_){}}
           continue;                      // même demande, clé suivante sans recommencer la séance
         }
         if(e.code==='http_400'&&/think/i.test((e.message||'')+(e.raw||''))&&!(GEM.noThink&&GEM.noThink[model])){GEM.noThink=GEM.noThink||{};GEM.noThink[model]=1;redo=true;continue}
@@ -1155,7 +1147,6 @@ async function geminiJson(prompt,opts){
       }
       GEM.keyStates[keyNo]='RÉPONSE REÇUE · '+model;gemKeyState(keyNo);
       glog('clé '+(keys.indexOf(key)+1)+'/'+keys.length+' · '+model+' : réponse en '+Math.round((Date.now()-t0)/1000)+' s');
-      if(!isTest) gemPerf(model,Date.now()-tReq,true);
       GEM.keyIndex=keys.indexOf(key);GEM.good=key; if(GEM.bz) GEM.bz[hk]=0; if(DB.ai.model!==model){DB.ai.model=model;save()}
       const t=(((j.candidates||[])[0]||{}).content||{}).parts;
       const txt=(t||[]).map(x=>x.text||'').join('').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
@@ -1273,7 +1264,8 @@ async function anthropicJson(prompt,opts){
 const COMPAT={
   openrouter:{nom:'OpenRouter',url:'https://openrouter.ai/api/v1',pref:[],extraHeaders:{'HTTP-Referer':'https://scolanovatogo.github.io','X-Title':'Fiches pédagogiques'}},
   groq:{nom:'Groq',url:'https://api.groq.com/openai/v1',pref:['llama-3.3-70b-versatile','openai/gpt-oss-120b','openai/gpt-oss-20b','llama-3.1-8b-instant'],extraHeaders:{}},
-  cloudflare:{nom:'Cloudflare',get url(){return String((DB.ai&&DB.ai.cfUrl)||'').trim().replace(/\/+$/,'')+'/v1'},pref:['@cf/meta/llama-3.3-70b-instruct-fp8-fast','@cf/meta/llama-3.1-8b-instruct'],extraHeaders:{}}
+  cerebras:{nom:'Cerebras',url:'https://api.cerebras.ai/v1',pref:['gpt-oss-120b','llama-3.3-70b','qwen-3-235b-a22b-instruct-2507','llama3.1-8b'],extraHeaders:{}},
+  mistral:{nom:'Mistral',url:'https://api.mistral.ai/v1',pref:['mistral-small-latest','mistral-large-latest','open-mistral-nemo'],extraHeaders:{}}
 };
 const CMP={models:{},noJson:{},dead:{}};
 function compatCfg(pv){DB.ai.compat=DB.ai.compat||{};return DB.ai.compat[pv]=DB.ai.compat[pv]||{key:'',model:''}}
@@ -1311,7 +1303,7 @@ async function compatModels(pv){
       list=[...COMPAT[pv].pref.filter(x=>ids.includes(x)),...ids.filter(x=>!COMPAT[pv].pref.includes(x))];
     }
   }catch(_){}
-  if(!list.length) list=(pv==='groq'||pv==='cloudflare')?COMPAT[pv].pref.slice():['meta-llama/llama-3.3-70b-instruct:free'];
+  if(!list.length) list=pv==='groq'?COMPAT.groq.pref.slice():['meta-llama/llama-3.3-70b-instruct:free'];
   CMP.models[pv]=list.slice(0,6);
   return CMP.models[pv].filter(m=>!(CMP.dead[pv+'|'+m]>Date.now()));
 }
@@ -1386,12 +1378,12 @@ const CHAIN={cool:{}};
 function aiChain(withImages){
   const out=[],add=k=>{if(k&&!out.includes(k))out.push(k)};
   const prim=DB.ai&&DB.ai.provider;
-  const has={gemini:geminiKeys().length>0,openrouter:!!compatKey('openrouter'),groq:!!compatKey('groq'),cloudflare:!!(compatKey('cloudflare')&&String((DB.ai&&DB.ai.cfUrl)||'').trim()),anthropic:!!(DB.ai&&DB.ai.ckey&&prim==='anthropic')};
+  const has={gemini:geminiKeys().length>0,openrouter:!!compatKey('openrouter'),groq:!!compatKey('groq'),cerebras:!!compatKey('cerebras'),mistral:!!compatKey('mistral'),anthropic:!!(DB.ai&&DB.ai.ckey&&prim==='anthropic')};
   if(prim&&has[prim]) add(prim);
-  ['gemini','cloudflare','groq','openrouter'].forEach(k=>{if(has[k])add(k)});
+  ['gemini','cerebras','mistral','groq','openrouter'].forEach(k=>{if(has[k])add(k)});
   return withImages?out.filter(k=>k==='gemini'||k==='anthropic'):out;
 }
-const AI_NAME={gemini:'Google Gemini',openrouter:'OpenRouter',groq:'Groq',cloudflare:'Cloudflare',anthropic:'Claude'};
+const AI_NAME={gemini:'Google Gemini',openrouter:'OpenRouter',groq:'Groq',cerebras:'Cerebras',mistral:'Mistral',anthropic:'Claude'};
 function runProvider(k,prompt,opts){
   if(k==='anthropic') return anthropicJson(prompt,opts);
   if(k==='gemini') return geminiJson(prompt,opts);
@@ -1417,7 +1409,7 @@ async function ask(prompt,opts){
   for(let i=0;i<chain.length;i++){
     const c=chain[i],last=i===chain.length-1;
     try{
-      const r=await runProvider(c,prompt,Object.assign({},opts,(last||String(prompt).length>3500)?{}:{fast:true}));
+      const r=await runProvider(c,prompt,Object.assign({},opts,last?{}:{fast:true}));
       delete CHAIN.cool[c];
       return r;
     }catch(e){
@@ -1689,7 +1681,7 @@ function figsBlock(f,s,i){
 }
 function needsFigure(f,s){
   const txt=[f.disc,f.sub,f.titre,s.contenus,s.capTitre,s.situation].join(' ');
-  return /g[ée]om[ée]tr|phys|chim|techno|pct|svt/i.test([f.disc,f.sub].join(' '))||FIG_REF.test(s.situation||'')||/\b(figure|sch[ée]ma|croquis|triangle|cercle|losange|carr[ée]|rectangle|cube|circuit|plan|m[ée]diane|m[ée]diatrice|bissectrice|hauteur|orthocentre|inscrit|circonscrit|gravit[ée]|construction)\b/i.test(txt);
+  return /g[ée]om[ée]tr|phys|chim|techno|pct|svt/i.test([f.disc,f.sub].join(' '))||FIG_REF.test(s.situation||'')||/\b(figure|sch[ée]ma|croquis|triangle|cercle|losange|carr[ée]|rectangle|cube|circuit|plan)\b/i.test(txt);
 }
 function solidParams(sp){
   const L=Math.max(1,+sp.L||40),l=Math.max(1,+sp.l||20),H=Math.max(1,+sp.h||20);
@@ -1941,7 +1933,7 @@ ${GEO_RULE}
 1) Calcule d’abord mentalement les coordonnées de chaque point dans un repère de 480 × 340 (y vers le bas) pour que la figure respecte EXACTEMENT les données de la situation (milieux, parallèles, perpendiculaires, longueurs proportionnelles, angles droits).
 2) Fond blanc, traits noirs fins (stroke-width 2), texte noir de 18 px, légendes en français.
 3) Nomme chaque point (lettre à côté du point, sans chevaucher les traits), code les angles droits par un petit carré, les segments de même longueur par de petits traits identiques, indique les mesures données (ex. « 8 m »).
-4) Ne montre PAS la réponse d’un exercice (ne trace pas ce que l’élève doit construire ou trouver) ; dessine seulement la configuration de départ. EXCEPTION pour un cours de géométrie qui définit des droites ou points remarquables (médiatrices, bissectrices, médianes, hauteurs, centre de gravité, cercle inscrit ou circonscrit, orthocentre) ou une construction : la figure DOIT montrer la construction complète de l’exemple du cours : les droites remarquables tracées, les codages (milieux, angles égaux, angles droits), le point de concours nommé et le cercle s’il y en a un.
+4) Ne montre PAS la réponse de l’exercice (ne trace pas ce que l’élève doit construire ou trouver) ; dessine seulement la configuration de départ.
 5) Pour les sciences ou la technologie : schéma simple et lisible (appareil, circuit, vues), avec légendes. En dessin technique, les arêtes visibles sont en trait continu et les arêtes cachées en pointillés (stroke-dasharray=7 5) ; en vues de face, de dessus et de gauche, aligne les vues entre elles et garde les mêmes dimensions.
 6) Balises SVG autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan. width="480" height="340" viewBox="0 0 480 340".
 Si aucune figure n’est utile ou possible, mets "svg":"" et propose "query" (recherche Wikimedia Commons).
@@ -2053,7 +2045,7 @@ async function genSeanceContent0(f,i,o){
 ${regleAcquis}
 Ensemble des capacités et contenus de la leçon :
 ${capsText(f)}
-${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. NIVEAU ET NOTATIONS DU COLLÈGE (à respecter strictement) : n’écris JAMAIS le symbole ∞ ni de notation d’intervalles comme [a ; +∞[ ou ]−∞ ; 2[. La solution d’une inéquation s’écrit en mots et en inégalité simple : « l’ensemble solution est l’ensemble des nombres inférieurs à 2 » (x < 2) ou « supérieurs ou égaux à 3,5 » (x ≥ 3,5) ; on l’illustre par une demi-droite graduée avec une flèche qui indique la direction, sans infini. Pas de racines carrées (√) en classe de 4e. Pour le théorème de Pythagore, utilise uniquement des carrés parfaits familiers : côtés entiers ne dépassant pas 14 et carrés parfaits à portée de main (le plus grand carré utilisé est 14² = 196, de préférence 12² = 144), par exemple les triplets 3-4-5, 6-8-10, 5-12-13, 9-12-15. Dans les solutions, n’emploie aucune notion ni notation que les élèves de la classe n’ont pas étudiée, même si un exercice pourrait être résolu avec elle. CONSTRUCTIONS : quand la séance traite d’une construction ou de droites et points remarquables (médiatrices, bissectrices, médianes, hauteurs, centre de gravité, cercle inscrit ou circonscrit, orthocentre, etc.), l’essentiel à retenir contient la méthode de construction étape par étape avec les instruments du niveau (en 6e, pour la médiatrice : on trouve d’abord le milieu avec la règle graduée, puis on trace la perpendiculaire en ce milieu avec l’équerre), et une figure doit montrer la construction complète faite pour les élèves. Pour les séances de calcul ou de résolution d’équations, aucune esquisse n’est nécessaire sauf si elle aide vraiment à résoudre la situation. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
+${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
 RÈGLE ABSOLUE : cette séance traite UNIQUEMENT « contenusDeLaSeance » (clé du JSON ci-dessus). Si une même capacité sert à plusieurs séances, ne reprends JAMAIS le contenu, la situation ni les exemples des séances précédentes (séancesPrecedentes, situationsDejaEcrites) : cette séance apporte des notions NOUVELLES, celles de ses contenus et d’elles seules.
 Réponds uniquement par un objet JSON avec ces clés (valeurs en texte, lignes séparées par \\n) :
 ${desc}`;
@@ -2174,7 +2166,6 @@ async function generateAll(f,o){
     setGen(todo.length?'Reprise de la rédaction : '+todo.length+' séance(s) restent à préparer.':'Toutes les séances sont déjà rédigées. Vérification des exercices de synthèse…');
     for(const i of todo){
       if(GEN.stop) break;
-      if(geminiKeys().length>1) GEM.keyIndex=i%geminiKeys().length;
       pstart(i);let ok=false,last=null;
       for(let attempt=1;attempt<=3&&!ok&&!GEN.stop;attempt++){
         try{
@@ -2460,7 +2451,7 @@ async function genEpreuve(E){
    : 'MODÈLE DE LA CLASSE DE '+E.classe+' : Exercice 1 avec DEUX consignes distinctes (Consigne 1 et Consigne 2) qui évaluent des capacités différentes. Exercice 2 en quatre parties : A) « Réponds par vrai ou faux » (3 items, 0,25 pt chacun) ; B) « Choisis la bonne réponse » (4 questions à 3 choix, barème 0,25 + 0,25 + 0,5 + 0,5) ; C) « Relie par une flèche chaque calcul à son résultat » (partie de type « relier » : 4 éléments numérotés r), s), t), v) dans « gauche » et 4 réponses a), b), c), d) EN DÉSORDRE dans « droite », SANS aucun lien dans l’énoncé ; les liens n’apparaissent que dans « liens », 0,5 pt chacune) ; D) « Réarrange les groupes de mots pour obtenir une propriété ou une définition correcte du cours » (partie de type « reordre », 1 pt) ; E) « Complète le texte sans le recopier en utilisant les numéros » (texte avec …1… à …7…, 0,25 pt chacun, sans figure : le texte doit se suffire). Exercice 3 : A) des calculs ou manipulations de la leçon (développer, factoriser, résoudre…) ; B) un problème de géométrie à construire et à calculer ; chaque question avec son barème.';
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
   'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+caps.map(l=>{const o=eprCapParse(l);return '- Capacité : '+o.cap+(o.conts.length?'\n    Contenus enseignés : '+o.conts.join(' ; '):'')}).join('\n')+
-  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd. NOTATIONS DU COLLÈGE : n’écris jamais le symbole ∞ ni d’intervalles comme [a ; +∞[ ; les solutions d’inéquations s’écrivent en mots ou en inégalités simples (x < 2) avec une demi-droite graduée à flèche. Pas de racines carrées en 4e ; pour Pythagore, uniquement des carrés parfaits faciles (côtés entiers jusqu’à 14, de préférence jusqu’à 12 : 144 au plus grand).'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
+  '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd.'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. Situation d’évaluation : contexte concret local (Togo : prénoms, marchés, écoles, champs…) de 3 à 6 phrases, avec des données numériques précises, puis la ou les consignes qui demandent une production évaluable. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
@@ -2488,7 +2479,8 @@ async function genEpreuve(E){
 async function eprImportCaps(files){
   const E=eprInit(); const st=document.getElementById('ep-capst');
   const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
-  const k=aiKind(), useAI=(k==='gemini'||k==='anthropic');
+  const k=aiKind(), useAI=(geminiKeys().length>0||k==='anthropic');
+  let lastE=null;
   const have=new Set(String(E.caps).split('\n').map(x=>x.trim().toLowerCase()).filter(Boolean));
   const added=[]; let fails=0;
   for(let i=0;i<files.length;i++){
@@ -2501,12 +2493,12 @@ async function eprImportCaps(files){
         const t=eprCapLine(c.capacite||c.cap,c.contenus);
         if(t&&!have.has(t.toLowerCase())){have.add(t.toLowerCase());added.push(t)}
       }
-    }catch(e){fails++; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
+    }catch(e){fails++;lastE=e; if(e&&(e.code==='cancelled'||e.code==='fatal')){say(errCopy(e),true);return}}
   }
   if(added.length){E.caps=[...String(E.caps).split('\n').filter(has),...added].join('\n');save();render();
     const st2=document.getElementById('ep-capst'); const m=added.length+' capacité(s) avec leurs contenus ajoutée(s) depuis '+files.length+' image(s). Vérifiez la liste.'+(fails?' '+fails+' image(s) n’ont pas pu être lues.':'')+(useAI?'':' (lecture locale : relisez attentivement)');
     flash(m); if(st2){st2.textContent=m;st2.className='status small muted'}}
-  else say('Aucune capacité trouvée. Prenez une capture plus nette du tableau « Capacités | Contenus », ou saisissez-les à la main (une ligne : Capacité — contenu ; contenu).',true);
+  else say((lastE?errCopy(lastE)+' ':'')+'Aucune capacité trouvée. Prenez une capture plus nette du tableau « Capacités | Contenus », ou saisissez-les à la main (une ligne : Capacité — contenu ; contenu).',true);
 }
 async function eprCorrect(E,ins){
   const C=E.content;
@@ -3070,17 +3062,19 @@ function renderSet(){
    <label class="f" for="cmpModel_openrouter" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique parmi les modèles gratuits)<input type="text" id="cmpModel_openrouter" autocomplete="off" value="${esc(compatCfg('openrouter').model||'')}" placeholder="automatique"></label>
    <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="openrouter">Enregistrer et tester</button>${compatKey('openrouter')?'<button class="btn danger" data-cmpclear="openrouter">Effacer la clé OpenRouter</button>':''}</div>
   </section>
-  <section class="card"><h2>Cloudflare <small>gratuit (Workers AI), sans carte bancaire</small></h2>
-   <p class="small" style="margin:0 0 10px">Cloudflare héberge des modèles ouverts (Llama). L’offre gratuite donne un petit quota par jour : elle sert de relais quand Google est bloqué. Vous créez un petit relais « Worker » dans votre compte Cloudflare, avec le code du fichier <b>cloudflare-worker.js</b>.</p>
-   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
-    <li>Sur <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">dash.cloudflare.com ↗</a> : Workers et Pages → Créer → Créer un Worker, nommez-le (ex. fiches-ia), déployez, puis « Modifier le code » et collez le contenu de <b>cloudflare-worker.js</b>, puis déployez.</li>
-    <li>Paramètres du Worker → Liaisons → Ajouter → <b>Workers AI</b>, nom de variable : <b>AI</b>.</li>
-    <li>Paramètres → Variables et secrets → ajouter un <b>secret</b> nommé <b>APP_PASSWORD</b> avec un mot de passe de votre choix, puis déployez.</li>
-    <li>Collez ci-dessous l’adresse du Worker (https://…workers.dev) et ce même mot de passe.</li></ol>
-   <label class="f" for="cfUrl" style="max-width:520px">Adresse du Worker<input type="text" id="cfUrl" autocomplete="off" value="${esc((DB.ai&&DB.ai.cfUrl)||'')}" placeholder="https://fiches-ia.votre-nom.workers.dev"></label>
-   <label class="f" for="cmpKey_cloudflare" style="max-width:520px;margin-top:8px">Mot de passe du relais (APP_PASSWORD)<input type="password" id="cmpKey_cloudflare" autocomplete="new-password" value="" placeholder="${compatKey('cloudflare')?esc('Mot de passe enregistré : '+maskKey(compatKey('cloudflare'))+' (laissez vide pour le conserver)'):'votre mot de passe'}"></label>
-   <label class="f" for="cmpModel_cloudflare" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_cloudflare" autocomplete="off" value="${esc(compatCfg('cloudflare').model||'')}" placeholder="automatique (@cf/meta/llama-3.3-70b-instruct-fp8-fast…)"></label>
-   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="cloudflare">Enregistrer et tester</button>${compatKey('cloudflare')?'<button class="btn danger" data-cmpclear="cloudflare">Effacer le mot de passe Cloudflare</button>':''}</div>
+  <section class="card"><h2>Cerebras <small>gratuit, très rapide</small></h2>
+   <p class="small" style="margin:0 0 10px">Cerebras fait tourner de grands modèles ouverts à très grande vitesse. L’offre gratuite donne un quota quotidien généreux (à vérifier sur leur site). Ne nécessite pas de carte bancaire.</p>
+   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px"><li>Ouvrez <a href="https://cloud.cerebras.ai" target="_blank" rel="noopener">cloud.cerebras.ai ↗</a> et créez un compte.</li><li>Menu « API Keys » → créer une clé, puis copiez-la (elle commence par csk-).</li></ol>
+   <label class="f" for="cmpKey_cerebras" style="max-width:520px">Clé Cerebras<input type="password" id="cmpKey_cerebras" autocomplete="new-password" value="" placeholder="${compatKey('cerebras')?esc('Clé enregistrée : '+maskKey(compatKey('cerebras'))+' (laissez vide pour la conserver)'):'csk-…'}"></label>
+   <label class="f" for="cmpModel_cerebras" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_cerebras" autocomplete="off" value="${esc(compatCfg('cerebras').model||'')}" placeholder="automatique"></label>
+   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="cerebras">Enregistrer et tester</button>${compatKey('cerebras')?'<button class="btn danger" data-cmpclear="cerebras">Effacer la clé Cerebras</button>':''}</div>
+  </section>
+  <section class="card"><h2>Mistral <small>gratuit (offre « Experiment »)</small></h2>
+   <p class="small" style="margin:0 0 10px">Mistral est une IA française, bonne en français. L’offre gratuite « Experiment » demande une vérification par numéro de téléphone, sans carte bancaire. Les limites sont par minute et par mois.</p>
+   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px"><li>Ouvrez <a href="https://console.mistral.ai" target="_blank" rel="noopener">console.mistral.ai ↗</a>, créez un compte puis choisissez l’offre « Experiment » (gratuite).</li><li>Menu « API Keys » → « Create new key », puis copiez-la.</li></ol>
+   <label class="f" for="cmpKey_mistral" style="max-width:520px">Clé Mistral<input type="password" id="cmpKey_mistral" autocomplete="new-password" value="" placeholder="${compatKey('mistral')?esc('Clé enregistrée : '+maskKey(compatKey('mistral'))+' (laissez vide pour la conserver)'):'clé Mistral'}"></label>
+   <label class="f" for="cmpModel_mistral" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_mistral" autocomplete="off" value="${esc(compatCfg('mistral').model||'')}" placeholder="automatique"></label>
+   <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="mistral">Enregistrer et tester</button>${compatKey('mistral')?'<button class="btn danger" data-cmpclear="mistral">Effacer la clé Mistral</button>':''}</div>
   </section>
   <section class="card"><h2>Groq <small>gratuit, très rapide, sans carte bancaire</small></h2>
    <p class="small" style="margin:0 0 10px">Groq fait fonctionner des modèles ouverts (Llama, GPT-OSS) très vite. L’offre gratuite a des limites de jetons par minute et par jour, plus serrées que Google pour les longues séances : si une séance échoue, relancez-la après une minute.</p>
@@ -3090,7 +3084,7 @@ function renderSet(){
    <label class="f" for="cmpKey_groq" style="max-width:520px">Clé Groq<input type="password" id="cmpKey_groq" autocomplete="new-password" value="" placeholder="${compatKey('groq')?esc('Clé enregistrée : '+maskKey(compatKey('groq'))+' (laissez vide pour la conserver)'):'gsk_…'}"></label>
    <label class="f" for="cmpModel_groq" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_groq" autocomplete="off" value="${esc(compatCfg('groq').model||'')}" placeholder="automatique (llama-3.3-70b-versatile…)"></label>
    <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="groq">Enregistrer et tester</button>${compatKey('groq')?'<button class="btn danger" data-cmpclear="groq">Effacer la clé Groq</button>':''}</div>
-   <div class="note" style="margin-top:12px">Ordre automatique : Google Gemini d’abord, puis Cloudflare, Groq et OpenRouter (ceux qui sont configurés). Quand un service est bloqué (quota, surcharge), l’application passe toute seule au suivant : plus besoin d’effacer des clés. Les clés restent dans ce navigateur, sur cet appareil. Les textes envoyés partent chez le service choisi. Seul Claude (payant) n’est utilisé que si vous l’avez choisi.</div>
+   <div class="note" style="margin-top:12px">Ordre automatique : Google Gemini d’abord, puis Cerebras, Mistral, Groq et OpenRouter (ceux dont la clé est enregistrée). Quand un service est bloqué (quota, surcharge), l’application passe toute seule au suivant : plus besoin d’effacer des clés. Les clés restent dans ce navigateur, sur cet appareil. Les textes envoyés partent chez le service choisi. Seul Claude (payant) n’est utilisé que si vous l’avez choisi.</div>
   </section>`;
 }
 function renderProg(){
@@ -3237,13 +3231,12 @@ root.addEventListener('click',async e=>{
     const pv=b.dataset.cmpsave,cfg=compatCfg(pv),nm=COMPAT[pv].nom;
     const v=(document.getElementById('cmpKey_'+pv).value||'').trim()||cfg.key||'';
     const m=(document.getElementById('cmpModel_'+pv).value||'').trim();
-    if(!v){setGen(pv==='cloudflare'?'Aucun mot de passe saisi.':'Aucune clé '+nm+' saisie.',true);return}
-    const before={key:cfg.key,model:cfg.model,provider:DB.ai.provider,cfUrl:DB.ai.cfUrl};
-    if(pv==='cloudflare'){const u=(document.getElementById('cfUrl').value||'').trim().replace(/\/+$/,'');if(!/^https:\/\/[^\s]+$/.test(u)){setGen('Saisissez l’adresse complète du Worker, qui commence par https://',true);return}DB.ai.cfUrl=u}
+    if(!v){setGen('Aucune clé '+nm+' saisie.',true);return}
+    const before={key:cfg.key,model:cfg.model,provider:DB.ai.provider};
     cfg.key=v;cfg.model=m;CMP.models[pv]=null;CMP.dead={};save();
     b.disabled=true;setGen('Test de la connexion à '+nm+'…');
     try{const t=await compatJson(pv,'Réponds uniquement par {"ok":true}',{test:true});setGen('Connexion réussie (modèle '+t.model+'). '+nm+' sert de relais automatique quand Google est bloqué.');render2()}
-    catch(e){cfg.key=before.key;cfg.model=before.model;if(pv==='cloudflare') DB.ai.cfUrl=before.cfUrl;save();setGen(errCopy(e),true)}
+    catch(e){cfg.key=before.key;cfg.model=before.model;save();setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
   if(b.dataset&&b.dataset.cmpclear){const pv=b.dataset.cmpclear;compatCfg(pv).key='';save();setGen('Clé '+COMPAT[pv].nom+' effacée.');render2();return}
