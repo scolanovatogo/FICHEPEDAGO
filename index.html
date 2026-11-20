@@ -2725,7 +2725,25 @@ function eprHead(E){
   ]});
 }
 const SUBD='₀₁₂₃₄₅₆₇₈₉';
-function grNiv(t){t=String(t||'').trim();const m=/^[–—-]\s*(.*)$/.exec(t);t=m?m[1]:t;return '– '+t.replace(/^(C\s?\d\s?:)/,'**$1**')}
+function grSplit(t){
+  const out=[]; let cur='',dep=0,dol=false;
+  for(const ch of String(t)){
+    if(ch==='$') dol=!dol;
+    else if(!dol){ if('([{'.includes(ch)) dep++; else if(')]}'.includes(ch)) dep=Math.max(0,dep-1); }
+    if((ch===';'||ch==='\n'||ch==='•')&&!dol&&dep===0){ if(cur.trim()) out.push(cur.trim()); cur=''; }
+    else cur+=ch;
+  }
+  if(cur.trim()) out.push(cur.trim());
+  return out;
+}
+/* un niveau de performance = une ligne par réponse attendue (les réponses ne sont plus mises à la suite les unes des autres) */
+function grNivLines(t){
+  t=String(t||'').trim(); const m=/^[–—-]\s*(.*)$/.exec(t); t=m?m[1]:t;
+  let lab=''; const mm=/^(C\s?\d\s?:)\s*/.exec(t); if(mm){lab=mm[1];t=t.slice(mm[0].length)}
+  const parts=grSplit(t); if(!parts.length) parts.push('');
+  return parts.map((x,i)=>'– '+(i===0&&lab?'**'+lab+'** ':'')+x);
+}
+function grNiv(t){return grNivLines(t).join('\n')}
 function grilleRows(E){
   const G=(E.content&&E.content.grille)||[], m=eprModel(E), rows=[];
   G.forEach((g,gi)=>{
@@ -2742,7 +2760,7 @@ function grilleRows(E){
       const q=gOf(i), cells=[];
       cells.push(i===0?cell(lab,{rs:N,mid:true,align:'center'}):cell([],{vm:true}));
       cells.push(i===q.from?cell(has(q.ind)?[q.ind]:[],{rs:q.n,mid:true}):cell([],{vm:true}));
-      cells.push(cell([grNiv(x.niv)]));
+      cells.push(cell(grNivLines(x.niv)));
       cells.push(cell([fmtN(x.pts)+(x.pts>1?' pts':' pt')],{align:'center'}));
       rows.push(row(cells,{bt:true,bb:true,grp:'g'+gi}));
     });
@@ -2920,7 +2938,7 @@ async function genEpreuve(E){
   'CM2 (deux indicateurs) : « Respect des étapes de l’utilisation des outils » (une ligne par étape de méthode ou d’outil : développement, factorisation, calcul pour une valeur, construction d’un point, tracé, utilisation d’une propriété) ; « Justesse des résultats obtenus au regard des outils et concepts utilisés » (une ligne par résultat attendu AVEC sa valeur exacte : expression, aire, coût, longueurs, périmètre, positions de points…). '+
   'CM3 (deux indicateurs) : « Bon enchaînement des étapes de la démarche » (lignes sur l’ORDRE des étapes : ce qui doit être fait avant quoi) ; « Conformité des résultats et conclusions à la démarche » (lignes sur la cohérence des résultats, les unités, la conclusion rédigée « même si le résultat est faux »). '+
   'CP (trois indicateurs, une ligne chacun) : « Le problème est entièrement résolu » – « Résolution entière du problème » (0,5 pt) ; « Qualité de la langue » – « Expressions correctes » (0,25 pt) ; « La production est-elle bien présentée ? » – « Écriture lisible, sans rature » (0,25 pt) (adapte ces barèmes si le total de CP n’est pas 1). '+
-  'Les niveaux de performance sont CONCRETS : ils citent les données, les calculs et les résultats attendus de CETTE situation, et sont courts (une phrase). Si les totaux obligent à moins de lignes, garde au moins 2 lignes par indicateur. AUCUNE ligne ne vaut 0 point et aucun des quatre critères ne peut être vide ou nul.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales, sans « C1 »). Chacun des critères CM1, CM2 et CM3 contient AU MOINS DEUX lignes « C1 : » ET AU MOINS DEUX lignes « C2 : » : jamais un critère où l’une des deux consignes n’a aucun point.':' Il n’y a qu’une seule consigne : n’utilise pas « C1 : ».')+'\n\n'+
+  'Les niveaux de performance sont CONCRETS et DÉTAILLÉS : ils citent les données, les calculs, les formules, les valeurs exactes et les résultats attendus de CETTE situation. Un niveau décrit UNE seule réponse ou UN seul comportement attendu, en une phrase courte ; ne mets JAMAIS plusieurs réponses à la suite dans la même ligne (pas de « … ; … ; … ») : une réponse attendue = une ligne de la grille. Si les totaux obligent à moins de lignes, garde au moins 2 lignes par indicateur. AUCUNE ligne ne vaut 0 point et aucun des quatre critères ne peut être vide ou nul.'+(m==='43'?' Commence chaque niveau de performance des critères CM1 à CM3 par « C1 : » ou « C2 : » selon la consigne concernée (les lignes du critère CP restent générales, sans « C1 »). Chacun des critères CM1, CM2 et CM3 contient AU MOINS DEUX lignes « C1 : » ET AU MOINS DEUX lignes « C2 : » : jamais un critère où l’une des deux consignes n’a aucun point.':' Il n’y a qu’une seule consigne : n’utilise pas « C1 : ».')+'\n\n'+
   'TYPES SPÉCIAUX (à utiliser pour les parties concernées, avec un champ « type » dans l’objet de la partie) : (1) « relier » : l’énoncé ne contient que la consigne (ex. « Relie par une flèche chaque calcul à son résultat ») ; fournis "type":"relier","gauche":["1) …","2) …"],"droite":["a) …","b) …"] (réponses en DÉSORDRE, jamais face à leur correspondant, avec parfois un intrus) et "liens":["1-c","2-a"] ; NE JAMAIS écrire les liens (⟷, →, tirets) dans l’énoncé ; le corrigé est généré à partir de « liens ». (2) « reordre » : « Réarrange les groupes de mots pour obtenir une phrase correcte » ; prends une propriété, une règle ou une définition EXACTE du cours, découpe-la en 4 à 7 groupes de mots, mélange-les ; fournis "type":"reordre","groupes":["…","…"] (mélangés, jamais dans l’ordre correct) et "solution":"la phrase exacte" ; l’énoncé ne contient que la consigne. Ce type peut aussi figurer dans l’Exercice 3.\n'+
   'Réponds uniquement par un objet JSON :\n{"situation":"contexte","consignes":["…"],"ex2":[{"titre":"I. Réponds par vrai ou faux","bareme":"(0,5 pt × 4)","enonce":"1- …\\n2- …","corrige":"1. Vrai 2. Faux …"}],"ex3":[{"titre":"…","bareme":"(…)","enonce":"…","corrige":"…","fig":facultatif,"figCorr":facultatif}],"figSit":facultatif,"figCorrSit":facultatif,"corrSit":"…","grille":[{"critere":"CM1","nom":"Pertinence","lignes":[{"ind":"…","niv":"…","pts":0.5}]},{"critere":"CM2","nom":"Correction","lignes":[…]},{"critere":"CM3","nom":"Cohérence","lignes":[…]},{"critere":"CP","nom":"Perfectionnement","lignes":[…]}]}\n'+
   (['pct','phys','chim'].includes(E.disc)?EPR_EXP_RULE:'')+(maths?'':'Pour cette discipline, adapte les types de questions (vrai ou faux, QCM, relier, compléter, questions de cours, analyse de document ou de schéma décrit par écrit) tout en gardant la même structure.\n')+'MISE EN PAGE : l’énoncé de l’épreuve (sans le corrigé) doit tenir sur UNE page, DEUX au maximum, jamais trois : situation brève (6 à 8 lignes), consignes courtes, questions concises, pas de texte inutile. Pour « Choisis la bonne réponse », écris chaque question sur sa ligne, puis toutes ses propositions a), b), c) (et d) si nécessaire, par exemple « Aucune réponse ») sur UNE SEULE ligne, sans retour à la ligne entre les propositions. Pour « relier par des flèches », donne seulement les deux colonnes (gauche numérotée, droite lettrée en désordre).\n'+LATEX_RULE_EPR;
@@ -3124,8 +3142,9 @@ function renderEpr(){
     <div class="grid">${eprFld('Précisions (facultatif)','ctx',{rows:2,wide:true,ph:'Ex. : contexte du marché, éviter les fractions, situation sur la construction d’un jardin…'})}
     ${eprFld('Points : Exercice 1 (situation)','p1',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 2 (questions objectives)','p2',{type:'number',step:'0.5'})}${eprFld('Points : Exercice 3 (questions traditionnelles)','p3',{type:'number',step:'0.5'})}</div>
     <div class="muted small" style="margin:4px 0 10px">Total : ${fmtN(total)} points${total!==20?' (en général 20)':''} · modèle utilisé : ${eprModel(E)==='43'?'4ᵉ / 3ᵉ (deux consignes dans la situation)':'6ᵉ / 5ᵉ (une consigne dans la situation)'}.</div>
-    <div class="row"><button class="btn" type="button" data-epact="gen">${C?'Refaire toute l’épreuve':'Préparer l’épreuve'}</button>${C?'<button class="btn danger sm" type="button" data-epact="new">Nouvelle épreuve</button>':''}</div>
-    <div id="ep-st" class="status genstatus muted" role="status" style="margin-top:10px"></div>`}
+`}
+   <div class="row" style="margin-top:10px"><button class="btn" type="button" data-epact="gen">${C?'Refaire toute l’épreuve':'Préparer l’épreuve'}</button>${C?'<button class="btn danger sm" type="button" data-epact="new">Nouvelle épreuve</button>':''}</div>
+   <div id="ep-st" class="status genstatus muted" role="status" style="margin-top:10px"></div>
    </section>`;
   if(!C) return head;
   const part=(k,i,p)=>`<div class="moment"><h4>${esc(p.titre||'Partie')}</h4><div class="grid">${eprFld('Titre','content.'+k+'.'+i+'.titre')}${eprFld('Barème','content.'+k+'.'+i+'.bareme')}${eprFld('Énoncé','content.'+k+'.'+i+'.enonce',{rows:3,wide:true})}${eprFld('Corrigé','content.'+k+'.'+i+'.corrige',{rows:3,wide:true})}${p.type==='relier'?eprFld('Colonne de gauche (un élément par ligne)','content.'+k+'.'+i+'.gauche',{rows:4,wide:true})+eprFld('Colonne de droite (en désordre)','content.'+k+'.'+i+'.droite',{rows:4,wide:true})+eprFld('Liens du corrigé (ex. 1-c)','content.'+k+'.'+i+'.liens',{rows:3,wide:true}):''}${p.type==='reordre'?eprFld('Groupes de mots mélangés (un par ligne)','content.'+k+'.'+i+'.groupes',{rows:4,wide:true})+eprFld('Phrase correcte','content.'+k+'.'+i+'.solution',{rows:2,wide:true}):''}</div>${p.fig?`<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.${k}.${i}.fig">Retirer la figure de l’énoncé</button> `:''}${p.figCorr?`<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.${k}.${i}.figCorr">Retirer la figure du corrigé</button>`:''}</div>`;
