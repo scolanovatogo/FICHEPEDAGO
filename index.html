@@ -604,7 +604,7 @@ function paginate(doc,k){
     return {h:M.firstElementChild.getBoundingClientRect().height};
   });
   M.innerHTML='';
-  const pages=[[]]; let used=0;
+  const pages=[[]]; let used=0, corr=null;
   const np=()=>{pages.push([]);used=0};
   const cur=()=>pages[pages.length-1];
   const firstPiece=(j)=>{const b=doc[j],m=meas[j]; if(!b)return 0;
@@ -612,7 +612,7 @@ function paginate(doc,k){
     return m.h};
   doc.forEach((b,bi)=>{
     const m=meas[bi];
-    if(b.pb&&used>0) np();
+    if(b.pb){if(used>0) np(); corr=pages.length-1}
     if(b.t!=='tbl'){
       if(b.lines&&b.lines.every(x=>!String(x).trim())&&(used===0||used+m.h>CONTENT_H)) return;
       let need=m.h; if(b.keep){let j=bi+1;while(doc[j]&&doc[j].keep&&doc[j].t!=='tbl'){need+=meas[j].h;j++}need+=firstPiece(j)}
@@ -640,7 +640,15 @@ function paginate(doc,k){
     }
     used+=m.gap;
   });
-  return pages.filter(p=>p.length).map(p=>p.map(x=>x.html||tblHTML(x.b,x.rows,true)).join(''));
+  const outP=pages.filter(p=>p.length).map(p=>p.map(x=>x.html||tblHTML(x.b,x.rows,true)).join(''));
+  if(corr!==null) outP.corr=pages.slice(0,corr).filter(p=>p.length).length;
+  return outP;
+}
+/* Épreuve : pages numérotées « Page 1 sur n » ; corrigé type : numérotation à part, pour que l’élève ne croie pas qu’il manque des pages */
+function pgLabel(pages,i,f){
+  const c=(f&&f.__exam&&typeof pages.corr==='number'&&pages.corr>0)?pages.corr:null;
+  if(c===null) return 'Page '+(i+1)+' sur '+pages.length;
+  return i<c?'Page '+(i+1)+' sur '+c:'Corrigé type : page '+(i-c+1)+' sur '+(pages.length-c);
 }
 function footerLeft(f){
   if(f.__exam){const w=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');return {who:w,rest:(f.examTitle||'Épreuve')+' - '+discLabel(f)+(has(f.classe)?' '+f.classe:'')+' ',titre:''}}
@@ -649,7 +657,7 @@ function footerLeft(f){
 }
 function pagesHTML(f,pages,k){
   const fl=footerLeft(f);
-  return pages.map((p,i)=>'<section class="paper"'+(k&&k<1?' style="--k:'+k+';--lh:'+lhOf(k)+'"':'')+'><div class="pbody">'+p+'</div><div class="foot"><span>'+(fl.who?'<b>'+esc(fl.who)+' || '+esc(fl.rest)+'</b>':'<b>'+esc(fl.rest)+'</b>')+esc(fl.titre)+'</span><span class="pg">Page '+(i+1)+' sur '+pages.length+'</span></div></section>').join('');
+  return pages.map((p,i)=>'<section class="paper"'+(k&&k<1?' style="--k:'+k+';--lh:'+lhOf(k)+'"':'')+'><div class="pbody">'+p+'</div><div class="foot"><span>'+(fl.who?'<b>'+esc(fl.who)+' || '+esc(fl.rest)+'</b>':'<b>'+esc(fl.rest)+'</b>')+esc(fl.titre)+'</span><span class="pg">'+pgLabel(pages,i,f)+'</span></div></section>').join('');
 }
 
 /* =========================================================
@@ -731,7 +739,7 @@ function buildDocx(f,docModel,kScale){
   const D=window.docx; const FULL=10466;
   const NONE={style:D.BorderStyle.NONE,size:0,color:'FFFFFF'}; const ONE={style:D.BorderStyle.SINGLE,size:4,color:'000000'};
   const sizeSm=Math.round(24*(kScale||1)), sizeN=sizeSm;
-  const children=[];
+  const children=[]; let splitAt=null;
   const al=a=>a==='center'?D.AlignmentType.CENTER:a==='right'?D.AlignmentType.RIGHT:a==='justify'?D.AlignmentType.JUSTIFIED:D.AlignmentType.LEFT;
   function paras(c,r,W){
     const out=[];
@@ -772,18 +780,23 @@ function buildDocx(f,docModel,kScale){
       borders:b.nb?{top:NONE,bottom:NONE,left:NONE,right:NONE,insideHorizontal:NONE,insideVertical:NONE}:{top:T,bottom:T,left:T,right:T,insideHorizontal:ONE,insideVertical:ONE},rows});
   }
   for(const b of docModel){
-    if(b.pb) children.push(new D.Paragraph({pageBreakBefore:true,spacing:{before:0,after:0,line:20},children:[]}));
+    if(b.pb){if(f.__exam&&splitAt===null&&children.length) splitAt=children.length; else children.push(new D.Paragraph({pageBreakBefore:true,spacing:{before:0,after:0,line:20},children:[]}))}
     if(b.t==='tbl'){children.push(tableOf(b));children.push(new D.Paragraph({spacing:{before:0,after:0,line:120},children:[]}));}
     else if(b.t==='img'){children.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{after:b.img.credit?0:120},children:[imgRun(b.img)]}));if(b.img.credit)children.push(new D.Paragraph({alignment:D.AlignmentType.CENTER,spacing:{after:120},children:[new D.TextRun({text:(/^(Sch|Repr)/.test(b.img.credit)?'':'Source : ')+b.img.credit,italics:true,size:18,font:'Bookman Old Style'})]}))}
     else b.lines.forEach((x,i)=>children.push(new D.Paragraph({alignment:al(b.align||(b.just?'justify':'left')),keepNext:!!b.keep||i<b.lines.length-1&&false,spacing:{before:0,after:i===b.lines.length-1?Math.round((b.gap??8)*15):0,line:240},indent:b.indent?{left:400}:undefined,children:runsDocx(x,{size:sizeN,bold:b.bold})})));
   }
   const fl=footerLeft(f);
-  const footer=new D.Footer({children:[new D.Paragraph({tabStops:[{type:D.TabStopType.RIGHT,position:FULL}],border:{top:{style:D.BorderStyle.SINGLE,size:12,color:'7F4A1D',space:4}},
+  const mkFooter=(corr,inSec)=>new D.Footer({children:[new D.Paragraph({tabStops:[{type:D.TabStopType.RIGHT,position:FULL}],border:{top:{style:D.BorderStyle.SINGLE,size:12,color:'7F4A1D',space:4}},
     children:[new D.TextRun({text:(fl.who?fl.who+' || ':'')+fl.rest,bold:true,size:20,font:'Bookman Old Style'}),new D.TextRun({text:fl.titre,size:20,font:'Bookman Old Style'}),
-      new D.TextRun({children:[new D.Tab(),'Page ',D.PageNumber.CURRENT,' sur ',D.PageNumber.TOTAL_PAGES],bold:true,size:18,font:'Bookman Old Style'})]})]});
+      new D.TextRun({children:[new D.Tab(),corr?'Corrigé type : page ':'Page ',D.PageNumber.CURRENT,' sur ',inSec?D.PageNumber.TOTAL_PAGES_IN_SECTION:D.PageNumber.TOTAL_PAGES],bold:true,size:18,font:'Bookman Old Style'})]})]});
+  const pgProps=(start)=>({size:{width:11906,height:16838},margin:{top:600,bottom:900,left:720,right:720,footer:400},...(start?{pageNumbers:{start:1}}:{})});
+  const sections=splitAt!==null
+    ?[{properties:{page:pgProps(false)},footers:{default:mkFooter(false,true)},children:children.slice(0,splitAt)},
+      {properties:{page:pgProps(true)},footers:{default:mkFooter(true,true)},children:children.slice(splitAt)}]
+    :[{properties:{page:pgProps(false)},footers:{default:mkFooter(false,false)},children}];
   return new D.Document({creator:[f.prenom,f.nom].filter(Boolean).join(' ')||'Fiche pédagogique',title:f.titre||'Fiche pédagogique',
     styles:{default:{document:{run:{font:'Bookman Old Style',size:sizeN}}}},
-    sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:600,bottom:900,left:720,right:720,footer:400}}},footers:{default:footer},children}]});
+    sections});
 }
 function fileBase(f){return noAccent(['fiche',f.disc,f.sub,f.classe,(f.leconNo?'lecon'+f.leconNo:''),f.titre].filter(has).join('-')).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'fiche-pedagogique'}
 async function saveFile(name,blob){
@@ -2069,7 +2082,7 @@ async function eprFigOf(spec,dw){
     return await eprFig(spec,dw,false)
   }catch(e){return null}
 }
-const EPR_EXP_RULE='DISCIPLINE EXPÉRIMENTALE : la situation d’évaluation DÉCRIT un dispositif expérimental ou un objet technique concret (montage électrique, circuit, expérience de chimie, appareil de mesure, objet du quotidien) et DOIT être accompagnée d’un schéma : remplis « figSit » par {"svg":"<svg …>…</svg>"}. Le SVG : viewBox="0 0 480 300" width="480" height="300", fond blanc, traits noirs fins (stroke="#000" stroke-width="2" fill="none"), texte noir de 15 à 18 px en français (balises autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; aucun style, aucune image). Représente le montage comme au tableau : générateur (pile : deux traits parallèles, le long = borne +), lampe (cercle avec une croix), interrupteur (segment ouvert ou fermé), résistor (rectangle), moteur (cercle avec M), ampèremètre (cercle avec A) et voltmètre (cercle avec V) à leur place correcte, fils en traits droits à angles droits ; verrerie de chimie (tube à essais, bécher, éprouvette graduée, erlenmeyer, ballon, bec) dessinée simplement avec ses légendes ; ajoute les légendes et les valeurs données par la situation. N’y fais PAS apparaître les réponses attendues. Pour une question de l’exercice 3 ou de l’exercice 2 qui s’appuie sur un schéma, utilise aussi le champ « fig » de la partie avec le même format {"svg":"…"}. « figCorrSit » (facultatif) : schéma complété pour le corrigé.\n';
+const EPR_EXP_RULE='DISCIPLINE EXPÉRIMENTALE : la situation d’évaluation DÉCRIT ELLE-MÊME le PROTOCOLE EXPÉRIMENTAL complet : le matériel et les produits utilisés (avec leurs valeurs : masses, volumes, tensions, intensités, longueurs…), le montage réalisé, les étapes de la manipulation dans l’ordre (« On… puis on… »), puis les observations ou mesures obtenues (valeurs chiffrées, couleurs, dépôts, indications des appareils). L’élève n’a rien à chercher ni à inventer : tout ce qu’il faut pour répondre est dans la situation (dispositif expérimental ou objet technique concret : montage électrique, circuit, expérience de chimie, appareil de mesure, objet du quotidien, comme dans les travaux pratiques du manuel). Les consignes demandent de décrire, schématiser ou interpréter CETTE expérience. Le schéma correspond exactement au protocole décrit. La situation DOIT être accompagnée d’un schéma : remplis « figSit » par {"svg":"<svg …>…</svg>"}. Le SVG : viewBox="0 0 480 300" width="480" height="300", fond blanc, traits noirs fins (stroke="#000" stroke-width="2" fill="none"), texte noir de 15 à 18 px en français (balises autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; aucun style, aucune image). Représente le montage comme au tableau : générateur (pile : deux traits parallèles, le long = borne +), lampe (cercle avec une croix), interrupteur (segment ouvert ou fermé), résistor (rectangle), moteur (cercle avec M), ampèremètre (cercle avec A) et voltmètre (cercle avec V) à leur place correcte, fils en traits droits à angles droits ; verrerie de chimie (tube à essais, bécher, éprouvette graduée, erlenmeyer, ballon, bec) dessinée simplement avec ses légendes ; ajoute les légendes et les valeurs données par la situation. N’y fais PAS apparaître les réponses attendues. Pour une question de l’exercice 3 ou de l’exercice 2 qui s’appuie sur un schéma, utilise aussi le champ « fig » de la partie avec le même format {"svg":"…"}. « figCorrSit » (facultatif) : schéma complété pour le corrigé.\n';
 async function eprExpFigure(E,situation){
   const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau le schéma qui accompagne la situation d’évaluation suivante :\n« '+String(situation||'').slice(0,1200)+' »\n'+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'').replace(/ remplis « figSit » par /,' réponds par ')+'\nRéponds uniquement par un objet JSON {"svg":"<svg …>…</svg>"} : le schéma annoté du dispositif de cette situation, avec les valeurs numériques données.';
   for(let t=0;t<2;t++){
@@ -2630,7 +2643,7 @@ function buildEprDoc(E){
   doc.push(exT(1,'Situation d’évaluation',E.p1));
   if(C.figSit) figFlow(String(C.situation).split('\n'),capFig(C.figSit),{gap:6}).forEach(b=>doc.push(b));
   else doc.push({t:'p',lines:String(C.situation).split('\n'),just:true,gap:6});
-  (C.consignes||[]).forEach((c,i)=>doc.push({t:'p',lines:['**Consigne'+(C.consignes.length>1?' '+(i+1):'')+'** : '+c],just:true,gap:4}));
+  (C.consignes||[]).forEach((c,i)=>doc.push({t:'p',lines:['**Consigne'+(C.consignes.length>1?' '+(i+1):'')+'** : '+eprConsStrip(c)],just:true,gap:4}));
   const rt=repartTable(E); if(rt) doc.push(rt);
   doc.push(exT(2,'Questions objectives',E.p2));
   (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});eprPartBlocks(p,false).forEach(b=>doc.push(b))});
@@ -2665,21 +2678,25 @@ function eprCapItems(E){
   });
   return out;
 }
-function eprPickFocus(items,last){
+function eprPickFocus(items,last,score){
+  score=score||(()=>0);
   if(items.length<2) return {pair:items.slice(),key:''};
   const multi=new Set(items.map(x=>x.les)).size>1;
   let a,b,key='';
   for(let t=0;t<14;t++){
-    a=items[Math.floor(Math.random()*items.length)];
+    const jit=.2+t*.4;
+    const rank=arr=>arr.map(x=>({x,s:score(x)+Math.random()*jit})).sort((p,q)=>p.s-q.s).map(o=>o.x);
+    a=rank(items)[0];
     let pool=items.filter(x=>x!==a&&(!multi||x.les!==a.les));
     if(!pool.length) pool=items.filter(x=>x!==a);
-    b=pool[Math.floor(Math.random()*pool.length)];
+    b=rank(pool)[0];
     key=[a.idx,b.idx].sort((x,y)=>x-y).join('-');
     if(key!==last) break;
   }
   return {pair:[a,b],key};
 }
 const eprTok=t=>new Set(noAccent(String(t||'')).toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=5));
+const eprConsStrip=c=>String(c==null?'':c).replace(/^\s*(?:\*\*)?\s*consigne\s*\d*\s*(?:\*\*)?\s*[:.\-–)]\s*/i,'').trim();
 function eprSim(a,b){const A=eprTok(a),B=eprTok(b);if(!A.size||!B.size)return 0;let n=0;A.forEach(w=>{if(B.has(w))n++});return n/Math.min(A.size,B.size)}
 
 function eprDigest(C){
@@ -2717,7 +2734,7 @@ async function genEpreuve(E){
   'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+capsTxt+
   '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd. NOTATIONS DU COLLÈGE : n’écris jamais le symbole ∞ ni d’intervalles comme [a ; +∞[ ; les solutions d’inéquations s’écrivent en mots ou en inégalités simples (x < 2) avec une demi-droite graduée à flèche. Pas de racines carrées en 4e ; pour Pythagore, uniquement des carrés parfaits faciles (côtés entiers jusqu’à 14, de préférence jusqu’à 12 : 144 au plus grand).'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
-  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
+  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). Chaque consigne (champ « consignes ») ne contient QUE son libellé : n’écris jamais le mot « Consigne » ni son numéro dans le texte. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
   'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
   'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Elle doit être DÉTAILLÉE, ligne par ligne, comme une vraie grille officielle. Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère est une liste de lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème}. Un indicateur regroupe PLUSIEURS lignes consécutives : RÉPÈTE le même texte d’indicateur, à l’identique, sur chaque ligne de son groupe. Chaque ligne de niveau de performance vaut 0,25 pt (multiples de 0,25 seulement) : un critère de 2,5 pts contient donc 10 lignes, un critère de 2 pts en contient 8. INDICATEURS ET NIVEAUX : '+
@@ -2732,9 +2749,15 @@ async function genEpreuve(E){
   const hist=Array.isArray(E.hist)?E.hist:[];
   const ex2=eprPickEx2(E.lastEx2||''); E.lastEx2=ex2.keys.slice().sort().join();
   let ctxS=''; for(let t=0;t<10;t++){ctxS=EPR_CTXS[Math.floor(Math.random()*EPR_CTXS.length)]; if(ctxS!==E.lastCtx) break} E.lastCtx=ctxS;
-  const foc=eprPickFocus(items,E.lastFocus||''); E.lastFocus=foc.key;
+  const covKey=(x,c)=>noAccent((x.cap+'§'+(c||'')).toLowerCase()).replace(/\s+/g,' ').slice(0,140);
+  const covN=k=>((E.cov||{})[k])||0;
+  const unitsOf=x=>(x.conts.length?x.conts:['']);
+  const foc=eprPickFocus(items,E.lastFocus||'',x=>unitsOf(x).reduce((t,c)=>t+covN(covKey(x,c)),0)/unitsOf(x).length); E.lastFocus=foc.key;
+  const units=[]; items.forEach(x=>unitsOf(x).forEach(c=>units.push({x,c,k:covKey(x,c)})));
+  const prio=units.map(u=>({u,s:covN(u.k)+Math.random()*.4})).sort((p,q)=>p.s-q.s).slice(0,Math.min(units.length,8)).map(o=>o.u);
+  const prioTxt=' CONTENUS À ÉVALUER EN PRIORITÉ dans les exercices 2 et 3 (jamais évalués ou les moins évalués dans les épreuves précédentes ; chaque question porte sur l’un d’eux) : '+prio.map(u=>u.c?'« '+u.c+' » (capacité : '+u.x.cap+')':'« '+u.x.cap+' »').join(' ; ')+'. Ne reprends pas en priorité les contenus déjà évalués.';
   const capTxt=x=>'« '+x.cap+' »'+(x.conts.length?' (contenus : '+x.conts.join(' ; ')+')':'')+(x.les?' [leçon : '+x.les+']':'');
-  let focTxt='';
+  let focTxt=prioTxt;
   if(foc.pair.length>=2){
     const a=foc.pair[0],b=foc.pair[1];
     focTxt=' FOCUS DE LA SITUATION : elle combine DEUX capacités'+(a.les&&b.les&&a.les!==b.les?' de DEUX LEÇONS DIFFÉRENTES':'')+' : (1) '+capTxt(a)+' ; (2) '+capTxt(b)+'.'+(m==='43'?' La consigne 1 évalue la capacité (1) et la consigne 2 évalue la capacité (2).':' La consigne unique demande une production qui mobilise les deux capacités.')+' Les exercices 2 et 3 continuent de couvrir l’ensemble des contenus.';
@@ -2748,8 +2771,9 @@ async function genEpreuve(E){
     catch(e){if(e&&e.code==='cancelled')throw e}
   }
   if(!d||!has(eprS(d.situation))||!Array.isArray(d.consignes)||!d.consignes.length||!Array.isArray(d.grille)||!d.grille.length) throw {code:'invalid_json',message:'L’épreuve reçue est incomplète. Relancez la préparation.'};
-  E.content={situation:eprS(d.situation),consignes:d.consignes.map(eprS),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,6).map(normGrille)};
+  E.content={situation:eprS(d.situation),consignes:d.consignes.map(x=>eprConsStrip(eprS(x))),ex2:(d.ex2||[]).map(normPart),ex3:(d.ex3||[]).map(normPart),corrSit:eprS(d.corrSit),grille:d.grille.slice(0,6).map(normGrille)};
   E.content.grille=eprFixGrille(E.content.grille,E,E.content.consignes.length);
+  E.cov=E.cov||{}; {const mark=(x,c)=>{const k=covKey(x,c);E.cov[k]=(E.cov[k]||0)+1}; foc.pair.forEach(x=>unitsOf(x).forEach(c=>mark(x,c))); prio.forEach(u=>mark(u.x,u.c))}
   {const C=E.content;
    C.figSit=await eprFigOf(d.figSit,320); C.corrSitFig=await eprFigOf(d.figCorrSit,320);
    if(!C.figSit&&['pct','phys','chim'].includes(E.disc)){try{C.figSit=await eprExpFigure(E,C.situation)}catch(e){if(e&&e.code==='cancelled')throw e}}
