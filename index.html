@@ -322,12 +322,24 @@ const F=()=>DB.fiches.find(f=>f.id===DB.cur);
    Balisage léger : **gras**  *italique*  __souligné__  $formule$  [[blue:texte]] [[red:..]] [[box:..]]
    ========================================================= */
 const TOK=/(\$[^$\n]+\$)|(\*\*\*(?!\s)[\s\S]+?\*\*\*)|(\*\*(?!\s)[\s\S]+?\*\*)|(__(?!\s)[\s\S]+?__)|(\*(?!\s)[^*\n]*[^*\s]\*)|(\[\[(?:blue|red|green|box):[\s\S]*?\]\])/;
+const BARE_TEX=/\\(?:overrightarrow|vec|widehat|overline|sqrt|dfrac|frac|times|cdot|div|pm|leq|geq|neq|approx|pi|alpha|beta|theta|Delta|infty|rightarrow|Rightarrow|parallel|perp|mathbb)(?![a-zA-Z])(?:\{[^{}]*\})*/g;
+function bareSplit(txt,st){
+  txt=String(txt).replace(/\\displaystyle\s*/g,'');
+  const o=[]; let last=0,m; BARE_TEX.lastIndex=0;
+  while((m=BARE_TEX.exec(txt))){
+    if(m.index>last) o.push(Object.assign({text:txt.slice(last,m.index)},st));
+    o.push(Object.assign({math:m[0]},st)); last=m.index+m[0].length;
+  }
+  if(!o.length) return [Object.assign({text:txt},st)];
+  if(last<txt.length) o.push(Object.assign({text:txt.slice(last)},st));
+  return o;
+}
 function parseInline(s,st){
   st=st||{}; const out=[]; let rest=String(s??'');
   while(rest){
     const m=TOK.exec(rest);
-    if(!m){out.push(Object.assign({text:rest},st));break}
-    if(m.index>0) out.push(Object.assign({text:rest.slice(0,m.index)},st));
+    if(!m){out.push(...bareSplit(rest,st));break}
+    if(m.index>0) out.push(...bareSplit(rest.slice(0,m.index),st));
     if(m[1]) out.push(Object.assign({math:m[1].slice(1,-1)},st));
     else if(m[2]) out.push(...parseInline(m[2].slice(3,-3),Object.assign({},st,{b:true,i:true})));
     else if(m[3]) out.push(...parseInline(m[3].slice(2,-2),Object.assign({},st,{b:true})));
@@ -1075,9 +1087,10 @@ function fixJsonText(t){
 }
 function cleanMath(v){
   if(typeof v!=='string') return v;
-  let t=v.replace(/√\s*\(([^()]+)\)/g,'\\sqrt{$1}').replace(/√\s*([A-Za-z0-9]+)/g,'\\sqrt{$1}').replace(/\b vecteur\s+([A-Z])\s*([A-Z])\b/gi,'\\overrightarrow{$1$2}').replace(/\u000crac/g,'\\frac').replace(/\u0009imes/g,'\\times').replace(/\u0009ext\{/g,'\\text{').replace(/\u0009heta/g,'\\theta').replace(/\u0008eta/g,'\\beta').replace(/\u000dight/g,'\\right')
+  v=v.replace(/\\\(\s*([\s\S]*?)\s*\\\)/g,'$$$1$$').replace(/\\\[\s*([\s\S]*?)\s*\\\]/g,'$$$1$$').replace(/\\displaystyle\s*/g,'');
+  let t=v.replace(/√\s*\(([^()]+)\)/g,'\\sqrt{$1}').replace(/√\s*([A-Za-z0-9]+)/g,'\\sqrt{$1}').replace(/(^|[\s(])vecteur\s+([A-Z])([A-Z])(?![A-Za-zÀ-ÿ])/g,'$1$$\\overrightarrow{$2$3}$$').replace(/\u000crac/g,'\\frac').replace(/\u0009imes/g,'\\times').replace(/\u0009ext\{/g,'\\text{').replace(/\u0009heta/g,'\\theta').replace(/\u0008eta/g,'\\beta').replace(/\u000dight/g,'\\right')
     .replace(/(?<![\\a-zA-Z])(d?frac)\{/g,'\\$1{');
-  return t.split('\n').map(line=>line.split(/(\$[^$\n]+\$)/).map((seg,i)=>i%2?seg:seg.replace(/\\d?frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|\\text\{[^{}]+\}|\\(?:times|cdot|div|pm|leq|geq|neq|approx|pi|alpha|beta|theta|Delta|infty|rightarrow|Rightarrow)(?![a-zA-Z])/g,m=>'$'+m+'$')).join('')).join('\n');
+  return t.split('\n').map(line=>line.split(/(\$[^$\n]+\$)/).map((seg,i)=>i%2?seg:seg.replace(/\\d?frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|\\text\{[^{}]+\}|\\(?:overrightarrow|vec|widehat|overline)\{[^{}]+\}|\\(?:times|cdot|div|pm|leq|geq|neq|approx|pi|alpha|beta|theta|Delta|infty|rightarrow|Rightarrow|parallel|perp)(?![a-zA-Z])/g,m=>'$'+m+'$')).join('')).join('\n');
 }
 function cleanDeep(o){
   if(typeof o==='string') return cleanMath(o);
@@ -1752,17 +1765,27 @@ function lockGen(on){document.querySelectorAll('[data-lock]').forEach(b=>{b.disa
 /* ---------- plan et rédaction des séances ---------- */
 const capsText=f=>f.capacites.map((c,i)=>(i+1)+'. '+c.cap+' — '+c.contenus.replace(/\n/g,' ')).join('\n');
 function planLocal(f,o){
-  const n=f.seances.length,k=f.capacites.filter(c=>has(c.cap)).length;
-  const caps=f.capacites.filter(c=>has(c.cap));
+  /* Répartition ORDONNÉE : on suit exactement l'ordre du tableau Capacités | Contenus (capacité 1 puis ses contenus, capacité 2 puis ses contenus…), répartis en blocs consécutifs sur les séances. */
+  const n=f.seances.length, caps=f.capacites.filter(c=>has(c.cap));
+  const units=[];
+  caps.forEach((c,ci)=>{
+    const cont=String(c.contenus||'').split('\n').map(x=>x.replace(/^\s*[-•–—]\s*/,'').trim()).filter(Boolean);
+    if(!cont.length) units.push({ci,cap:c.cap.replace(/\s+/g,' ').trim(),ct:''});
+    else cont.forEach(x=>units.push({ci,cap:c.cap.replace(/\s+/g,' ').trim(),ct:x}));
+  });
+  const U=units.length; if(!U||!n) return;
   for(let i=0;i<n;i++){
-    const a=Math.floor(i*k/n),b=Math.max(a+1,Math.floor((i+1)*k/n));
-    const grp=caps.slice(a,Math.min(b,k)); if(!grp.length) continue;
-    const idx=grp.map((_,j)=>a+j+1);
+    let a=Math.floor(i*U/n), b=Math.floor((i+1)*U/n);
+    if(b<=a){b=a+1}
+    if(a>=U){a=U-1;b=U}
+    const grp=units.slice(a,Math.min(b,U));
+    const idx=[...new Set(grp.map(u=>u.ci+1))];
     const s=f.seances[i];
     const lab=idx.length>1?'Capacités '+idx.slice(0,-1).join(', ')+' et '+idx[idx.length-1]:'Capacité '+idx[0];
+    const titres=[...new Set(grp.map(u=>u.cap))];
     const put=(k2,v)=>{if(o.overwrite||!has(s[k2])) s[k2]=v};
-    put('capNum',lab); put('capTitre',grp.map(c=>c.cap.replace(/\s+/g,' ').trim()).join(' ; '));
-    put('contenus',grp.map(c=>c.contenus.split('\n').map(x=>x.replace(/^[-•]\s*/,'').trim()).filter(Boolean).join(' ; ')).filter(Boolean).join(' ; '));
+    put('capNum',lab); put('capTitre',titres.join(' ; '));
+    put('contenus',grp.map(u=>u.ct).filter(Boolean).join(' ; '));
   }
 }
 async function planSeances(f,o){
@@ -2220,9 +2243,27 @@ async function eprFigOf(spec,dw){
 }
 const EPR_EXP_RULE='DISCIPLINE EXPÉRIMENTALE : la situation d’évaluation DÉCRIT ELLE-MÊME le PROTOCOLE EXPÉRIMENTAL complet : le matériel et les produits utilisés (avec leurs valeurs : masses, volumes, tensions, intensités, longueurs…), le montage réalisé, les étapes de la manipulation dans l’ordre (« On… puis on… »), puis les observations ou mesures obtenues (valeurs chiffrées, couleurs, dépôts, indications des appareils). L’élève n’a rien à chercher ni à inventer : tout ce qu’il faut pour répondre est dans la situation (dispositif expérimental ou objet technique concret : montage électrique, circuit, expérience de chimie, appareil de mesure, objet du quotidien, comme dans les travaux pratiques du manuel). Les consignes demandent de décrire, schématiser ou interpréter CETTE expérience. Le schéma correspond exactement au protocole décrit. COHÉRENCE : la situation décrit UN dispositif (ou deux au plus, présentés comme « Expérience 1 » et « Expérience 2 ») directement lié aux capacités et contenus du FOCUS ; elle n’ajoute aucun dispositif étranger au focus ; chaque dispositif décrit dans le texte figure dans le schéma, et chaque élément du schéma est mentionné dans le texte. SCHÉMA FACULTATIF : fournis « figSit » SEULEMENT si les contenus évalués l’exigent réellement (montage, circuit, expérience ou objet technique que l’élève doit lire, schématiser ou interpréter) ; sinon mets "figSit":null et n’invente aucun schéma décoratif. Le schéma illustre les contenus du focus (par exemple : un circuit pour l’électricité, un solide plongé dans un liquide pour la poussée d’Archimède, l’électrolyse seulement si c’est elle qui est évaluée), jamais un dispositif tiré d’un exemple. Quand il est fourni, il est décrit avec des COMPOSANTS (l’application les dessine proprement, en couleur) : remplis « figSit » par {"items":[…]}. ZONE : 480 (largeur) × 300 (hauteur), origine en haut à gauche, y vers le bas, marge de 15. Les composants sont dessinés dans l’ordre de la liste : d’abord liquides et récipients, puis tubes, objets, fils, flèches, et enfin les textes. Composants (champs entre crochets facultatifs) : {"t":"becher","x","y","w","h","niveau":0.6,["liquide":"eau"],["forme":"cuve"],["label"]} récipient ouvert (x,y = coin haut gauche ; niveau = fraction remplie de 0 à 1 ; « cuve » = bords évasés) ; {"t":"tube","x","y","w":26,"h":150,"gaz":0.4,["couleurGaz":"jaune"]} tube à essais retourné, fermé en haut (gaz = fraction de la hauteur occupée par le gaz, en haut ; le reste est du liquide) ; {"t":"eprouvette","x","y","w","h","niveau"} ; {"t":"erlenmeyer","x","y","w","h","niveau"} ; {"t":"electrode","x" (centre),"y","h"} ; {"t":"bulles","x","y","w","h","n":5} ; dipôles (x,y = centre) : {"t":"pile","x","y","label":"E"} (bornes en x−14 et x+14), {"t":"lampe","x","y","label":"L"} (bornes en x±16), {"t":"interrupteur","x","y","w":50,"ouvert":true,"label":"K"} (bornes en x±25), {"t":"resistor","x","y","w":50,"label":"R"}, {"t":"appareil","x","y","lettre":"A"} (A, V ou M ; bornes en x±16) ; {"t":"fil","points":[[x,y],…]} fils à angles droits, dont les extrémités se raccordent aux bornes ; {"t":"liquide","x","y","w","h"} nappe de liquide ; {"t":"bloc","x","y","w","h",["couleur":"gris"],["centre":"G"]} solide ; {"t":"fleche","x1","y1","x2","y2",["label":"P"],["vec":true],["couleur":"rouge"],["epaisseur":3]} force ou vecteur (pointe en x2,y2) ; {"t":"cote","x1","y1","x2","y2","label":"h",["couleur"]} cote à double flèche ; {"t":"ressort","x","y","h"} ; {"t":"potence","x","y","h","bras"} ; {"t":"flamme","x","y"} ; {"t":"ligne","x1","y1","x2","y2"} ; {"t":"texte","x","y","texte"} ; {"t":"legende","x","y","texte","vers":[x,y]} (texte relié par une flèche à l’élément désigné). Couleurs : eau, jaune, rouge, vert, bleu, orange, violet, gris, noir, marron, rose, incolore ou #rrggbb. Dessine le dispositif EXACTEMENT comme le décrit le protocole de la situation (mêmes éléments, même disposition), légende chaque élément important par son nom, ajoute les valeurs données par la situation, sans faire apparaître les réponses attendues, et évite que les textes se chevauchent. Pour une question de l’exercice 2 ou 3 qui s’appuie sur un schéma, utilise aussi le champ « fig » de la partie avec le même format ; « figCorrSit » (facultatif) : schéma complété pour le corrigé. FORME (syntaxe seulement, sans rapport avec ta situation) : {"items":[{"t":"becher","x":150,"y":120,"w":160,"h":130,"niveau":0.6},{"t":"bloc","x":205,"y":150,"w":50,"h":50,"couleur":"gris"},{"t":"legende","x":400,"y":110,"texte":"Solide","vers":[258,170]}]}\n';
 async function eprExpFigure(E,situation){
-  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau le schéma qui accompagne la situation d’évaluation suivante :\n« '+String(situation||'').slice(0,1200)+' »\n'+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'').replace(/ remplis « figSit » par /,' réponds par ')+'\nRéponds uniquement par un objet JSON {"items":[…]} (composants décrits ci-dessus) : le schéma annoté du dispositif de cette situation, avec les valeurs numériques données.';
+  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau le schéma qui accompagne la situation d’évaluation suivante :\n« '+String(situation||'').slice(0,1200)+' »\n'+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'').replace(/ remplis « figSit » par /,' réponds par ')+'\nRéponds uniquement par un objet JSON {"items":[…]} (composants décrits ci-dessus) : le schéma annoté du dispositif de cette situation, avec les valeurs numériques données. Représente UNIQUEMENT ce que le texte décrit, élément par élément : aucun composant absent du texte, aucun élément du texte oublié, chaque composant relié correctement par des fils.';
   for(let t=0;t<2;t++){
     try{const d=await ask(prompt,{temp:0.3});const im=await eprFigOf(d&&(d.svg?{svg:d.svg}:d.figSit||d),340);if(im) return im}
+    catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
+  }
+  return null;
+}
+const EPR_FREF=/\b(?:figure|sch[ée]ma|dessin|croquis|montage|repr[ée]sentation|graphique|courbe|plan|carte)\s+(?:ci-[a-zé]+|suivant[e]?)|\bci-contre\b/i;
+function eprUnref(t){
+  return String(t==null?'':t)
+    .replace(/\s*\(\s*(?:voir|cf\.?)?\s*(?:la|le|l['’])?\s*(?:figure|sch[ée]ma|dessin|croquis|montage|graphique|courbe|plan|carte)\s+(?:ci-[a-zé]+|suivant[e]?)\s*\)/gi,'')
+    .replace(/\s*,?\s*(?:d['’]apr[èe]s|selon|sur|à l['’]aide de|en observant)\s+(?:la|le|l['’])\s*(?:figure|sch[ée]ma|dessin|croquis|graphique|courbe|plan|carte)\s+(?:ci-[a-zé]+|suivant[e]?)\s*,?/gi,' ')
+    .replace(/\s*\bci-contre\b/gi,'')
+    .replace(/[ \t]{2,}/g,' ').replace(/\s+([,.;:])/g,'$1').trim();
+}
+/* Figure de TOUT type (géométrie, schéma, courbe, graphique, plan, carte, organe…) tracée à partir du TEXTE FINAL de la situation, pour qu’elle corresponde exactement à ce qui est écrit */
+async function eprSitFigure(E,situation){
+  const exp=['pct','phys','chim'].includes(E.disc);
+  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau la figure qui accompagne cette situation :\n« '+String(situation||'').slice(0,1400)+' »\nChoisis le type de figure qui convient (figure de géométrie, schéma de montage ou d’objet, courbe, graphique, histogramme, plan, carte simplifiée, schéma d’organe ou de cycle…). Elle montre EXACTEMENT les données du texte (points, longueurs, angles, objets, valeurs, légendes) et rien d’autre, sans la réponse attendue.\nFORMATS possibles : (1) figure de géométrie plane : '+GEO_DOC+'\n'+(exp?'(2) schéma de dispositif : '+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'')+'\n':'')+'('+(exp?'3':'2')+') tout autre dessin : {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"480\\" height=\\"340\\" viewBox=\\"0 0 480 340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan, traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement.\nRéponds uniquement par {"figSit":{…}} (géométrie ou {"items":[…]}) ou par {"svg":"…"}.';
+  for(let t=0;t<2;t++){
+    try{const d=await ask(prompt,{temp:0.3});const im=await eprFigOf(d&&(d.svg?{svg:d.svg}:(d.figSit||d.geo||d)),340);if(im) return im}
     catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
   }
   return null;
@@ -2442,7 +2483,7 @@ async function repartirCaps(f){
   const n=f.seances.length;
   try{
     f.seances.forEach(x=>{['capNum','capTitre','contenus'].forEach(k=>{x[k]=newSeance(f.tpl)[k]})});
-    if(!aiKind()){planLocal(f,{overwrite:true});setGen('Capacités réparties sur les '+n+' séance(s). Vérifiez, puis passez à l’étape 3 : « Préparer les séances ».')}
+    if(true){planLocal(f,{overwrite:true});setGen('Capacités réparties sur les '+n+' séance(s), dans l’ordre du tableau. Vérifiez, puis passez à l’étape 3 : « Préparer les séances ».')}
     else{
       setGen('Répartition des capacités sur les '+n+' séance(s)…');
       try{await planSeances(f,{overwrite:true});setGen('Capacités réparties sur les '+n+' séance(s). Passez à l’étape 3 : « Préparer les séances ».')}
@@ -2870,7 +2911,7 @@ async function genEpreuve(E){
   'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+capsTxt+
   '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd. NOTATIONS DU COLLÈGE : n’écris jamais le symbole ∞ ni d’intervalles comme [a ; +∞[ ; les solutions d’inéquations s’écrivent en mots ou en inégalités simples (x < 2) avec une demi-droite graduée à flèche. Pas de racines carrées en 4e ; pour Pythagore, uniquement des carrés parfaits faciles (côtés entiers jusqu’à 14, de préférence jusqu’à 12 : 144 au plus grand).'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
-  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). Chaque consigne (champ « consignes ») ne contient QUE son libellé : n’écris jamais le mot « Consigne » ni son numéro dans le texte. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
+  'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. EXIGENCE DE TRAVAIL (très important) : la situation est notée sur '+fmtN(p1)+' points, soit environ '+fmtN(p1/(m==='43'?2:1))+' points par consigne : chaque consigne doit donc demander un TRAVAIL SUBSTANTIEL à l’élève avant qu’il obtienne ces points, jamais une simple question de cours ni une réponse lisible directement dans le texte. Chaque consigne enchaîne 3 à 4 tâches distinctes, introduites par a), b), c), d) dans le même paragraphe (par exemple : relever et organiser les données, calculer ou exploiter des mesures, schématiser ou construire, expliquer ou interpréter, conclure ou comparer). Les données de la situation obligent à raisonner : il faut combiner au moins deux informations ou deux étapes de calcul. Chaque tâche correspond à des lignes de la grille de correction, qui doit pouvoir détailler au moins 4 étapes notées par consigne.  Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). Chaque consigne (champ « consignes ») ne contient QUE son libellé : n’écris jamais le mot « Consigne » ni son numéro dans le texte. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). La figure de la situation est FACULTATIVE : ajoute-la seulement quand elle aide réellement à comprendre ou à résoudre la situation, et choisis le TYPE de figure que la situation demande, sans te limiter à la géométrie : figure de géométrie (triangle, cercle, droites, points, angles, symétrie, construction, solide, patron), schéma d’un montage ou d’un objet, courbe, graphique, histogramme, diagramme, plan ou croquis à l’échelle, carte simplifiée, schéma d’un organe, d’un cycle ou d’un circuit, ligne du temps… FORMATS : géométrie plane → l’objet décrit plus bas ; montage ou dispositif de physique-chimie → {"items":[…]} s’il est décrit dans les règles de la discipline ; TOUT AUTRE dessin → {"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"340\" viewBox=\"0 0 480 340\">…</svg>"} (balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement, dimensions et valeurs de la situation écrites sur la figure). Quand la situation se résout par un calcul, des données chiffrées, un tableau de mesures décrit ou une observation racontée, omets « figSit » : le texte se suffit et ne renvoie à aucune figure. La figure représente EXACTEMENT ce que le texte décrit. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
   'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
   'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Elle doit être DÉTAILLÉE, ligne par ligne, comme une vraie grille officielle. Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère est une liste de lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème}. Un indicateur regroupe PLUSIEURS lignes consécutives : RÉPÈTE le même texte d’indicateur, à l’identique, sur chaque ligne de son groupe. Chaque ligne de niveau de performance vaut 0,25 pt (multiples de 0,25 seulement) : un critère de 2,5 pts contient donc 10 lignes, un critère de 2 pts en contient 8. INDICATEURS ET NIVEAUX : '+
@@ -2899,7 +2940,10 @@ async function genEpreuve(E){
     focTxt=' FOCUS DE LA SITUATION : elle combine DEUX capacités'+(a.les&&b.les&&a.les!==b.les?' de DEUX LEÇONS DIFFÉRENTES':'')+' : (1) '+capTxt(a)+' ; (2) '+capTxt(b)+'.'+(m==='43'?' La consigne 1 évalue la capacité (1) et la consigne 2 évalue la capacité (2).':' La consigne unique demande une production qui mobilise les deux capacités.')+' Les deux capacités sont mobilisées dans une même histoire cohérente ; si elles n’ont aucun lien naturel, présente deux expériences distinctes (« Expérience 1 », « Expérience 2 ») dans la même situation, chacune avec sa consigne. Les exercices 2 et 3 portent en priorité sur les contenus indiqués ci-dessus.';
   }else if(foc.pair.length===1) focTxt=' FOCUS DE LA SITUATION : '+capTxt(foc.pair[0])+'.';
   if((Array.isArray(E.hist)?E.hist:[]).length) focTxt+=' Cette nouvelle situation doit être TOTALEMENT différente des précédentes : autre objet, autre cadre, autres personnages, autres données numériques et autre question.';
-  const variante='\n\nVARIANTE n°'+((E.nGen||0)+1)+' (graine '+Math.random().toString(36).slice(2,8)+') : compose une épreuve ENTIÈREMENT NOUVELLE. Parties imposées pour l’exercice 2, dans cet ordre : '+ex2.text+' (les titres des parties reprennent ces consignes). Cadre imposé pour la situation (adapte-le à la discipline et aux contenus ; il doit permettre à l’élève d’expérimenter ou de raisonner sur le contenu) : '+ctxS+'.'+focTxt+(hist.length?' Des épreuves ont déjà été générées pour ces mêmes capacités : AUCUNE question, affirmation, phrase à compléter, proposition, valeur numérique ni exemple ne doit être repris, même reformulé. Pose d’AUTRES questions sur les mêmes contenus (autres définitions, autres propriétés, autres nombres, autres cas, autres démarches pour l’exercice 3). Résumés des anciennes épreuves à ne pas reproduire : '+hist.map((h,k)=>(k+1)+') '+h).join(' || ')+'.':'');
+  const geoSub=maths&&/g[ée]om/i.test([E.sub,E.caps].join(' '));
+  const noFig=!geoSub&&Math.random()<.35;
+  const figTxt=noFig?' FIGURE : cette situation est SANS figure ni schéma : n’écris pas la clé « figSit » (ou mets null), ne renvoie à aucune figure (ni « ci-dessous », ni « ci-contre »), et le texte se suffit : données chiffrées, valeurs mesurées, observations racontées.':' FIGURE : n’ajoute une figure, un schéma, un graphique ou un plan que si cette situation en a vraiment besoin ; elle représente alors exactement ce que le texte décrit.';
+  const variante='\n\nVARIANTE n°'+((E.nGen||0)+1)+' (graine '+Math.random().toString(36).slice(2,8)+') : compose une épreuve ENTIÈREMENT NOUVELLE. Parties imposées pour l’exercice 2, dans cet ordre : '+ex2.text+' (les titres des parties reprennent ces consignes). Cadre imposé pour la situation (adapte-le à la discipline et aux contenus ; il doit permettre à l’élève d’expérimenter ou de raisonner sur le contenu) : '+ctxS+'.'+focTxt+figTxt+(hist.length?' Des épreuves ont déjà été générées pour ces mêmes capacités : AUCUNE question, affirmation, phrase à compléter, proposition, valeur numérique ni exemple ne doit être repris, même reformulé. Pose d’AUTRES questions sur les mêmes contenus (autres définitions, autres propriétés, autres nombres, autres cas, autres démarches pour l’exercice 3). Résumés des anciennes épreuves à ne pas reproduire : '+hist.map((h,k)=>(k+1)+') '+h).join(' || ')+'.':'');
   let d=await ask(prompt+variante,{temp:1});
   const prevS=Array.isArray(E.prevSit)?E.prevSit:[];
   if(d&&prevS.length&&prevS.some(p=>eprSim(p,eprS(d.situation))>.45)){
@@ -2911,8 +2955,19 @@ async function genEpreuve(E){
   E.content.grille=eprFixGrille(E.content.grille,E,E.content.consignes.length);
   E.cov=E.cov||{}; {const mark=(x,c)=>{const k=covKey(x,c);E.cov[k]=(E.cov[k]||0)+1}; foc.pair.forEach(x=>unitsOf(x).forEach(c=>mark(x,c))); prio.forEach(u=>mark(u.x,u.c))}
   {const C=E.content;
-   C.figSit=await eprFigOf(d.figSit,320); C.corrSitFig=await eprFigOf(d.figCorrSit,320);
-   if(!C.figSit&&d.figSit&&typeof d.figSit==='object'&&['pct','phys','chim'].includes(E.disc)){try{C.figSit=await eprExpFigure(E,C.situation)}catch(e){if(e&&e.code==='cancelled')throw e}}
+   const expDisc=['pct','phys','chim'].includes(E.disc), hasRef=EPR_FREF.test(C.situation)||C.consignes.some(x=>EPR_FREF.test(x));
+   const stop=e=>{if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e};
+   C.figSit=null; C.corrSitFig=null;
+   if(!noFig){
+     const planned=!!(d.figSit&&typeof d.figSit==='object')||hasRef;
+     /* physique-chimie : schéma redessiné à partir du texte final, pour qu’il corresponde exactement au protocole décrit */
+     if(expDisc&&planned){try{C.figSit=await eprExpFigure(E,C.situation)}catch(e){stop(e)}}
+     if(!C.figSit){C.figSit=await eprFigOf(d.figSit,320); if(C.figSit) C.corrSitFig=await eprFigOf(d.figCorrSit,320)}
+     /* le texte renvoie à une figure que l’IA n’a pas fournie (ou illisible) : figure de n’importe quel type tracée d’après le texte */
+     if(!C.figSit&&planned){try{C.figSit=await eprSitFigure(E,C.situation)}catch(e){stop(e)}}
+   }
+   /* pas de figure : le texte ne doit renvoyer à aucune figure */
+   if(!C.figSit){C.situation=eprUnref(C.situation);C.consignes=C.consignes.map(eprUnref)}
    for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}}
 }
 async function eprImportCaps(files){
