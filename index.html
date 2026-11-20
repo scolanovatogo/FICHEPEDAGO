@@ -100,7 +100,7 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .paper .tb td.just .ln{text-align:justify}
 .paper u{text-decoration:none;background-image:linear-gradient(currentColor,currentColor);background-repeat:no-repeat;background-size:100% 1.3px;background-position:0 94%;padding-bottom:0;font-weight:700;-webkit-box-decoration-break:clone;box-decoration-break:clone}
 .paper .box{border:1px solid #000;padding:0 4px}
-.paper img{display:block;margin:6px auto;max-width:100%;max-height:360px;width:auto;height:auto;object-fit:contain}
+.paper img{display:block;margin:4px auto}
 .paper .katex{font-size:1.02em}
 .paper-measure{position:absolute;left:-10000px;top:0;width:714px;font:16px/1.27 var(--f-paper);visibility:hidden}
 .paper-measure .tb{width:100%;border-collapse:collapse;table-layout:fixed}
@@ -110,7 +110,7 @@ details.seance .inner{padding:0 16px 16px;display:grid;gap:14px}
 .paper-measure .blk{padding-bottom:var(--gap,8px)}
 .paper-measure .ln{min-height:1.1em;overflow-wrap:anywhere}
 .paper-measure .box{border:1px solid #000;padding:0 4px}
-.paper-measure img{display:block;margin:6px auto;max-width:100%;max-height:360px;width:auto;height:auto;object-fit:contain}
+.paper-measure img{display:block;margin:4px auto}
 .paper-measure .katex{font-size:1.02em}
 .paper,.paper-measure{font-size:calc(16px*var(--k,1));line-height:var(--lh,1.27)}
 .paper img,.paper-measure img{zoom:var(--k,1)}
@@ -322,30 +322,13 @@ const F=()=>DB.fiches.find(f=>f.id===DB.cur);
    Balisage léger : **gras**  *italique*  __souligné__  $formule$  [[blue:texte]] [[red:..]] [[box:..]]
    ========================================================= */
 const TOK=/(\$[^$\n]+\$)|(\*\*\*(?!\s)[\s\S]+?\*\*\*)|(\*\*(?!\s)[\s\S]+?\*\*)|(__(?!\s)[\s\S]+?__)|(\*(?!\s)[^*\n]*[^*\s]\*)|(\[\[(?:blue|red|green|box):[\s\S]*?\]\])/;
-/* Récupère les commandes LaTeX isolées que certains moteurs IA renvoient sans
-   délimiteurs $...$. On ne traite que les commandes mathématiques connues. */
-const BARE_TEX_CMD=/\\(?:displaystyle|frac|dfrac|tfrac|sqrt|overrightarrow|overline|vec|widehat|hat|mathbb|mathrm|mathbf|text|operatorname|times|div|cdot|pi|alpha|beta|gamma|delta|theta|lambda|mu|omega|Omega|Delta|leq|le|geq|ge|neq|ne|approx|infty|rightarrow|Rightarrow|Leftrightarrow|parallel|perp|angle|triangle|ldots|dots|cdots|pm|equiv|emptyset|forall|exists|in|notin|subset|cup|cap|sum|int|circ|degree|sim|ell|therefore|mid)\b/;
-function bareTexToken(s,start){
-  const match=BARE_TEX_CMD.exec(s.slice(start)); if(!match)return null;
-  const at=start+match.index; let i=at;
-  const readCmd=()=>{if(s[i]!=='\\')return null;i++;let name='';while(i<s.length&&/[A-Za-z]/.test(s[i]))name+=s[i++];return name};
-  const group=()=>{while(s[i]===' ')i++;if(s[i]!=='{')return false;let depth=0;do{const c=s[i++];if(c==='{')depth++;else if(c==='}')depth--;}while(i<s.length&&depth>0);return depth===0};
-  const argCount={frac:2,dfrac:2,tfrac:2,sqrt:1,overrightarrow:1,overline:1,vec:1,widehat:1,hat:1,mathbb:1,mathrm:1,mathbf:1,text:1,operatorname:1};
-  const consumeOne=()=>{const name=readCmd();if(!name)return false;if(name==='displaystyle'){const save=i;while(s[i]===' ')i++;if(s[i]==='\\'){if(!consumeOne())i=save}}else{const n=argCount[name]||0;for(let k=0;k<n;k++)if(!group())break}return true};
-  consumeOne();
-  while(i<s.length&&(s[i]==='^'||s[i]==='_')){i++;if(s[i]==='{'){if(!group())break}else if(i<s.length&&!/\s/.test(s[i]))i++;else break}
-  return {index:at,length:i-at,tex:s.slice(at,i)};
-}
 function parseInline(s,st){
   st=st||{}; const out=[]; let rest=String(s??'');
   while(rest){
-    const m=TOK.exec(rest), bm=bareTexToken(rest,0);
-    const useBare=!!bm&&(!m||bm.index<m.index);
-    if(!m&&!bm){out.push(Object.assign({text:rest},st));break}
-    const at=useBare?bm.index:m.index, len=useBare?bm.length:m[0].length;
-    if(at>0) out.push(Object.assign({text:rest.slice(0,at)},st));
-    if(useBare) out.push(Object.assign({math:bm.tex},st));
-    else if(m[1]) out.push(Object.assign({math:m[1].slice(1,-1)},st));
+    const m=TOK.exec(rest);
+    if(!m){out.push(Object.assign({text:rest},st));break}
+    if(m.index>0) out.push(Object.assign({text:rest.slice(0,m.index)},st));
+    if(m[1]) out.push(Object.assign({math:m[1].slice(1,-1)},st));
     else if(m[2]) out.push(...parseInline(m[2].slice(3,-3),Object.assign({},st,{b:true,i:true})));
     else if(m[3]) out.push(...parseInline(m[3].slice(2,-2),Object.assign({},st,{b:true})));
     else if(m[4]) out.push(...parseInline(m[4].slice(2,-2),Object.assign({},st,{u:true})));
@@ -355,7 +338,7 @@ function parseInline(s,st){
       const d=mm[1]==='box'?{box:true}:{color:mm[1]};
       out.push(...parseInline(mm[2],Object.assign({},st,d)));
     }
-    rest=rest.slice(at+len);
+    rest=rest.slice(m.index+m[0].length);
   }
   return out;
 }
@@ -2089,7 +2072,7 @@ function geoSvg(spec){
 }
 async function eprFig(spec,dw,keepCredit){
   const im=await svgToPngImage(geoSvg(spec));
-  im.dw=(spec&&(spec.droiteGraduee||spec.axe))?Math.max(dw||0,440):Math.max(dw||0,420); if(!keepCredit) im.credit=''; im.geo=spec; return im;
+  im.dw=(spec&&(spec.droiteGraduee||spec.axe))?Math.max(dw||0,420):(dw||320); if(!keepCredit) im.credit=''; im.geo=spec; return im;
 }
 /* ===== Moteur de schémas : l’IA décrit des composants, l’application les dessine proprement (en couleur) ===== */
 const SCH_COL={eau:'#a9def0',jaune:'#ffe600',rouge:'#e02020',vert:'#1f9d3a',bleu:'#1f5fd0',orange:'#ff8c00',violet:'#7a1fa2',gris:'#b4b4b4',noir:'#000000',marron:'#8b5a2b',rose:'#f48fb1',incolore:'#ffffff',blanc:'#ffffff'};
@@ -2699,11 +2682,7 @@ function eprFixGrille(G,E,nCons){
     if(!L.length) L=GR_DEF[k].map(x=>({ind:x[0],niv:x[1],pts:x[2]||1}));
     L=grFitLines(L,T[i]);
     if(k==='CP'||m!=='43'||nCons<2) L.forEach(l=>{l.niv=grStrip(l.niv)});
-    else if(Math.abs(parseN(E.p1)-8)<0.001){
-      /* Chaque ligne vaut 0,25 pt : partager chaque critère en deux parts
-         égales garantit au total 4 pts pour C1 et 4 pts pour C2. */
-      L.forEach((l,j)=>{l.niv='C'+(j%2+1)+' : '+grStrip(l.niv)});
-    }else L=grBalance(L,nCons);
+    else L=grBalance(L,nCons);
     return {critere:k,nom:has(g.nom)?g.nom:GR_NOMS[k],txt:grilleTxt(L)};
   });
 }
@@ -2907,9 +2886,7 @@ async function genEpreuve(E){
   const prompt='Tu es enseignant au Togo et tu composes une épreuve écrite de '+disc+' pour la classe de '+E.classe+' ('+eprTitle(E)+(has(E.duree)?', durée '+E.duree:'')+'), notée sur '+fmtN(p1+p2+p3)+', selon l’approche par compétences.\\n'.replace('\\\\n','\n')+
   'CAPACITÉS ET CONTENUS ENSEIGNÉS (programme de la classe) :\n'+capsTxt+
   '\nRÈGLE FONDAMENTALE : la capacité dit QUEL SAVOIR-FAIRE évaluer, mais ce sont les CONTENUS enseignés qui fournissent la matière de toutes les questions. Chaque question (situation, vrai ou faux, choix, relier, compléter, réarranger, questions traditionnelles) porte sur un contenu listé ci-dessus (définition, propriété, règle, formule, méthode, exemple type) et demande le savoir-faire de la capacité correspondante. N’évalue aucune notion qui ne figure pas dans les contenus. Répartis les questions sur l’ensemble des contenus ; pour « réarranger », « compléter » et « vrai ou faux », reprends les définitions et propriétés des contenus mot pour mot. Si une capacité n’a pas de contenus précisés, appuie-toi sur son intitulé. NIVEAU : ne complique JAMAIS. Reste strictement au niveau des exercices ordinaires du manuel de la classe : n’utilise que les formes, méthodes et types d’exercices cités dans les contenus (par exemple, si les contenus disent « factorisation avec les identités remarquables », propose seulement des factorisations directement reconnaissables du type a²−b², (a+b)², (a−b)² avec des coefficients simples ; si les contenus disent « équations de type … », propose uniquement ce type, avec des nombres entiers simples). Aucune technique, aucun théorème ni aucun type d’équation absent des contenus ; aucune question piège, aucun calcul lourd. NOTATIONS DU COLLÈGE : n’écris jamais le symbole ∞ ni d’intervalles comme [a ; +∞[ ; les solutions d’inéquations s’écrivent en mots ou en inégalités simples (x < 2) avec une demi-droite graduée à flèche. Pas de racines carrées en 4e ; pour Pythagore, uniquement des carrés parfaits faciles (côtés entiers jusqu’à 14, de préférence jusqu’à 12 : 144 au plus grand).'+(has(E.ctx)?'\nPrécisions de l’enseignant : '+E.ctx:'')+'\n\n'+
-  'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+
-   (m==='43'&&Math.abs(p1-8)<0.001?'BARÈME IMPÉRATIF DE LA SITUATION (8 points) : rédige EXACTEMENT DEUX consignes distinctes. La consigne 1 vaut exactement 4 points (/4) et évalue la première capacité ; la consigne 2 vaut exactement 4 points (/4) et évalue la deuxième capacité. Les deux tâches doivent être complémentaires, clairement séparées et chacune doit produire une réponse vérifiable. La grille de correction répartit exactement 4 points sur C1 et 4 points sur C2, sans transfert de points entre les deux consignes.':'')+
-modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
+  'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties seulement, choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). Chaque consigne (champ « consignes ») ne contient QUE son libellé : n’écris jamais le mot « Consigne » ni son numéro dans le texte. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Ajoute-la dès que les données géométriques en ont besoin (triangle, cercle, droites, points, angles, symétrie, configuration, construction…), sinon omets la clé. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
   'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne.\n\n'+
@@ -2959,12 +2936,12 @@ modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de 
    if(!noFig){
      const planned=!!(d.figSit&&typeof d.figSit==='object')||hasRef;
      if(expDisc&&planned){try{C.figSit=await eprExpFigure(E,C.situation)}catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}}
-     if(!C.figSit){C.figSit=await eprFigOf(d.figSit,440); if(C.figSit) C.corrSitFig=await eprFigOf(d.figCorrSit,320)}
+     if(!C.figSit){C.figSit=await eprFigOf(d.figSit,320); if(C.figSit) C.corrSitFig=await eprFigOf(d.figCorrSit,320)}
      if(!C.figSit&&hasRef&&!expDisc){try{C.figSit=await eprSitFigure(E,C.situation)}catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}}
    }
    /* pas de figure : le texte ne doit renvoyer à aucune figure */
    if(!C.figSit){C.situation=eprUnref(C.situation);C.consignes=C.consignes.map(eprUnref)}
-   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,420);C[k][i].figCorr=await eprFigOf(r.figCorr,420)}}}
+   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}}
 }
 async function eprImportCaps(files){
   const E=eprInit(); const st=document.getElementById('ep-capst');
