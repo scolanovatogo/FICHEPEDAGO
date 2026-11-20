@@ -155,11 +155,15 @@ function progParse(rows){
   const metaText=metaRows.map(r=>r.text.replace(/ \| /g,'  ')).join('\n');
   const all=rows.map(r=>r.text.replace(/ \| /g,'  ')).join('\n');
   const out={competenceType:'',competence:'',theme:'',themeNo:'',leconNo:'',titre:'',classe:'',nbSeances:0,nbSeancesLu:false,capacites:[]};
-  let m=/comp[ée]tences?\s*(de\s+base|terminales?)?\s*\d*\s*[:：\-–]\s*([^\n]+(?:\n(?!\s*(?:th[èe]me|le[cç]on|s[ée]ances?|dur[ée]e|supports?|pr[ée]requis|capacit|place))[^\n]+)*)/i.exec(metaText);
+  let m=/comp[ée]tences?\s*(de\s+base|terminales?)?\s*\d*[ \t]*[:：\-–][ \t]*([^\n]+(?:\n(?!\s*(?:th[èe]me|le[cç]on|s[ée]ances?|dur[ée]e|supports?|pr[ée]requis|capacit|place))[^\n]+)*)/i.exec(metaText);
   if(m){out.competence=clean(m[2]);out.competenceType=/base/i.test(m[1]||'')?'base':/terminal/i.test(m[1]||'')?'terminale':''}
   m=/th[èe]me\s*(\d+)?\s*[:：\-–]\s*([^\n]+)/i.exec(metaText); if(m){out.themeNo=m[1]||'';out.theme=clean(m[2])}
   m=/le[cç]on\s*(\d+)?\s*[:：\-–]\s*([^\n]+)/i.exec(metaText); if(m){out.leconNo=m[1]||'';out.titre=clean(m[2])}
-  m=/s[ée]ances?\s*[:：]\s*(\d+)/i.exec(all)||/(\d+)\s*s[ée]ances/i.exec(all); if(m){out.nbSeances=+m[1];out.nbSeancesLu=true}
+  m=/s[ée]ances?[ \t]*[:：][ \t]*([^\n]+)/i.exec(all);
+  if(m){const fr=[...m[1].matchAll(/(\d+)\s*\/\s*(\d+)/g)];
+    if(fr.length){out.nbSeances=Math.max(...fr.map(x=>+x[2]));out.nbSeancesLu=true}
+    else{const nn=/\b(\d+)\b(?!\s*(?:min|mn|h\b))/.exec(m[1]);if(nn){out.nbSeances=+nn[1];out.nbSeancesLu=true}}}
+  if(!out.nbSeancesLu){m=/(\d+)\s*s[ée]ances/i.exec(all);if(m){out.nbSeances=+m[1];out.nbSeancesLu=true}}
   m=/\bclasse\s*[:：]\s*([^\s|]+)/i.exec(all); if(m) out.classe=m[1];
   if(hIdx<0) return out;
   /* séparation des colonnes : on cherche où commence la colonne de droite d'après les grands vides des lignes */
@@ -174,7 +178,7 @@ function progParse(rows){
   const diffs=[]; for(let i=1;i<body.length;i++){const d=body[i].y-body[i-1].y; if(d>2&&d<40) diffs.push(d)}
   diffs.sort((a,b)=>a-b); const base=diffs.length?diffs[Math.floor(diffs.length*0.25)]:14;
   let cur=null,lastLeftY=null;
-  const bullet=/^[-•–·*▪●]\s*/;
+  const bullet=/^[-•–—·*▪●»›]\s*/;
   for(const r of body){
     if(/capacit/i.test(r.text)&&/contenu/i.test(r.text)&&r.text.length<45) continue;
     const L=clean(joinIts(r.its.filter(t=>t.x<split-1))), Rt=clean(joinIts(r.its.filter(t=>t.x>=split-1)));
@@ -193,6 +197,16 @@ function progParse(rows){
     }
   }
   out.capacites=out.capacites.filter(c=>c.capacite||c.contenus.length);
+  out.capacites.forEach(c=>{c.contenus=c.contenus.map(x=>String(x).replace(/\s+[-–—]\s*$/,'').trim()).filter(Boolean)});
+  /* Cellule « Contenus » unique, fusionnée sur toutes les capacités : un seul titre se terminant par « : » suivi de ses éléments.
+     Ces contenus valent pour chacune des capacités. */
+  {const flat=[];out.capacites.forEach(c=>c.contenus.forEach(x=>flat.push(x)));
+   const caps=out.capacites.filter(c=>c.capacite);
+   if(caps.length>=2&&flat.length&&/:\s*$/.test(flat[0])&&flat.filter(x=>/:\s*$/.test(x)).length===1){
+     const title=flat[0].replace(/\s*:\s*$/,''), items=flat.slice(1);
+     const shared=items.length?items.map(x=>title+' : '+x):[title];
+     out.capacites=caps.map(c=>({capacite:c.capacite,contenus:shared.slice()}));
+   }}
   return out;
 }
 if(typeof module!=='undefined') module.exports={progRows,progParse};
@@ -2811,6 +2825,18 @@ function eprSay(t,err){flash(t,err);const el=document.getElementById('ep-st');if
 async function eprAct(a,b){
   const E=eprInit();
   if(a==='raw'){EPR_RAW=!EPR_RAW;render2();return}
+  if(a==='imgsearch'){
+    const q=((document.getElementById('ep-imgq')||{}).value||'').trim(), box=document.getElementById('ep-imgres'); if(!box)return;
+    if(!q){box.textContent='Saisissez un mot-clé.';return}
+    box.textContent='Recherche en cours…';
+    try{const {list,note}=await imgSearchAll(q); EPR_IMGS=list;
+      box.innerHTML=list.length?(note?'<div class="muted small">'+esc(note)+'</div>':'')+imgGridHTML(list,n=>'data-epact="imgpick" data-n="'+n+'"')+'<div class="muted small" style="margin-top:4px">Cliquez sur une image pour l’ajouter à la situation.</div>':esc(note)+'Aucune image trouvée. Essayez un autre mot-clé.'}
+    catch(e){box.textContent='Recherche impossible (connexion Internet nécessaire).'}
+    return}
+  if(a==='imgpick'){
+    const r=EPR_IMGS[+(b&&b.dataset&&b.dataset.n)]; if(!r||!E.content)return;
+    try{E.content.figSit=await loadImgObj(r);save();render2()}catch(e){eprSay(e.message,true)}
+    return}
   if(a==='delfig'){const p=b&&b.dataset&&b.dataset.fp;if(p){setp(E,p,null);save();render2()}return}
   if(a==='new'){askConfirm(b,'epnew',()=>{const k=newEpr();for(const x of ['dre','insp','type','periode','annee','disc','sub','classe','coef','duree','p1','p2','p3']) k[x]=E[x];DB.epr=k;save();render()},'Effacer cette épreuve ?');return}
   if(a==='addprog'){
@@ -2892,6 +2918,7 @@ function renderEpr(){
   const edit=`<section class="card"><h2>Sujet</h2><div class="grid">
     ${eprFld('Exercice 1 : situation d’évaluation','content.situation',{rows:5,wide:true})}
     ${(C.consignes||[]).map((c,i)=>eprFld('Consigne '+(i+1),'content.consignes.'+i,{rows:2,wide:true})).join('')}</div>${C.figSit?'<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.figSit">Retirer la figure de la situation</button> ':''}${C.corrSitFig?'<button class="btn danger sm" type="button" data-epact="delfig" data-fp="content.corrSitFig">Retirer la figure du corrigé de la situation</button>':''}
+    <div class="row" style="margin:8px 0;align-items:center"><input type="text" id="ep-imgq" placeholder="Image pour la situation, ex. : circuit électrique pile ampoule" style="flex:1;min-width:200px"><button class="btn alt sm" type="button" data-epact="imgsearch">Chercher une image</button></div><div id="ep-imgres" class="small"></div>
     <div style="font-weight:700;margin:10px 0 4px">Exercice 2 : questions objectives</div>${(C.ex2||[]).map((p,i)=>part('ex2',i,p)).join('')}
     <div style="font-weight:700;margin:10px 0 4px">Exercice 3 : questions traditionnelles</div>${(C.ex3||[]).map((p,i)=>part('ex3',i,p)).join('')}</section>
    <section class="card"><h2>Corrigé et grille de correction</h2><div class="grid">
@@ -3372,6 +3399,16 @@ function renderSet(){
    <label class="f" for="cmpModel_groq" style="max-width:520px;margin-top:8px">Modèle (facultatif : laissez vide pour un choix automatique)<input type="text" id="cmpModel_groq" autocomplete="off" value="${esc(compatCfg('groq').model||'')}" placeholder="automatique (llama-3.3-70b-versatile…)"></label>
    <div class="row" style="margin-top:10px"><button class="btn" data-cmpsave="groq">Enregistrer et tester</button>${compatKey('groq')?'<button class="btn danger" data-cmpclear="groq">Effacer la clé Groq</button>':''}</div>
    <div class="note" style="margin-top:12px">Ordre automatique : Google Gemini d’abord, puis Cloudflare, Groq et OpenRouter (ceux qui sont configurés). Quand un service est bloqué (quota, surcharge), l’application passe toute seule au suivant : plus besoin d’effacer des clés. Les clés restent dans ce navigateur, sur cet appareil. Les textes envoyés partent chez le service choisi. Seul Claude (payant) n’est utilisé que si vous l’avez choisi.</div>
+  </section>
+  <section class="card"><h2>Google Images <small>images pour les expériences (fiches et épreuves)</small></h2>
+   <p class="small" style="margin:0 0 10px">Google n’autorise pas une application à lire directement Google Images : il faut un accès gratuit « Recherche personnalisée » (100 recherches par jour). Sans cela, l’application cherche sur Wikimedia Commons.</p>
+   <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
+    <li>Sur <a href="https://programmablesearchengine.google.com" target="_blank" rel="noopener">programmablesearchengine.google.com ↗</a> : créez un moteur, choisissez « Rechercher sur l’ensemble du Web », activez « Recherche d’images », puis copiez l’<b>identifiant du moteur (cx)</b>.</li>
+    <li>Sur <a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com ↗</a> : activez « Custom Search API », puis créez une <b>clé API</b>.</li></ol>
+   <label class="f" for="gisKey" style="max-width:520px">Clé API<input type="password" id="gisKey" autocomplete="new-password" value="" placeholder="${DB.ai.gisKey?esc('Clé enregistrée : '+maskKey(DB.ai.gisKey)+' (laissez vide pour la conserver)'):'AIza…'}"></label>
+   <label class="f" for="gisCx" style="max-width:520px;margin-top:8px">Identifiant du moteur (cx)<input type="text" id="gisCx" autocomplete="off" value="${esc(DB.ai.gisCx||'')}" placeholder="0123456789abcdef"></label>
+   <div class="row" style="margin-top:10px"><button class="btn" id="gisSave">Enregistrer et tester</button>${gisReady()?'<button class="btn danger" id="gisClear">Effacer</button>':''}</div>
+   <div class="note" style="margin-top:12px">Les images de Google appartiennent à leurs auteurs : vérifiez les droits d’usage. Certains sites refusent la copie de leurs images ; dans ce cas, choisissez-en une autre.</div>
   </section>`;
 }
 function renderProg(){
@@ -3504,6 +3541,16 @@ root.addEventListener('click',async e=>{
     finally{b.disabled=false}
     return}
   if(b.id==='aiClear'){DB.ai.key='';DB.ai.keys=[];DB.ai.model='';save();setGen('Clé effacée.');render2();return}
+  if(b.id==='gisSave'){
+    const k=(document.getElementById('gisKey').value||'').trim()||DB.ai.gisKey||'', c=(document.getElementById('gisCx').value||'').trim();
+    if(!k||!c){setGen('Saisissez la clé API et l’identifiant du moteur (cx).',true);return}
+    const before={gisKey:DB.ai.gisKey,gisCx:DB.ai.gisCx}; DB.ai.gisKey=k; DB.ai.gisCx=c; save();
+    b.disabled=true; setGen('Test de Google Images…');
+    try{const r=await imgSearchAll('circuit électrique pile ampoule'); if(r.note||!r.list.length) throw new Error(r.note||'aucun résultat'); setGen('Google Images fonctionne ('+r.list.length+' résultats).');render2()}
+    catch(e){Object.assign(DB.ai,before);save();setGen('Échec : '+(e&&e.message||e),true)}
+    finally{b.disabled=false}
+    return}
+  if(b.id==='gisClear'){DB.ai.gisKey='';DB.ai.gisCx='';save();setGen('Accès Google Images effacé.');render2();return}
   if(b.id==='claudeSave'){
     const v=(document.getElementById('claudeKey').value||'').trim()||DB.ai.ckey||''; const m=(document.getElementById('claudeModel').value||'').trim()||'claude-sonnet-5-5';
     if(!v){setGen('Aucune clé Claude saisie.',true);return}
@@ -3610,23 +3657,48 @@ async function runPendingImageSearches(f){
     if(s.autoImgSearch&&s.imgKey){s.autoImgSearch=false;await searchImages(i,field)}
   }
 }
+const gisReady=()=>!!(DB.ai&&String(DB.ai.gisKey||'').trim()&&String(DB.ai.gisCx||'').trim());
+let EPR_IMGS=[];
+async function imgSearchAll(q){
+  const out=[]; let note='';
+  if(gisReady()){
+    try{
+      const u='https://www.googleapis.com/customsearch/v1?key='+encodeURIComponent(DB.ai.gisKey.trim())+'&cx='+encodeURIComponent(DB.ai.gisCx.trim())+'&q='+encodeURIComponent(q)+'&searchType=image&num=10&safe=active&lr=lang_fr';
+      const j=await (await fetch(u)).json();
+      if(j&&j.error) throw new Error(j.error.message||'erreur Google');
+      for(const it of ((j&&j.items)||[])) out.push({url:it.link,thumb:(it.image&&it.image.thumbnailLink)||it.link,credit:'Google Images — '+(it.displayLink||'source inconnue')+' (vérifiez les droits d’usage)'});
+    }catch(e){note='Google Images indisponible ('+(e&&e.message||e)+') : images de Wikimedia à la place. '}
+  }
+  if(!out.length){
+    const u='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(q)+'&gsrnamespace=6&gsrlimit=16&prop=imageinfo&iiprop=url|extmetadata|mime&iiurlwidth=1600&format=json&origin=*';
+    const j=await (await fetch(u)).json();
+    const pages=Object.values((j.query&&j.query.pages)||{}).filter(p=>p.imageinfo&&/^image\/(jpeg|png)/.test(p.imageinfo[0].mime||''));
+    for(const p of pages){const ii=p.imageinfo[0],m=ii.extmetadata||{};const art=String((m.Artist&&m.Artist.value)||'').replace(/<[^>]*>/g,'').trim();out.push({url:ii.thumburl||ii.url,thumb:ii.thumburl||ii.url,credit:'Wikimedia Commons'+(art?' — '+art:'')+(m.LicenseShortName?' ('+m.LicenseShortName.value+')':'')})}
+  }
+  return {list:out,note};
+}
+async function loadImgObj(r){
+  for(const u of [r.url,r.thumb].filter(Boolean)){
+    try{return await new Promise((res,rej)=>{const x=new Image();x.crossOrigin='anonymous';x.onerror=()=>rej(new Error('x'));x.onload=()=>{try{const sc=Math.min(1,2200/x.width);const c=document.createElement('canvas');c.width=Math.round(x.width*sc);c.height=Math.round(x.height*sc);const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);g.drawImage(x,0,0,c.width,c.height);res({src:c.toDataURL('image/jpeg',0.94),w:c.width,h:c.height,dw:Math.min(480,c.width),credit:r.credit})}catch(e){rej(e)}};x.src=u})}catch(e){}
+  }
+  throw new Error('Image inaccessible : le site d’origine refuse la copie. Essayez une autre image, ou enregistrez-la sur votre appareil puis ajoutez-la depuis la galerie.');
+}
+const imgGridHTML=(list,attr)=>'<div class="row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+list.map((r,n)=>'<button type="button" '+attr(n)+' title="'+esc(r.credit)+'" style="border:1px solid var(--line);background:#fff;padding:2px;border-radius:6px;cursor:pointer"><img alt="Résultat '+(n+1)+'" src="'+esc(r.thumb||r.url)+'" style="height:150px;max-width:220px;object-fit:contain;display:block"></button>').join('')+'</div>';
 async function searchImages(i,key){
   const f=F(),s=f.seances[+i]; const box=document.getElementById('isr_'+i+'_'+key); if(!box)return;
   const q=(s.imgKey||f.titre||f.theme||'').trim(); if(!q){box.textContent='Saisissez un mot-clé.';return}
   box.textContent='Recherche en cours…';
   try{
-    const u='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(q)+'&gsrnamespace=6&gsrlimit=16&prop=imageinfo&iiprop=url|extmetadata|mime&iiurlwidth=1600&format=json&origin=*';
-    const j=await (await fetch(u)).json();
-    const pages=Object.values((j.query&&j.query.pages)||{}).filter(p=>p.imageinfo&&/^image\/(jpeg|png)/.test(p.imageinfo[0].mime||''));
-    if(!pages.length){box.textContent='Aucune image trouvée. Essayez un autre mot-clé (en français ou en anglais).';return}
-    IMGRES[i+'|'+key]=pages.map(p=>{const ii=p.imageinfo[0],m=ii.extmetadata||{};const art=String((m.Artist&&m.Artist.value)||'').replace(/<[^>]*>/g,'').trim();return {url:ii.thumburl||ii.url,credit:'Wikimedia Commons'+(art?' — '+art:'')+(m.LicenseShortName?' ('+m.LicenseShortName.value+')':'')}});
-    box.innerHTML='<div class="row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'+IMGRES[i+'|'+key].map((r,n)=>'<button type="button" data-pick="'+i+'|'+key+'|'+n+'" style="border:1px solid var(--line);background:#fff;padding:2px;border-radius:6px;cursor:pointer"><img alt="Résultat '+(n+1)+'" src="'+esc(r.url)+'" style="height:150px;max-width:220px;object-fit:contain;display:block"></button>').join('')+'</div><div class="muted small" style="margin-top:4px">Cliquez sur une image pour l’ajouter à la fiche (la source est indiquée sous l’image).</div>';
+    const {list,note}=await imgSearchAll(q);
+    if(!list.length){box.textContent=note+'Aucune image trouvée. Essayez un autre mot-clé (en français ou en anglais).';return}
+    IMGRES[i+'|'+key]=list;
+    box.innerHTML=(note?'<div class="muted small">'+esc(note)+'</div>':'')+imgGridHTML(list,n=>'data-pick="'+i+'|'+key+'|'+n+'"')+'<div class="muted small" style="margin-top:4px">Cliquez sur une image pour l’ajouter à la fiche (la source est indiquée sous l’image).</div>';
   }catch(e){box.textContent='Recherche impossible ici (connexion Internet nécessaire, et non disponible dans la version intégrée à Claude). Ouvrez la version autonome, ou enregistrez une image sur votre appareil.'}
 }
 async function pickImage(i,key,n){
   const r=(IMGRES[i+'|'+key]||[])[n]; if(!r)return; const f=F();
   try{
-    const im=await new Promise((res,rej)=>{const x=new Image();x.crossOrigin='anonymous';x.onerror=()=>rej(new Error('Image inaccessible'));x.onload=()=>{const sc=Math.min(1,2200/x.width);const c=document.createElement('canvas');c.width=Math.round(x.width*sc);c.height=Math.round(x.height*sc);const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);g.drawImage(x,0,0,c.width,c.height);res({src:c.toDataURL('image/jpeg',0.94),w:c.width,h:c.height,dw:Math.min(480,c.width),credit:r.credit})};x.src=r.url});
+    const im=await loadImgObj(r);
     f.seances[+i][key]=im;openSeances.add(+i);touch();render2();
   }catch(e){const box=document.getElementById('isr_'+i+'_'+key);if(box)box.textContent='Impossible de récupérer cette image : '+e.message}
 }
