@@ -1848,14 +1848,16 @@ const AXIS_RE=/(demi-?droites?|droites?|axes?)\s+gradu|abscisse|gradu[ée]e?s?\b
 function needsAxis(f,s,extra){return AXIS_RE.test([f.titre,s.capTitre,s.contenus,s.situation,s.essentiel,s.trace,extra||''].join(' '))}
 async function genCourseFigures(f,i,ins,asker){
   const s=f.seances[i];
-  const prompt='Tu es un enseignant qui trace les figures du COURS au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+', leçon « '+(f.titre||'')+' »).\nCapacité de la séance : '+(s.capTitre||'')+'\nContenus de la séance : '+(s.contenus||'')+'\nEssentiel du cours : '+String(s.essentiel||s.trace||'').slice(0,700)+(ins?'\nDEMANDE DE L’ENSEIGNANT (trace exactement ce qui est demandé) : '+ins:'')+
-    '\nTrace AUTANT de figures que nécessaire pour illustrer les notions du cours (de 1 à 4 : une par notion ou par exemple important ; une seule si une seule suffit). Si une notion concerne une droite graduée, une demi-droite graduée, des abscisses ou un axe : utilise {"droiteGraduee":{…}} avec les points du cours placés à leurs abscisses (par exemple A, B, C) et "abscisses":true pour écrire l’abscisse à côté de chaque nom ; choisis min, max, pas et sous adaptés (entiers ou décimaux simples) et "demi":"droite" pour une demi-droite graduée (départ à min, souvent 0). Sinon trace une figure de géométrie.\n'+GEO_DOC+'\nRéponds uniquement par {"figures":[{"legende":"titre court de la figure (ex. Demi-droite graduée)","geo":{…}}]}.';
-  const d=await (asker?asker(prompt):ask(prompt))||{};
-  const arr=Array.isArray(d.figures)?d.figures:(d.geo?[{geo:d.geo}]:[]);
+  const prompt='Tu es un enseignant qui trace les figures du COURS au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+', leçon « '+(f.titre||'')+' »).\nCapacité de la séance : '+(s.capTitre||'')+'\nContenus de la séance : '+(s.contenus||'')+'\nEssentiel du cours : '+String(s.essentiel||s.trace||'').slice(0,1500)+(ins?'\nDEMANDE DE L’ENSEIGNANT (trace exactement ce qui est demandé) : '+ins:'')+
+    '\nTrace AUTANT de figures que nécessaire pour illustrer les notions du cours (de 1 à 6 : une par notion ou par exemple important ; une seule si une seule suffit). Quand le cours présente PLUSIEURS droites ou notions (par exemple la médiane, la médiatrice, la hauteur et la bissectrice d’un triangle, puis leurs points de concours), trace UNE FIGURE PAR NOTION, chacune avec sa construction complète (le triangle, la droite tracée, le point, les angles droits, les codages), pour que l’élève apprenne à les dessiner ; ne te contente jamais d’une seule figure générale. Si une notion concerne une droite graduée, une demi-droite graduée, des abscisses ou un axe : utilise {"droiteGraduee":{…}} avec les points du cours placés à leurs abscisses (par exemple A, B, C) et "abscisses":true pour écrire l’abscisse à côté de chaque nom ; choisis min, max, pas et sous adaptés (entiers ou décimaux simples) et "demi":"droite" pour une demi-droite graduée (départ à min, souvent 0). Sinon choisis librement le type de figure qui convient à CHAQUE notion, sans aucune limite : figure de géométrie plane (toutes les figures : triangles et leurs droites remarquables, quadrilatères, cercles, angles, polygones, symétries, translations, rotations, Thalès, Pythagore, trigonométrie…), solides et patrons, repères et courbes de fonctions, statistiques (histogramme, diagramme en bâtons ou circulaire), schémas de physique (circuits, forces, optique, mécanique), de chimie (montages, verrerie, électrolyse, filtration, distillation, tests d’identification, modèles atomiques), de SVT (organes, cellules, cycles), de technologie (vues, objets techniques), plans et cartes. Pour une démonstration ou une expérience du cours, dessine le dispositif complet annoté. Si le cours ne gagne rien à être illustré, réponds {"figures":[]}.\n'+GEO_DOC+'\nRéponds uniquement par {"figures":[{"legende":"titre court de la figure (ex. Demi-droite graduée)","geo":{…}}]} où chaque figure porte la clé geo, items ou svg selon son type.';
+  const d=await (asker?asker(prompt+'\n'+SCH_CATALOG+'\n'+FIG_ANY_DOC+'\nChaque élément de « figures » est un objet {"legende":"…"} plus UNE des clés geo, items ou svg (selon le type de figure).'):ask(prompt+'\n'+SCH_CATALOG+'\n'+FIG_ANY_DOC+'\nChaque élément de « figures » est un objet {"legende":"…"} plus UNE des clés geo, items ou svg (selon le type de figure).'))||{};
+  let arr=Array.isArray(d.figures)?d.figures:[];
+  if(!arr.length){const one=figSpecOf(d); if(one) arr=[Array.isArray(one.items)||one.svg?one:{geo:one}]}
   const out=[];
-  for(const x of arr.slice(0,4)){
-    if(!x||!x.geo||typeof x.geo!=='object') continue;
-    try{const im=await eprFig(x.geo,x.geo.droiteGraduee||x.geo.axe?420:380,false); if(has(x.legende)) im.credit=String(x.legende).trim(); out.push(im)}catch(e){}
+  for(const x of arr.slice(0,6)){
+    if(!x||typeof x!=='object') continue;
+    const spec=figSpecOf(x); if(!spec) continue;
+    try{const im=await eprFigOf(spec,spec.droiteGraduee||spec.axe?420:380); if(!im) continue; if(has(x.legende)) im.credit=String(x.legende).trim(); out.push(im)}catch(e){}
   }
   return out;
 }
@@ -1866,6 +1868,18 @@ function figsBlock(f,s,i){
    ${L.map((im,k)=>`<div class="row" style="align-items:center;gap:10px"><img class="thumb" alt="Figure ${k+1}" src="${im.src}"><label class="f" for="fw_${i}_${k}" style="max-width:190px">Largeur (px)<input type="number" id="fw_${i}_${k}" data-p="seances.${i}.figs.${k}.dw" min="80" max="600" value="${im.dw||300}"></label><button class="btn danger sm" type="button" data-delfig="${i}|${k}">Retirer</button></div>`).join('')}
    <label class="f" for="fd-${i}" style="margin-top:6px"><span class="hint">Décrivez la figure à tracer (facultatif) — ex. : demi-droite graduée de 0 à 6 avec A(1) et B(2,5)</span><input type="text" id="fd-${i}" placeholder="Laissez vide pour que l’application choisisse les figures du cours"></label>
    <div class="row" style="margin-top:6px"><button class="btn alt sm" type="button" data-figadd="${i}">Ajouter des figures tracées automatiquement</button></div></div>`;
+}
+const GEO_STRONG_RE=/\b(m[ée]diatrices?|m[ée]dianes?|hauteurs?|bissectrices?|orthocentre|cercles? (?:circonscrit|inscrit)|centre de gravit[ée]|triangles?|parall[èe]logrammes?|losanges?|trap[èe]zes?|sym[ée]tri\w*|translation|rotation|th[ée]or[èe]me de (?:thal[èe]s|pythagore)|thal[èe]s|pythagore|droites? (?:parall[èe]les?|perpendiculaires?)|perpendiculaires?)\b/i;
+const GEO_ANY_RE=/\b(angles?|cercles?|segments?|milieu|droites?|demi-droites?|rectangles?|carr[ée]s?|quadrilat[èe]res?|rep[èe]re|vecteurs?|points?)\b/i;
+function needsCourseGeo(f,s){
+  const txt=[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,s.synthese].join(' ');
+  const geoSub=/g[ée]om[ée]tr/i.test([f.sub,f.disc,f.titre].join(' '));
+  return geoSub?(GEO_STRONG_RE.test(txt)||GEO_ANY_RE.test(txt)):GEO_STRONG_RE.test(txt);
+}
+function needsCourseFig(f,s){
+  if(needsAxis(f,s)||needsCourseGeo(f,s)) return true;
+  const d=[f.disc,f.sub,f.titre].join(' ');
+  return /math|g[ée]om|phys|chim|pct|svt|techno|g[ée]ograph|biolog|[ée]lectr|m[ée]canique|optique/i.test(d)||needsFigure(f,s);
 }
 function needsFigure(f,s){
   const txt=[f.disc,f.sub,f.titre,s.contenus,s.capTitre,s.situation].join(' ');
@@ -1940,7 +1954,7 @@ function cavalierSvg(sp){
 /* =========================================================
    Figures géométriques : l'IA décrit la figure (points, segments, cercles, angles) et l'application la trace exactement
    ========================================================= */
-const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). CONSTRUCTIONS CALCULÉES PAR L’APPLICATION (à utiliser au lieu de calculer toi-même les coordonnées) : ajoute « construire » = liste appliquée dans l’ordre, après « points » ; chaque étape crée un point : {"milieu":"I","de":["A","B"]} ; {"sym":"A’","de":"A","axe":["B","C"]} (symétrique par rapport à la droite (BC)) ; {"symC":"A’","de":"A","centre":"O"} (symétrique par rapport au point O) ; {"proj":"H","de":"A","sur":["B","C"]} (pied de la perpendiculaire) ; {"inter":"I","droites":[["A","B"],["C","D"]]} (intersection) ; {"parallelogramme":"D","de":["A","B","C"]} (ABCD parallélogramme) ; {"transl":"A’","de":"A","vecteur":["B","C"]} (translation du vecteur BC) ; {"rot":"B’","de":"B","centre":"O","angle":90} (rotation de centre O, sens inverse des aiguilles d’une montre) ; {"nom":"M","sur":["A","B"],"t":0.4} (point M de [AB] avec AM = t × AB, pour Thalès). Tous les points utilisés doivent exister avant l’étape. Pour un triangle et ses symétriques, donne seulement le triangle de départ et l’axe ou le centre dans « points », puis les étapes « construire ». « demiDroites » : [{"p":["A","B"]}] (demi-droite [AB) prolongée au-delà de B). REPÈRE ORTHONORMÉ (coordonnées, fonctions affines, translations dans un repère) : ajoute "repere":{"xmin":-4,"xmax":6,"ymin":-3,"ymax":5,"pas":1,"grille":true,"coordonnees":false} ; les points, segments, droites, polygones sont alors donnés par leurs coordonnées dans ce repère (une droite d’équation y = ax + b : deux points de la droite, ex. [0,b] et [1,a+b]) ; "coordonnees":true écrit A(x ; y) à côté des points (corrigé seulement). DROITE GRADUÉE, DEMI-DROITE GRADUÉE ou AXE (nombres relatifs, abscisses, fractions, décimaux) : utilise {"droiteGraduee":{"min":-3,"max":5,"pas":1,"sous":2,"demi":"droite","origine":true,"points":{"A":2.5,"B":-1},"abscisses":false,"masque":[2,3]}} où « min » et « max » sont les valeurs des extrémités, « pas » l’écart entre deux graduations numérotées, « sous » le nombre de subdivisions par pas (2 = demi-graduations, 10 = dixièmes), « demi » = "droite" (demi-droite graduée vers la droite, départ à « min ») ou "gauche", à omettre pour une droite complète, « origine » écrit O au-dessus de 0, « points » = nom → abscisse (un nom commençant par _ n’est pas écrit), « abscisses »:true écrit l’abscisse à côté du nom, « masque » liste les valeurs dont le nombre n’est pas écrit, « etiq »:"aucune" n’écrit aucun nombre. Dans l’énoncé où l’élève doit placer des points, ne mets PAS « points » (ou mets les points à lire sans leur abscisse) ; dans le corrigé, ajoute les points placés. Cette forme remplace toute autre clé (n’y mets ni « points » de géométrie ni « segments »). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
+const GEO_DOC='FORMAT D’UNE FIGURE (objet JSON, tracé exactement par l’application) : {"points":{"A":[0,0],"B":[4,0],"C":[0,3]},"polygones":[["A","B","C"]],"segments":[["A","B"],{"p":["B","C"],"label":"5 cm","tirets":false,"trait":1}],"droites":[{"p":["A","B"],"label":"(d)"}],"cercles":[{"c":"O","r":2,"label":"(C)"}],"anglesDroits":[["B","A","C"]],"angles":[{"p":["B","A","C"],"label":"35°"}],"textes":[{"x":1,"y":2,"t":"texte"}]}. Les coordonnées sont en cm, y vers le HAUT, et respectent EXACTEMENT les données (longueurs, angles droits, milieux, parallèles, symétries ; ex. ABC rectangle en A avec AB = 3 et AC = 4 : A [0,0], B [3,0], C [0,4]). Les points portent le nom de leur lettre (A, B, A’ …) ; un nom commençant par _ n’est pas écrit. « anglesDroits » et « angles » : [point, sommet, point]. « segments » : paires ou objets {p, label (longueur à écrire), tirets (true = pointillés), trait (1 à 3 petits traits pour les segments de même longueur)}. « droites » sont prolongées de part et d’autre. « cercles » : c = nom du centre, r = rayon (ou « passePar » = nom d’un point). CONSTRUCTIONS CALCULÉES PAR L’APPLICATION (à utiliser au lieu de calculer toi-même les coordonnées) : ajoute « construire » = liste appliquée dans l’ordre, après « points » ; chaque étape crée un point : {"milieu":"I","de":["A","B"]} ; {"sym":"A’","de":"A","axe":["B","C"]} (symétrique par rapport à la droite (BC)) ; {"symC":"A’","de":"A","centre":"O"} (symétrique par rapport au point O) ; {"proj":"H","de":"A","sur":["B","C"]} (pied de la perpendiculaire) ; {"inter":"I","droites":[["A","B"],["C","D"]]} (intersection) ; {"parallelogramme":"D","de":["A","B","C"]} (ABCD parallélogramme) ; {"transl":"A’","de":"A","vecteur":["B","C"]} (translation du vecteur BC) ; {"rot":"B’","de":"B","centre":"O","angle":90} (rotation de centre O, sens inverse des aiguilles d’une montre) ; {"nom":"M","sur":["A","B"],"t":0.4} (point M de [AB] avec AM = t × AB, pour Thalès). Tous les points utilisés doivent exister avant l’étape. Pour un triangle et ses symétriques, donne seulement le triangle de départ et l’axe ou le centre dans « points », puis les étapes « construire ». « demiDroites » : [{"p":["A","B"]}] (demi-droite [AB) prolongée au-delà de B). DROITES ET POINTS REMARQUABLES D’UN TRIANGLE ABC (une figure par notion, avec le triangle ABC bien visible) : {"circ":"O","de":["A","B","C"]} centre du cercle circonscrit ; {"inscrit":"I","de":["A","B","C"]} centre du cercle inscrit ; {"ortho":"H","de":["A","B","C"]} orthocentre ; {"gravite":"G","de":["A","B","C"]} centre de gravité ; {"bissec":"D","de":["B","A","C"]} pied D, sur [BC], de la bissectrice issue de A ; {"perp":"P","en":"I","dir":["B","C"],"long":2} point P tel que (IP) soit perpendiculaire à (BC) en I. Recettes : MÉDIANE issue de A = {"milieu":"I","de":["B","C"]} puis le segment [AI] (avec un petit trait sur [BI] et [IC]) ; HAUTEUR issue de A = {"proj":"H","de":"A","sur":["B","C"]} puis le segment [AH] et l’angle droit en H ; MÉDIATRICE de [BC] = milieu I puis {"perp":"P","en":"I","dir":["B","C"]} et la droite (IP) en trait plein avec l’angle droit en I et les petits traits de codage ; BISSECTRICE issue de A = {"bissec":"D","de":["B","A","C"]}, le segment [AD] et deux « angles » égaux (même label) ; POINT DE CONCOURS = les trois droites tracées et le point nommé ; CERCLE CIRCONSCRIT = centre O et {"c":"O","passePar":"A"} ; CERCLE INSCRIT = centre I, T = {"proj":"T","de":"I","sur":["B","C"]} et {"c":"I","passePar":"T"}. REPÈRE ORTHONORMÉ (coordonnées, fonctions affines, translations dans un repère) : ajoute "repere":{"xmin":-4,"xmax":6,"ymin":-3,"ymax":5,"pas":1,"grille":true,"coordonnees":false} ; les points, segments, droites, polygones sont alors donnés par leurs coordonnées dans ce repère (une droite d’équation y = ax + b : deux points de la droite, ex. [0,b] et [1,a+b]) ; "coordonnees":true écrit A(x ; y) à côté des points (corrigé seulement). DROITE GRADUÉE, DEMI-DROITE GRADUÉE ou AXE (nombres relatifs, abscisses, fractions, décimaux) : utilise {"droiteGraduee":{"min":-3,"max":5,"pas":1,"sous":2,"demi":"droite","origine":true,"points":{"A":2.5,"B":-1},"abscisses":false,"masque":[2,3]}} où « min » et « max » sont les valeurs des extrémités, « pas » l’écart entre deux graduations numérotées, « sous » le nombre de subdivisions par pas (2 = demi-graduations, 10 = dixièmes), « demi » = "droite" (demi-droite graduée vers la droite, départ à « min ») ou "gauche", à omettre pour une droite complète, « origine » écrit O au-dessus de 0, « points » = nom → abscisse (un nom commençant par _ n’est pas écrit), « abscisses »:true écrit l’abscisse à côté du nom, « masque » liste les valeurs dont le nombre n’est pas écrit, « etiq »:"aucune" n’écrit aucun nombre. Dans l’énoncé où l’élève doit placer des points, ne mets PAS « points » (ou mets les points à lire sans leur abscisse) ; dans le corrigé, ajoute les points placés. Cette forme remplace toute autre clé (n’y mets ni « points » de géométrie ni « segments »). La figure d’un énoncé ne montre JAMAIS la réponse ; celle d’un corrigé montre en plus la construction ou le résultat.';
 const GEO_RULE='00) GÉOMÉTRIE PLANE : pour toute figure faite de points, segments, droites, cercles, angles, triangles, quadrilatères, symétries, configurations… ET pour toute droite graduée, demi-droite graduée ou axe avec des points d’abscisse donnée (nombres relatifs, fractions, décimaux) ne dessine PAS en SVG : réponds {"geo":{…}} avec la description géométrique de la figure, que l’application trace exactement. '+GEO_DOC;
 function axeSvg(o){
   o=o||{}; const W=480,H=130,M=34,Y=74;
@@ -1988,7 +2002,7 @@ function geoPre(spec){
   const foot=(a,b,c)=>{const dx=c[0]-b[0],dy=c[1]-b[1],l=dx*dx+dy*dy;if(!l)return null;const t=((a[0]-b[0])*dx+(a[1]-b[1])*dy)/l;return [b[0]+t*dx,b[1]+t*dy]};
   for(const c of spec.construire){ try{
     if(!c||typeof c!=='object') continue;
-    const nm=c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.sur||c.nom; if(!nm) continue;
+    const nm=c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.sur||c.nom||c.circ||c.inscrit||c.ortho||c.gravite||c.bissec||c.perp; if(!nm) continue;
     let r=null;
     if(c.milieu){const [a,b]=(c.de||[]).map(g);if(a&&b)r=[(a[0]+b[0])/2,(a[1]+b[1])/2]}
     else if(c.sym){const a=g(c.de),[b,d]=(c.axe||[]).map(g);if(a&&b&&d){const h=foot(a,b,d);if(h)r=[2*h[0]-a[0],2*h[1]-a[1]]}}
@@ -1999,7 +2013,22 @@ function geoPre(spec){
     else if(c.transl){const a=g(c.de),[b,d]=(c.vecteur||[]).map(g);if(a&&b&&d)r=[a[0]+d[0]-b[0],a[1]+d[1]-b[1]]}
     else if(c.rot){const a=g(c.de),o=g(c.centre),t=(+c.angle||0)*Math.PI/180;if(a&&o){const x=a[0]-o[0],y=a[1]-o[1];r=[o[0]+x*Math.cos(t)-y*Math.sin(t),o[1]+x*Math.sin(t)+y*Math.cos(t)]}}
     else if(c.sur&&c.nom){const [a,b]=(c.sur||[]).map(g);const t=+c.t;if(a&&b&&Number.isFinite(t))r=[a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])]}
-    const key=c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.nom;
+    else if(c.circ||c.inscrit||c.ortho||c.gravite){
+      const [a,b,d]=(c.de||[]).map(g);
+      if(a&&b&&d){
+        if(c.gravite) r=[(a[0]+b[0]+d[0])/3,(a[1]+b[1]+d[1])/3];
+        else if(c.inscrit){const la=Math.hypot(b[0]-d[0],b[1]-d[1]),lb=Math.hypot(a[0]-d[0],a[1]-d[1]),lc=Math.hypot(a[0]-b[0],a[1]-b[1]),sp=la+lb+lc;if(sp)r=[(la*a[0]+lb*b[0]+lc*d[0])/sp,(la*a[1]+lb*b[1]+lc*d[1])/sp]}
+        else{
+          const D=2*(a[0]*(b[1]-d[1])+b[0]*(d[1]-a[1])+d[0]*(a[1]-b[1]));
+          const ux=((a[0]*a[0]+a[1]*a[1])*(b[1]-d[1])+(b[0]*b[0]+b[1]*b[1])*(d[1]-a[1])+(d[0]*d[0]+d[1]*d[1])*(a[1]-b[1]))/(D||1);
+          const uy=((a[0]*a[0]+a[1]*a[1])*(d[0]-b[0])+(b[0]*b[0]+b[1]*b[1])*(a[0]-d[0])+(d[0]*d[0]+d[1]*d[1])*(b[0]-a[0]))/(D||1);
+          if(D){ if(c.circ) r=[ux,uy]; else r=[a[0]+b[0]+d[0]-2*ux,a[1]+b[1]+d[1]-2*uy] }
+        }
+      }
+    }
+    else if(c.bissec){const [b,a,d]=(c.de||[]).map(g);if(a&&b&&d){const ab=Math.hypot(b[0]-a[0],b[1]-a[1]),ad=Math.hypot(d[0]-a[0],d[1]-a[1]);if(ab+ad)r=[b[0]+(d[0]-b[0])*ab/(ab+ad),b[1]+(d[1]-b[1])*ab/(ab+ad)]}}
+    else if(c.perp){const o=g(c.en),[a,b]=(c.dir||[]).map(g);if(o&&a&&b){const dx=b[0]-a[0],dy=b[1]-a[1],l=Math.hypot(dx,dy);if(l){const len=Number.isFinite(+c.long)&&+c.long>0?+c.long:l/2;r=[o[0]-dy/l*len,o[1]+dx/l*len]}}}
+    const key=c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.nom||c.circ||c.inscrit||c.ortho||c.gravite||c.bissec||c.perp;
     if(r&&Number.isFinite(r[0])&&Number.isFinite(r[1])) P[key]=r;
   }catch(e){} }
   return Object.assign({},spec,{points:P});
@@ -2153,7 +2182,7 @@ function schemaToSvg(spec){
     return pts};
   for(const it of items.slice(0,80)){
     if(!it||typeof it!=='object') continue;
-    const t=String(it.t||it.type||'').toLowerCase().replace(/[éè]/g,'e').replace(/\s+/g,'');
+    const t=String(it.t||it.type||'').toLowerCase().replace(/[éèêë]/g,'e').replace(/[àâä]/g,'a').replace(/[ôö]/g,'o').replace(/[ûùü]/g,'u').replace(/[îï]/g,'i').replace(/ç/g,'c').replace(/[\s_-]+/g,'');
     const x=num(it.x,0),y=num(it.y,0),w=num(it.w,60),h=num(it.h,80);
     try{
     if(t==='becher'||t==='cuve'||t==='bocal'){
@@ -2440,6 +2469,95 @@ function schemaToSvg(spec){
     }else if(t==='cube'||t==='parallelepipede'){
       const p=num(it.p,24),c=col(it.couleur,SCH_COL.gris);
       poly([[x,y+p],[x+p,y],[x+w+p,y],[x+w,y+p]],'#e6e6e6','#000',2,true); poly([[x+w,y+p],[x+w+p,y],[x+w+p,y+h],[x+w,y+h+p]],'#8a8a8a','#000',2,true); rect(x,y+p,w,h,c,'#000',2); if(it.label) text(x+w/2,y+p+h/2+5,it.label,13);
+    }else if(t==='polygone'||t==='polygoneregulier'||t==='regulier'){
+      let P=[];
+      if(Array.isArray(it.points)&&it.points.length>=3) P=it.points.map(q=>[num(q&&q[0],0),num(q&&q[1],0)]);
+      else{const n=Math.max(3,Math.min(12,Math.round(num(it.n,5)))),r=num(it.r,60),rot=num(it.rot,-90)*Math.PI/180;for(let k=0;k<n;k++)P.push([x+r*Math.cos(rot+2*Math.PI*k/n),y+r*Math.sin(rot+2*Math.PI*k/n)])}
+      poly(P,col(it.fill||it.couleur,'none'),col(it.trait,'#000'),num(it.epaisseur,2),true);
+      const nm=Array.isArray(it.noms)?it.noms:[]; const cx0=P.reduce((a,q)=>a+q[0],0)/P.length,cy0=P.reduce((a,q)=>a+q[1],0)/P.length;
+      P.forEach((q,k)=>{if(nm[k]){const d=Math.hypot(q[0]-cx0,q[1]-cy0)||1;text(q[0]+(q[0]-cx0)/d*14,q[1]+(q[1]-cy0)/d*14+5,nm[k],15,'middle','#000',true)}});
+      if(it.label) text(cx0,cy0+5,it.label,13);
+    }else if(t==='arc'||t==='secteur'||t==='angle'){
+      const r=num(it.r,40),a1=num(it.a1,0),a2=num(it.a2,60),pt=(a)=>[x+r*Math.cos(a*Math.PI/180),y-r*Math.sin(a*Math.PI/180)];
+      const A=pt(a1),B=pt(a2),large=(((a2-a1)%360)+360)%360>180?1:0;
+      if(t==='secteur'){out.push(`<path d="M ${f(x)} ${f(y)} L ${f(A[0])} ${f(A[1])} A ${f(r)} ${f(r)} 0 ${large} 0 ${f(B[0])} ${f(B[1])} Z" fill="${col(it.fill||it.couleur,'#cfe3ff')}" stroke="#000" stroke-width="2"/>`)}
+      else if(t==='angle'){
+        const R=r*1.5; line(x,y,x+R*Math.cos(a1*Math.PI/180),y-R*Math.sin(a1*Math.PI/180),2); line(x,y,x+R*Math.cos(a2*Math.PI/180),y-R*Math.sin(a2*Math.PI/180),2);
+        if(Math.abs(((a2-a1)%360+360)%360-90)<0.5){const u=[Math.cos(a1*Math.PI/180),-Math.sin(a1*Math.PI/180)],v=[Math.cos(a2*Math.PI/180),-Math.sin(a2*Math.PI/180)],k=r*0.45;poly([[x+u[0]*k,y+u[1]*k],[x+(u[0]+v[0])*k,y+(u[1]+v[1])*k],[x+v[0]*k,y+v[1]*k]],'none','#000',1.6,false)}
+        else out.push(`<path d="M ${f(A[0])} ${f(A[1])} A ${f(r)} ${f(r)} 0 ${large} 0 ${f(B[0])} ${f(B[1])}" fill="none" stroke="#000" stroke-width="1.6"/>`);
+      }else out.push(`<path d="M ${f(A[0])} ${f(A[1])} A ${f(r)} ${f(r)} 0 ${large} 0 ${f(B[0])} ${f(B[1])}" fill="none" stroke="${col(it.trait||it.couleur,'#000')}" stroke-width="${num(it.epaisseur,2)}"/>`);
+      if(it.label){const am=(a1+(((a2-a1)%360)+360)%360/2)*Math.PI/180,rr=t==='angle'?r*1.3:r*0.6; text(x+rr*Math.cos(am),y-rr*Math.sin(am)+5,it.label,14)}
+    }else if(t==='ellipse'){
+      ellipse(x,y,num(it.rx,50),num(it.ry,30),col(it.fill||it.couleur,'none'),col(it.trait,'#000'),num(it.epaisseur,2)); if(it.label) text(x,y+5,it.label,13);
+    }else if(t==='chemin'||t==='path'){
+      const d=String(it.d||'').trim(); if(/^[MmLlHhVvCcSsQqTtAaZz0-9eE\s,.\-]+$/.test(d)) out.push(`<path d="${d}" fill="${col(it.fill,'none')}" stroke="${col(it.trait||it.couleur,'#000')}" stroke-width="${num(it.epaisseur,2)}"${it.pointille?' stroke-dasharray="7 5"':''} stroke-linejoin="round"/>`);
+    }else if(t==='fonction'){
+      const gw=num(it.w,260),gh=num(it.h,170),xmin=num(it.xmin,-5),xmax=num(it.xmax,5),ymin=num(it.ymin,-5),ymax=num(it.ymax,5);
+      const X=v=>x+(v-xmin)/(xmax-xmin)*gw,Y=v=>y-(v-ymin)/(ymax-ymin)*gh;
+      const stepx=(xmax-xmin)/10,stepy=(ymax-ymin)/8;
+      for(let k=0;k<=10;k++){const v=xmin+k*stepx;line(X(v),y,X(v),y-gh,0.6,'#d5d5d5')} for(let k=0;k<=8;k++){const v=ymin+k*stepy;line(x,Y(v),x+gw,Y(v),0.6,'#d5d5d5')}
+      const ax0=Math.max(x,Math.min(x+gw,X(0))),ay0=Math.max(y-gh,Math.min(y,Y(0)));
+      line(x,ay0,x+gw,ay0,1.8); head(x,ay0,x+gw,ay0,'#000',9); line(ax0,y,ax0,y-gh,1.8); head(ax0,y,ax0,y-gh,'#000',9);
+      for(let k=0;k<=10;k+=2){const v=xmin+k*stepx; if(Math.abs(v)>1e-9) text(X(v),ay0+14,String(Math.round(v*100)/100),10)}
+      for(let k=0;k<=8;k+=2){const v=ymin+k*stepy; if(Math.abs(v)>1e-9) text(ax0-5,Y(v)+4,String(Math.round(v*100)/100),10,'end')}
+      const exprs=(Array.isArray(it.expr)?it.expr:[it.expr||it.f||'x']).slice(0,3), cols=[SCH_COL.bleu,SCH_COL.rouge,SCH_COL.vert];
+      exprs.forEach((ex0,ei)=>{
+        let e=String(ex0||'x').toLowerCase().replace(/^\s*(y|f\(x\))\s*=/,'').replace(/\^/g,'**').replace(/,/g,'.').replace(/(\d)\s*x/g,'$1*x').replace(/\)\s*\(/g,')*(').replace(/(\d|x)\s*\(/g,'$1*(').replace(/\bpi\b/g,'Math.PI').replace(/\b(sin|cos|tan|sqrt|abs|exp|ln|log)\b/g,m=>'Math.'+(m==='ln'?'log':m==='log'?'log10':m));
+        if(!/^[0-9x+\-*/().\s]*$/.test(e.replace(/Math\.(sin|cos|tan|sqrt|abs|exp|log10|log|PI)/g,''))) return;
+        let fn; try{fn=new Function('x','return '+e)}catch(_){return}
+        let seg=[],all=[]; for(let k=0;k<=160;k++){const v=xmin+(xmax-xmin)*k/160;let r;try{r=fn(v)}catch(_){r=NaN}
+          if(Number.isFinite(r)&&r>=ymin&&r<=ymax) seg.push([X(v),Y(r)]); else{if(seg.length>1)all.push(seg);seg=[]}}
+        if(seg.length>1)all.push(seg); all.forEach(sg=>poly(sg,'none',cols[ei],2.4,false));
+      });
+      if(Array.isArray(it.points)) it.points.slice(0,12).forEach(q=>{const px=X(num(q&&q[0],0)),py=Y(num(q&&q[1],0));circle(px,py,3.5,'#000','#000',1);if(q&&q[2])text(px+6,py-6,q[2],12,'start')});
+      if(it.label) text(x+gw/2,y-gh-8,it.label,14,'middle','#000',true);
+    }else if(t==='histogramme'||t==='barres'||t==='batons'||t==='diagrammebarres'){
+      const gw=num(it.w,260),gh=num(it.h,150),V=(Array.isArray(it.valeurs)?it.valeurs:[]).slice(0,14).map(v=>Math.max(0,num(v,0))),Lb=Array.isArray(it.labels)?it.labels:[];
+      const vm=Math.max(1,...V), top=num(it.max,Math.ceil(vm*1.1)), nb=V.length||1, bw=gw/nb*(t==='batons'?0.18:(t==='histogramme'?1:0.62));
+      line(x,y,x+gw+8,y,2); head(x,y,x+gw+8,y,'#000',9); line(x,y,x,y-gh-8,2); head(x,y,x,y-gh-8,'#000',9);
+      for(let k=1;k<=5;k++){const yy=y-gh*k/5;line(x,yy,x-4,yy,1.2);text(x-7,yy+4,String(Math.round(top*k/5*10)/10),11,'end');line(x,yy,x+gw,yy,0.5,'#ddd')}
+      V.forEach((v,k)=>{const cx1=x+gw*(k+0.5)/nb,hh=gh*v/top;rect(cx1-bw/2,y-hh,bw,hh,col(it.couleur,SCH_COL.bleupale),'#000',1.6);text(cx1,y+15,Lb[k]!=null?Lb[k]:'',11);if(it.valeursAffichees!==false)text(cx1,y-hh-4,String(v),10)});
+      if(it.xlabel) text(x+gw,y+30,it.xlabel,12,'end'); if(it.ylabel) text(x+6,y-gh-12,it.ylabel,12,'start'); if(it.label) text(x+gw/2,y-gh-14,it.label,14,'middle','#000',true);
+    }else if(t==='camembert'||t==='secteurs'||t==='diagrammecirculaire'){
+      const r=num(it.r,70),V=(Array.isArray(it.valeurs)?it.valeurs:[]).slice(0,10).map(v=>Math.max(0,num(v,0))),Lb=Array.isArray(it.labels)?it.labels:[],tot=V.reduce((a,b)=>a+b,0)||1;
+      const pal=[SCH_COL.bleupale,'#ffd9a0','#bfe8bf','#f8b4c8','#e0c8f0','#fff3a0','#c8e8e8','#d8d8d8','#f4c4a0','#b8c8f0'];let a=-Math.PI/2;
+      V.forEach((v,k)=>{const da=2*Math.PI*v/tot,b=a+da,P1=[x+r*Math.cos(a),y+r*Math.sin(a)],P2=[x+r*Math.cos(b),y+r*Math.sin(b)];
+        if(V.length===1||da>=2*Math.PI-1e-6) circle(x,y,r,pal[k%pal.length],'#000',1.8); else out.push(`<path d="M ${f(x)} ${f(y)} L ${f(P1[0])} ${f(P1[1])} A ${f(r)} ${f(r)} 0 ${da>Math.PI?1:0} 1 ${f(P2[0])} ${f(P2[1])} Z" fill="${pal[k%pal.length]}" stroke="#000" stroke-width="1.8"/>`);
+        const m=(a+b)/2;text(x+(r+22)*Math.cos(m),y+(r+22)*Math.sin(m)+4,(Lb[k]!=null?Lb[k]+' ':'')+(it.pourcent===false?v:Math.round(v/tot*1000)/10+' %'),12);a=b});
+      if(it.label) text(x,y-r-14,it.label,14,'middle','#000',true);
+    }else if(t==='cone'){
+      const rx=w/2,ry=Math.max(5,w*0.17),by=y+h-ry;
+      line(x+rx,y,x,by,2);line(x+rx,y,x+w,by,2);
+      out.push(`<path d="M ${f(x)} ${f(by)} A ${f(rx)} ${f(ry)} 0 0 0 ${f(x+w)} ${f(by)}" fill="${col(it.couleur,'none')}" stroke="#000" stroke-width="2"/>`);
+      out.push(`<path d="M ${f(x)} ${f(by)} A ${f(rx)} ${f(ry)} 0 0 1 ${f(x+w)} ${f(by)}" fill="none" stroke="#000" stroke-width="1.5" stroke-dasharray="6 4"/>`);
+      dash(x+rx,y,x+rx,by,1.2); circle(x+rx,by,2.2,'#000','#000',1); if(it.label) text(x+rx,y+h+16,it.label,13);
+    }else if(t==='sphere'||t==='boulesolide'){
+      const r=num(it.r,50);circle(x,y,r,col(it.couleur,'none'),'#000',2);
+      out.push(`<path d="M ${f(x-r)} ${f(y)} A ${f(r)} ${f(r*0.3)} 0 0 0 ${f(x+r)} ${f(y)}" fill="none" stroke="#000" stroke-width="1.6"/>`);
+      out.push(`<path d="M ${f(x-r)} ${f(y)} A ${f(r)} ${f(r*0.3)} 0 0 1 ${f(x+r)} ${f(y)}" fill="none" stroke="#000" stroke-width="1.4" stroke-dasharray="6 4"/>`);
+      circle(x,y,2.2,'#000','#000',1); if(it.label) text(x,y+r+17,it.label,13);
+    }else if(t==='pyramide'||t==='tetraedre'||t==='prismetriangulaire'){
+      const nm=Array.isArray(it.noms)?it.noms:[], put=(k,px,py,dx,dy)=>{if(nm[k]) text(px+dx,py+dy,nm[k],15,'middle','#000',true)};
+      if(t==='pyramide'){
+        const A=[x,y+h],B=[x+w*0.72,y+h],C=[x+w,y+h-w*0.24],D=[x+w*0.28,y+h-w*0.24],S=[x+w*0.5,y];
+        poly([S,A,B,C],'none','#000',2,false);line(A[0],A[1],B[0],B[1],2);line(S[0],S[1],B[0],B[1],2);line(B[0],B[1],C[0],C[1],2);
+        dash(A[0],A[1],D[0],D[1]);dash(D[0],D[1],C[0],C[1]);dash(S[0],S[1],D[0],D[1]);
+        put(0,S[0],S[1],0,-8);put(1,A[0],A[1],-12,6);put(2,B[0],B[1],10,16);put(3,C[0],C[1],14,4);put(4,D[0],D[1],0,-8);
+        if(it.hauteur){dash(S[0],S[1],S[0],(B[1]+D[1])/2,1.4,'#e02020');text(S[0]+8,(S[1]+B[1])/2,it.hauteur,12,'start','#e02020')}
+      }else if(t==='tetraedre'){
+        const A=[x,y+h],B=[x+w*0.7,y+h],C=[x+w,y+h*0.62],S=[x+w*0.42,y];
+        line(S[0],S[1],A[0],A[1],2);line(S[0],S[1],B[0],B[1],2);line(S[0],S[1],C[0],C[1],2);line(A[0],A[1],B[0],B[1],2);line(B[0],B[1],C[0],C[1],2);dash(A[0],A[1],C[0],C[1]);
+        put(0,S[0],S[1],0,-8);put(1,A[0],A[1],-12,6);put(2,B[0],B[1],4,18);put(3,C[0],C[1],14,4);
+      }else{
+        const o=num(it.p,34),A=[x,y+h],B=[x+w,y+h],C=[x+w*0.5,y+h*0.35],A2=[A[0]+o,A[1]-o*0.7],B2=[B[0]+o,B[1]-o*0.7],C2=[C[0]+o,C[1]-o*0.7];
+        poly([A,B,C],'none','#000',2,true);line(B[0],B[1],B2[0],B2[1],2);line(C[0],C[1],C2[0],C2[1],2);line(B2[0],B2[1],C2[0],C2[1],2);line(C2[0],C2[1],A2[0],A2[1],2);dash(A[0],A[1],A2[0],A2[1]);dash(A2[0],A2[1],B2[0],B2[1]);
+        put(0,A[0],A[1],-12,6);put(1,B[0],B[1],0,18);put(2,C[0],C[1],-10,-6);put(3,A2[0],A2[1],-10,-4);put(4,B2[0],B2[1],14,0);put(5,C2[0],C2[1],10,-6);
+      }
+      if(it.label) text(x+w/2,y+h+(t==='pyramide'?18:20),it.label,13);
+    }else if(t==='patroncube'||t==='patron'){
+      const c=num(it.c,36); const cells=[[1,0],[0,1],[1,1],[2,1],[3,1],[1,2]]; cells.forEach(q=>rect(x+q[0]*c,y+q[1]*c,c,c,'#fff','#000',2)); if(it.label) text(x+2*c,y+3*c+18,it.label,13);
+    }else if(t==='grille'||t==='quadrillage'){
+      const gw=num(it.w,200),gh=num(it.h,150),pas=Math.max(8,num(it.pas,25)); for(let xx=0;xx<=gw+0.1;xx+=pas)line(x+xx,y,x+xx,y+gh,0.7,'#bbb'); for(let yy=0;yy<=gh+0.1;yy+=pas)line(x,y+yy,x+gw,y+yy,0.7,'#bbb');
     }else if(t==='roue'){
       const r=num(it.r,30); circle(x,y,r,'#fff','#000',3); circle(x,y,r*0.2,'#ccc','#000',2); for(let k=0;k<6;k++){const a=Math.PI*k/3;line(x+r*0.2*Math.cos(a),y+r*0.2*Math.sin(a),x+r*Math.cos(a),y+r*Math.sin(a),1.6)} if(it.label) text(x,y+r+17,it.label,13);
     }else if(t==='courroie'){
@@ -2475,14 +2593,48 @@ async function eprFigOf(spec,dw){
     return await eprFig(spec,dw,false)
   }catch(e){return null}
 }
+const SCH_EXT_DOC='COMPOSANTS SUPPLÉMENTAIRES (repère 480 × 300, y vers le bas ; couleurs par nom ou #hex) : {"t":"polygone","points":[[x,y],…],"noms":["A","B",…],"fill":"…","label":""} ou {"t":"polygone","n":5,"x":,"y":,"r":,"rot":-90} (polygone régulier) ; {"t":"arc","x":,"y":,"r":,"a1":0,"a2":60,"label":""} (centre x,y ; angles en degrés, sens trigonométrique) ; {"t":"secteur","x":,"y":,"r":,"a1":,"a2":,"fill":""} ; {"t":"angle","x":,"y":,"r":,"a1":,"a2":,"label":"60°"} (deux côtés + arc, ou carré si 90°) ; {"t":"ellipse","x":,"y":,"rx":,"ry":,"fill":""} ; {"t":"chemin","d":"M 10 10 L 50 80 Q 90 10 120 60","fill":"none"} (tracé libre) ; {"t":"fonction","x":,"y":,"w":260,"h":170,"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"expr":["x^2-2*x+1"],"points":[[1,0,"A"]]} (courbes de fonctions dans un repère gradué) ; {"t":"histogramme"|"barres"|"batons","x":,"y":,"w":,"h":,"valeurs":[…],"labels":[…]} ; {"t":"camembert","x":,"y":,"r":,"valeurs":[…],"labels":[…]} ; solides : {"t":"cone"|"sphere"|"cylindre"|"cube"|"parallelepipede"|"pyramide"|"tetraedre"|"prismetriangulaire","x":,"y":,"w":,"h":,"noms":["S","A","B","C","D"],"label":""} (arêtes cachées en pointillés) ; {"t":"patroncube","x":,"y":,"c":36} ; {"t":"grille","x":,"y":,"w":,"h":,"pas":25}. Tous les composants se combinent librement dans une même figure, avec "texte", "legende", "fleche", "cote", "ligne", "cercle", "rect".';
+/* Mécanisme universel : n’importe quelle figure (géométrie plane ou dans l’espace, courbes, statistiques, schéma de physique, chimie, SVT, technologie, plan, carte…) */
+const FIG_ANY_DOC='RÈGLE GÉNÉRALE : aucune figure n’est hors de portée : tu peux dessiner N’IMPORTE QUELLE figure utile au cours ou à la situation. Choisis le moyen le plus adapté, puis réponds par UN objet JSON :\n(a) géométrie plane (points, segments, droites, cercles, angles, constructions) → {"geo":{…}} au format ci-dessus ;\n(b) schéma de composants (montages électriques, verrerie, appareils, optique, mécanique, solides, courbes, histogrammes, camemberts, polygones, arcs, angles…) → {"items":[…]} avec les composants décrits ;\n(c) tout autre dessin (organe, cellule, cycle, carte, plan, objet technique, démonstration expérimentale, vue de face/dessus/gauche…) → {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 480 340\\" width=\\"480\\" height=\\"340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; traits noirs, légendes en français, fond blanc.\nTu peux aussi combiner : mets plusieurs composants (b) pour une démonstration expérimentale complète (support, appareil, liquide, flèches, légendes).';
 const EPR_EXP_RULE='DISCIPLINE EXPÉRIMENTALE : la situation d’évaluation DÉCRIT ELLE-MÊME le PROTOCOLE EXPÉRIMENTAL complet : le matériel et les produits utilisés (avec leurs valeurs : masses, volumes, tensions, intensités, longueurs…), le montage réalisé, les étapes de la manipulation dans l’ordre (« On… puis on… »), puis les observations ou mesures obtenues (valeurs chiffrées, couleurs, dépôts, indications des appareils). L’élève n’a rien à chercher ni à inventer : tout ce qu’il faut pour répondre est dans la situation (dispositif expérimental ou objet technique concret : montage électrique, circuit, expérience de chimie, appareil de mesure, objet du quotidien, comme dans les travaux pratiques du manuel). Les consignes demandent de décrire, schématiser ou interpréter CETTE expérience. Le schéma correspond exactement au protocole décrit. COHÉRENCE : la situation décrit UN dispositif (ou deux au plus, présentés comme « Expérience 1 » et « Expérience 2 ») directement lié aux capacités et contenus du FOCUS ; elle n’ajoute aucun dispositif étranger au focus ; chaque dispositif décrit dans le texte figure dans le schéma, et chaque élément du schéma est mentionné dans le texte. SCHÉMA FACULTATIF : fournis « figSit » SEULEMENT si les contenus évalués l’exigent réellement (montage, circuit, expérience ou objet technique que l’élève doit lire, schématiser ou interpréter) ; sinon mets "figSit":null et n’invente aucun schéma décoratif. Le schéma illustre les contenus du focus (par exemple : un circuit pour l’électricité, un solide plongé dans un liquide pour la poussée d’Archimède, l’électrolyse seulement si c’est elle qui est évaluée), jamais un dispositif tiré d’un exemple. Quand il est fourni, il est décrit avec des COMPOSANTS (l’application les dessine proprement, en couleur) : remplis « figSit » par {"items":[…]}. ZONE : 480 (largeur) × 300 (hauteur), origine en haut à gauche, y vers le bas, marge de 15. Les composants sont dessinés dans l’ordre de la liste : d’abord liquides et récipients, puis tubes, objets, fils, flèches, et enfin les textes. Composants (champs entre crochets facultatifs) : {"t":"becher","x","y","w","h","niveau":0.6,["liquide":"eau"],["forme":"cuve"],["label"]} récipient ouvert (x,y = coin haut gauche ; niveau = fraction remplie de 0 à 1 ; « cuve » = bords évasés) ; {"t":"tube","x","y","w":26,"h":150,"gaz":0.4,["couleurGaz":"jaune"]} tube à essais retourné, fermé en haut (gaz = fraction de la hauteur occupée par le gaz, en haut ; le reste est du liquide) ; {"t":"eprouvette","x","y","w","h","niveau"} ; {"t":"erlenmeyer","x","y","w","h","niveau"} ; {"t":"electrode","x" (centre),"y","h"} ; {"t":"bulles","x","y","w","h","n":5} ; dipôles (x,y = centre) : {"t":"pile","x","y","label":"E"} (bornes en x−14 et x+14), {"t":"lampe","x","y","label":"L"} (bornes en x±16), {"t":"interrupteur","x","y","w":50,"ouvert":true,"label":"K"} (bornes en x±25), {"t":"resistor","x","y","w":50,"label":"R"}, {"t":"appareil","x","y","lettre":"A"} (A, V ou M ; bornes en x±16) ; {"t":"fil","points":[[x,y],…]} fils à angles droits, dont les extrémités se raccordent aux bornes ; {"t":"liquide","x","y","w","h"} nappe de liquide ; {"t":"bloc","x","y","w","h",["couleur":"gris"],["centre":"G"]} solide ; {"t":"fleche","x1","y1","x2","y2",["label":"P"],["vec":true],["couleur":"rouge"],["epaisseur":3]} force ou vecteur (pointe en x2,y2) ; {"t":"cote","x1","y1","x2","y2","label":"h",["couleur"]} cote à double flèche ; {"t":"ressort","x","y","h"} ; {"t":"potence","x","y","h","bras"} ; {"t":"flamme","x","y"}; dipôles et appareils supplémentaires : {"t":"transistor","x","y","type":"npn" ou "pnp","label":"T"} (centre ; bornes : base en x−30, collecteur en (x+20, y−30), émetteur en (x+20, y+30)) ; {"t":"capteur","x","y","w":50,"kind":"ldr" (lumière) ou "ctn" (température) ou "niveau" (eau, humidité) ou "presence" ou "son","label"} ; {"t":"buzzer" ou "sonnette","x","y","label"} (bornes x±26) ; {"t":"diode" ou "del","x","y","w":50} ; {"t":"condensateur","x","y"} ; {"t":"rheostat","x","y","w":56} ; {"t":"fusible","x","y"} ; {"t":"transformateur","x","y","n1":"N₁","n2":"N₂"} (bornes en (x±40, y±30)) ; verrerie et matériel : {"t":"tube_a_essais","x","y","w":30,"h":110,"niveau"} (tube droit, ouvert en haut) ; {"t":"ballon","x","y","w":90,"h":120,"niveau"} ; {"t":"burette","x","y","h":150,"niveau"} ; {"t":"entonnoir","x","y","w":70} ; {"t":"thermometre","x","y","h":100,"niveau"} ; {"t":"becbunsen","x","y"} ; mécanique et technologie : {"t":"plan_incline","x","y","w":220,"h":120,"angle":30} ; {"t":"levier","x","y","w":260} ; {"t":"poulie","x","y","r":22,"h":80} ; {"t":"engrenage","x","y","r":30,"dents":12} ; {"t":"ligne","x1","y1","x2","y2"} ; {"t":"texte","x","y","texte"} ; {"t":"legende","x","y","texte","vers":[x,y]} (texte relié par une flèche à l’élément désigné). AUTRES COMPOSANTS, à utiliser dès qu’ils conviennent à la situation (tu peux en superposer plusieurs : bécher + tubes + électrodes + fils…). Verrerie et chimie : {"t":"tubeessais","x","y","w":26,"h":100,"niveau":0.5,["liquide"]} tube droit ouvert en haut ; {"t":"cristallisoir","x","y","w":90,["h":35],"niveau"} ; {"t":"boitepetri","x","y","w":90} ; {"t":"fiole","x","y","w":70,"h":110,"niveau"} fiole jaugée ; {"t":"ampoule","x","y","w":70,"h":120,"niveau"} ampoule à décanter ; {"t":"flacon","x","y","w":50,"h":80,"niveau",["liquide"]} ; {"t":"pipette","x","y","h":110} ; {"t":"comptegouttes","x","y","h":100,["goutte":true]} ; {"t":"bouchon","x","y"} ; {"t":"conduit","points":[[x,y],…]} tube à dégagement ; {"t":"statif","x","y","h":200} ; {"t":"pince","x","y","bras":40} ; {"t":"trepied","x","y","w":100,"h":50} ; {"t":"refrigerant","x1","y1","x2","y2"} ; {"t":"monticule","x","y","w","h","couleur"} poudre, précipité ou dépôt ; {"t":"electrode","x","y","h",["couleur":"cuivre"],["label"]} lame ou électrode colorée. Mesure : {"t":"balance","x","y","w":140,"valeur":"125,4 g"} (plateau à la hauteur y) ; {"t":"chronometre","x","y","valeur"} ; {"t":"dynamometre","x","y","h":120,"niveau":0.4,"valeur":"1,2 N"} ; {"t":"masse","x","y","label":"100 g"} masse marquée suspendue ; {"t":"multimetre","x","y","valeur":"4,5 V"} ; {"t":"graphique","x","y","w":240,"h":150,"points":[[x,y],…],"xmax","ymax","xlabel","ylabel","label"} courbe (x,y = origine en bas à gauche) ; {"t":"repere","x","y","w","h","labelx","labely"}. Électricité et magnétisme : {"t":"bobine","x","y","w":80,"n":5} (bornes en x±w/2) ; {"t":"aimant","x","y","w":100,"h":30} ; {"t":"boussole","x","y","r":24,"angle":0} ; {"t":"hautparleur","x","y"} ; {"t":"terre","x","y"} ; {"t":"noeud","x","y","label"} ; {"t":"courant","x","y","sens":"droite" ou "gauche" ou "haut" ou "bas","label":"I"}. Optique : {"t":"lentille","x","y","h":120,"type":"convergente" ou "divergente","label"} (x,y = centre) ; {"t":"source","x","y"} ; {"t":"rayon","points":[[x,y],…],["couleur"]} rayon lumineux fléché ; {"t":"axe","x1","y1","x2","y2"} axe en pointillés ; {"t":"point","x","y","label":"F"} ; {"t":"miroir","x","y","h"} ; {"t":"ecran","x","y","h"} ; {"t":"prisme","x","y","w"}. Atome et molécule : {"t":"atome","x","y","r":70,"couches":[2,8,1],"noyau":"11+","label"} modèle en couches ; {"t":"electron","x","y"} ; {"t":"boule","x","y","r":16,"symbole":"O","couleur":"rouge",["charge":"2+"]} atome, ion ou bille ; {"t":"liaison","x1","y1","x2","y2","n":1}. Solides et technologie : {"t":"cylindre","x","y","w","h","couleur"} ; {"t":"cube","x","y","w","h","p":24,"couleur"} parallélépipède ; {"t":"roue","x","y","r"} ; {"t":"courroie","x1","y1","x2","y2","r1","r2"} (poulies alignées horizontalement) ; {"t":"chariot","x","y","w"}. Couleurs : eau, jaune, rouge, vert, bleu, orange, violet, gris, noir, marron, rose, incolore, cuivre, rouille, bleupale, vertpale, trouble, brun, argent, zinc, fer, noirci ou #rrggbb. Dessine le dispositif EXACTEMENT comme le décrit le protocole de la situation (mêmes éléments, même disposition), légende chaque élément important par son nom, ajoute les valeurs données par la situation, sans faire apparaître les réponses attendues, et évite que les textes se chevauchent. Pour une question de l’exercice 2 ou 3 qui s’appuie sur un schéma, utilise aussi le champ « fig » de la partie avec le même format ; « figCorrSit » : schéma complété pour le corrigé, OBLIGATOIRE dès qu’une consigne demande de représenter, tracer, dessiner, schématiser ou construire (par exemple représenter une force : flèches avec direction, sens, point d’application et nom). FORME (syntaxe seulement, sans rapport avec ta situation) : {"items":[{"t":"becher","x":150,"y":120,"w":160,"h":130,"niveau":0.6},{"t":"bloc","x":205,"y":150,"w":50,"h":50,"couleur":"gris"},{"t":"legende","x":400,"y":110,"texte":"Solide","vers":[258,170]}]}\n';
+const SCH_CATALOG=(()=>{const a=EPR_EXP_RULE.indexOf('ZONE : 480'),b=EPR_EXP_RULE.indexOf('Pour une question de l’exercice 2');return EPR_EXP_RULE.slice(a,b>a?b:undefined)+' '+SCH_EXT_DOC})();
+/* spécification de figure déduite de la réponse de l’IA, quelle que soit sa forme */
+function figSpecOf(d){
+  if(!d||typeof d!=='object') return null;
+  if(typeof d.svg==='string'&&/<svg[\s>]/i.test(d.svg)) return {svg:d.svg};
+  const g=d.figSit||d.figure||d;
+  if(g&&typeof g==='object'){ if(g.svg&&typeof g.svg==='string'&&/<svg[\s>]/i.test(g.svg)) return {svg:g.svg}; if(g.geo&&typeof g.geo==='object') return g.geo; if(schemaItems(g).length) return g; if(g.points||g.segments||g.cercles||g.droites) return g }
+  if(d.geo&&typeof d.geo==='object') return d.geo;
+  if(Array.isArray(d.items)) return {items:d.items};
+  return null;
+}
+/* Contrôle visuel : l’IA regarde la figure dessinée et signale ce qui ne va pas (désactivé si l’IA ne lit pas les images) */
+async function figCheck(im,ctx){
+  try{
+    if(!im||!im.src||aiKind()==='free') return {ok:true};
+    const blob=await (await fetch(im.src)).blob();
+    const d=await ask('Tu es un enseignant exigeant. Regarde cette figure. Elle doit illustrer :\n« '+String(ctx||'').slice(0,1500)+' »\nVérifie : (1) elle correspond bien à ce texte (éléments, valeurs, notions) ; (2) aucun élément ne manque ni ne se superpose ; (3) les légendes sont lisibles, sans chevauchement ni mot coupé ; (4) les objets sont reconnaissables et bien proportionnés (rien d’absurde : fil non raccordé, objet flottant, tracé hors cadre) ; (5) elle ne contient pas la réponse d’un exercice si ce n’est pas demandé. Réponds uniquement par {"ok":true} si tout est correct, sinon {"ok":false,"defauts":"liste précise des défauts à corriger, avec les éléments à déplacer, ajouter ou retirer"}.',{images:[blob],temp:0.1});
+    if(d&&d.ok===false&&has(d.defauts)) return {ok:false,defauts:String(d.defauts).slice(0,700)};
+  }catch(e){ if(e&&e.code==='cancelled') throw e }
+  return {ok:true};
+}
+/* Trace une figure de n’importe quel type, la vérifie visuellement et la corrige au besoin (jusqu’à 3 essais) */
+async function figAny(prompt,opts){
+  opts=opts||{}; let best=null,defects='';
+  for(let t=0;t<3;t++){
+    try{
+      const d=await ask(prompt+(defects?'\nCORRIGE la figure précédente : '+defects+'\nRedessine-la entièrement en tenant compte de ces défauts.':''),{temp:t?0.5:0.3});
+      const spec=figSpecOf(d); const im=spec?await eprFigOf(spec,opts.dw||340):null;
+      if(!im) { defects=defects||'La figure précédente était illisible ou vide : réponds par un objet JSON valide ({"items":[…]}, {"geo":{…}} ou {"svg":"…"}).'; continue }
+      best=im; if(opts.verify===false) return im;
+      const c=await figCheck(im,opts.ctx||prompt); if(c.ok) return im; defects=c.defauts;
+    }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e }
+  }
+  return best;
+}
 async function eprExpFigure(E,situation){
   const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau le schéma qui accompagne la situation d’évaluation suivante :\n« '+String(situation||'').slice(0,1200)+' »\n'+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'').replace(/ remplis « figSit » par /,' réponds par ')+'\nRéponds uniquement par un objet JSON {"items":[…]} (composants décrits ci-dessus) : le schéma annoté du dispositif de cette situation, avec les valeurs numériques données. Représente UNIQUEMENT ce que le texte décrit, élément par élément : aucun composant absent du texte, aucun élément du texte oublié, chaque composant relié correctement par des fils.';
-  for(let t=0;t<2;t++){
-    try{const d=await ask(prompt,{temp:0.3});const im=await eprFigOf(d&&(d.svg?{svg:d.svg}:d.figSit||d),340);if(im) return im}
-    catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
-  }
-  return null;
+  return await figAny(prompt+'\n'+SCH_CATALOG+'\n'+GEO_DOC+'\n'+FIG_ANY_DOC,{dw:340,ctx:String(situation||'')});
 }
 const EPR_FREF=/\b(?:figure|sch[ée]ma|dessin|croquis|montage|repr[ée]sentation|graphique|courbe|plan|carte)\s+(?:ci-[a-zé]+|suivant[e]?)|\bci-contre\b/i;
 function eprUnref(t){
@@ -2495,12 +2647,8 @@ function eprUnref(t){
 /* Figure de TOUT type (géométrie, schéma, courbe, graphique, plan, carte, organe…) tracée à partir du TEXTE FINAL de la situation, pour qu’elle corresponde exactement à ce qui est écrit */
 async function eprSitFigure(E,situation,withAnswer){
   const exp=['pct','phys','chim'].includes(E.disc);
-  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau la figure qui accompagne cette situation :\n« '+String(situation||'').slice(0,withAnswer?4200:1400)+' »\nChoisis le type de figure qui convient (figure de géométrie, schéma de montage ou d’objet, courbe, graphique, histogramme, plan, carte simplifiée, schéma d’organe ou de cycle…). Elle montre EXACTEMENT les données du texte (points, longueurs, angles, objets, valeurs, légendes) et rien d’autre, '+(withAnswer?'et elle montre AUSSI la réponse attendue, tracée comme l’élève doit la tracer (par exemple les forces en flèches à l’échelle indiquée, avec leurs noms et leurs valeurs ; une flèche = une ligne plus un petit triangle polygon à la pointe).':'sans la réponse attendue.')+'\nFORMATS possibles : (1) figure de géométrie plane : '+GEO_DOC+'\n'+(exp?'(2) schéma de dispositif : '+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'')+'\n':'')+'('+(exp?'3':'2')+') tout autre dessin : {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"480\\" height=\\"340\\" viewBox=\\"0 0 480 340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan, traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement.\nRéponds uniquement par {"figSit":{…}} (géométrie ou {"items":[…]}) ou par {"svg":"…"}.';
-  for(let t=0;t<2;t++){
-    try{const d=await ask(prompt,{temp:0.3});const im=await eprFigOf(d&&(d.svg?{svg:d.svg}:(d.figSit||d.geo||d)),340);if(im) return im}
-    catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
-  }
-  return null;
+  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau la figure qui accompagne cette situation :\n« '+String(situation||'').slice(0,withAnswer?4200:1400)+' »\nChoisis le type de figure qui convient (figure de géométrie, schéma de montage ou d’objet, courbe, graphique, histogramme, plan, carte simplifiée, schéma d’organe ou de cycle…). Elle montre EXACTEMENT les données du texte (points, longueurs, angles, objets, valeurs, légendes) et rien d’autre, '+(withAnswer?'et elle montre AUSSI la réponse attendue, tracée comme l’élève doit la tracer (par exemple les forces en flèches à l’échelle indiquée, avec leurs noms et leurs valeurs ; une flèche = une ligne plus un petit triangle polygon à la pointe).':'sans la réponse attendue.')+'\nFORMATS possibles : (1) figure de géométrie plane : '+GEO_DOC+'\n'+(exp?'(2) schéma de dispositif : '+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'')+'\n':'')+'('+(exp?'3':'2')+') tout autre dessin : {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"480\\" height=\\"340\\" viewBox=\\"0 0 480 340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan, traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement. Tu sais tracer TOUS les types de figures, par exemple : forces sur un solide (flèches à l’échelle, points d’application), plan incliné, levier, balance, poulie, ressort et dynamomètre, circuits (symboles normalisés), rayons lumineux, miroir, lentille, thermomètre, changement d’état, cellule, organe, cycle, chaîne alimentaire, courbes, histogrammes, diagrammes, plans, cartes simplifiées, solides, patrons. Une flèche = une ligne plus un petit triangle (polygon) à la pointe. Calcule d’abord les coordonnées de chaque élément (échelle respectée), puis écris le SVG.\nRéponds uniquement par {"figSit":{…}} (géométrie ou {"items":[…]}) ou par {"svg":"…"}.';
+  return await figAny(prompt+'\n'+SCH_CATALOG+'\n'+GEO_DOC+'\n'+FIG_ANY_DOC,{dw:340,ctx:String(situation||'')});
 }
 
 const EPR_DRAW=/(?:^|\n)\s*(?:\d{1,2}\s?[).\-]\s*)?(?:\*\*)?(?:Repr[ée]sente[rz]?|Trace[rz]?|Construi[st]|Construisez|Dessine[rz]?|Sch[ée]matise[rz]?)\b/i;
@@ -2555,9 +2703,10 @@ ${GEO_RULE}
 5) Pour les sciences ou la technologie : schéma simple et lisible (appareil, circuit, vues), avec légendes. En dessin technique, les arêtes visibles sont en trait continu et les arêtes cachées en pointillés (stroke-dasharray=7 5) ; en vues de face, de dessus et de gauche, aligne les vues entre elles et garde les mêmes dimensions.
 6) Balises SVG autorisées : svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan. width="480" height="340" viewBox="0 0 480 340".
 Si aucune figure n’est utile ou possible, mets "svg":"" et propose "query" (recherche Wikimedia Commons).
-Réponds uniquement par {"geo":{…}} (figure de géométrie plane) ou par {"svg":"<svg …>…</svg>","query":""}.`;
+Réponds uniquement par {"geo":{…}} (figure de géométrie plane), par {"items":[…]} (schéma de composants : physique, chimie, solides, courbes, diagrammes) ou par {"svg":"<svg …>…</svg>","query":""}.\n${SCH_CATALOG}\n${FIG_ANY_DOC}`;
   let d=await ask(prompt)||{};
-  if(!(d.geo||d.solide||(d.svg&&String(d.svg).trim()))){
+  if(!d.geo&&!d.solide&&!(d.svg&&String(d.svg).trim())){const sp=figSpecOf(d); if(sp){if(sp.svg) d={svg:sp.svg}; else if(schemaItems(sp).length) d={items:schemaItems(sp)}; else d={geo:sp}}}
+  if(!(d.geo||d.solide||d.items||(d.svg&&String(d.svg).trim()))){
     try{
       const d2=await ask('Tu es un enseignant de mathématiques qui dessine au tableau. Décris la figure de géométrie qui accompagne cette situation (niveau '+(f.classe||'collège')+', leçon « '+(f.titre||'')+' »).\nSituation : '+s.situation+'\nCapacité : '+s.capTitre+'\nLa figure représente exactement les données de la situation, sans la réponse.\n'+GEO_DOC+'\nRéponds uniquement par {"geo":{…}}.');
       if(d2&&d2.geo) d=d2;
@@ -2692,9 +2841,9 @@ ${desc}`;
   if(A){put(s.m.remob,'prof',d.remobProf);put(s.m.remob,'eleve',d.remobEleve);put(s.m.appro,'eleve',d.approEleve);put(s,'synthese',d.synthese);put(s,'essentiel',d.essentiel);put(s,'exoApp',d.exoApp);put(s,'exoMaison',d.exoMaison)}
   else{put(s.m.prereq,'prof',d.prereqProf);put(s.m.prereq,'eleve',d.prereqEleve);put(s,'consignes',d.consignes);put(s,'resolution',d.resolution);put(s,'trace',d.trace);put(s,'exoApp',d.exoApp);put(s,'exoAppSol',d.exoAppSol);put(s,'evalQ',d.evalQ);put(s,'evalR',d.evalR);put(s,'exoMaison',d.exoMaison);put(s,'exoMaisonSol',d.exoMaisonSol)}
   let axisDone=false;
-  if(needsAxis(f,s)&&(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))){
+  if(needsCourseFig(f,s)&&(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))){
     pstep(i,'tracé de la figure');
-    try{const ims=await genCourseFigures(f,i); if(ims.length){s.figs=ims;axisDone=true}}
+    try{let ims=await genCourseFigures(f,i); if(!ims.length&&(needsAxis(f,s)||needsCourseGeo(f,s))) ims=await genCourseFigures(f,i); if(ims.length){s.figs=ims;axisDone=true}}
     catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
   }
   const imageField=A?'img':'traceImg';
@@ -2703,6 +2852,7 @@ ${desc}`;
     let ok=false;
     if(g&&g.geo){try{const im=await eprFig(g.geo,380,true);if(im){s[imageField]=im;ok=true}}catch(e){}}
     if(!ok&&g&&g.solide){try{s[imageField]=await svgToPngImage(cavalierSvg(g.solide));if(g.solide.objet)s[imageField].credit='Représentation'+(/vue/i.test(String(g.solide.representation))?' en vues':' en perspective cavalière')+' : '+String(g.solide.objet)+(g.solide.creux===true?' (creux)':'')+' — schéma généré automatiquement, vérifier les dimensions';ok=true}catch(e){}}
+    if(!ok&&g&&Array.isArray(g.items)&&g.items.length){try{const im=await eprFigOf({items:g.items},380);if(im){s[imageField]=im;ok=true}}catch(e){}}
     if(!ok&&g&&g.svg){try{s[imageField]=await svgToPngImage(g.svg);ok=true}catch(e){}}
     if(!ok){s.imgKey=String((g&&g.query)||((f.titre||'illustration pédagogique')+' '+(s.capTitre||'')));s.autoImgSearch=true;
       if(FIG_REF.test(s.situation||'')) (GEN.figMissing=GEN.figMissing||[]).push(i+1)}
@@ -3268,7 +3418,7 @@ function buildEprDoc(E){
   doc.push(exT(2,'Questions objectives',E.p2));
   (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});eprPartBlocks(p,false).forEach(b=>doc.push(b))});
   doc.push(exT(3,'Questions traditionnelles',E.p3));
-  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});eprPartBlocks(p,false).forEach(b=>doc.push(b))});
+  (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre+'*** '+(p.bareme||'')],keep:true,gap:2});eprPartBlocks(EPR_DRAW.test(eprItems(p.enonce||''))?Object.assign({},p,{fig:null}):p,false).forEach(b=>doc.push(b))});
   doc.push({t:'p',lines:['**__Proposition de corrigé type__**'],align:'center',gap:10,pb:true});
   doc.push({t:'p',lines:['**__Exercice 1__**'],keep:true,gap:4});
   if(C.corrSitFig) figFlow(String(C.corrSit).split('\n'),capFig(C.corrSitFig),{gap:8,lc:{just:false},p:{just:false}}).forEach(b=>doc.push(b));
@@ -3406,13 +3556,30 @@ async function genEpreuve(E){
      const planned=!!(d.figSit&&typeof d.figSit==='object')||hasRef;
      /* physique-chimie : schéma redessiné à partir du texte final, pour qu’il corresponde exactement au protocole décrit */
      if(expDisc&&planned){try{C.figSit=await eprExpFigure(E,C.situation)}catch(e){stop(e)}}
-     if(!C.figSit){C.figSit=await eprFigOf(d.figSit,320); if(C.figSit) C.corrSitFig=await eprFigOf(d.figCorrSit,320)}
+     if(!C.figSit){C.figSit=await eprFigOf(d.figSit,320)}
      /* le texte renvoie à une figure que l’IA n’a pas fournie (ou illisible) : figure de n’importe quel type tracée d’après le texte */
      if(!C.figSit&&planned){try{C.figSit=await eprSitFigure(E,C.situation)}catch(e){stop(e)}}
    }
-   /* corrigé de la situation : quand une consigne demande de représenter, tracer, dessiner, schématiser ou construire (par exemple représenter une force), le corrigé montre la figure complétée, pas seulement un texte */
-   if(!noFig&&!C.corrSitFig&&/\b(repr[ée]sent\w*|trac\w+|dessin\w*|sch[ée]matis\w*|construi\w*)\b/i.test(C.consignes.join(' \n '))){
-     try{C.corrSitFig=await eprSitFigure(E,C.situation+'\n\nConsignes : '+C.consignes.join(' | ')+'\nCorrigé attendu (texte) : '+String(C.corrSit||'').slice(0,1200)+(C.figSit&&C.figSit.schema?'\n\nFigure de la situation, à reprendre telle quelle puis à compléter avec la réponse (composants JSON) : '+JSON.stringify(C.figSit.schema).slice(0,2200):''),true)}catch(e){stop(e)}
+   /* corrigé de la situation : quand une consigne demande de représenter, tracer, dessiner, schématiser ou construire, le corrigé montre le schéma de départ COMPLÉTÉ par la réponse (jamais le même schéma que l’énoncé) */
+   {
+     const drawTask=/\b(repr[ée]sent\w*|trac\w+|dessin\w*|sch[ée]matis\w*|construi\w*)\b/i.test(C.consignes.join(' \n '));
+     C.corrSitFig=null;
+     if(drawTask){
+       const baseSp=C.figSit&&(C.figSit.schema||C.figSit.geo||C.figSit.svgSrc)||null;
+       const nIt=sp=>sp&&Array.isArray(sp.items)?sp.items.length:0;
+       const baseTxt=baseSp?(typeof baseSp==='string'?baseSp:JSON.stringify(baseSp)).slice(0,3000):'';
+       const ctxt=C.situation+'\n\nConsignes : '+C.consignes.join(' | ')+'\nCorrigé attendu (texte) : '+String(C.corrSit||'').slice(0,1400);
+       for(let t=0;t<2&&!C.corrSitFig;t++){
+         try{
+           const im=await eprSitFigure(E,ctxt+(baseTxt?'\n\nSCHÉMA DE LA SITUATION (à reprendre à l’identique : mêmes éléments, mêmes positions) : '+baseTxt+'\nRenvoie le schéma COMPLET : les éléments de départ PLUS ce que la consigne demande de représenter ou de tracer, exactement comme le corrigé le décrit (nom, sens, point d’application, longueur selon l’échelle, valeur).':'\n\nDessine ce que la consigne demande de représenter ou de tracer, exactement comme le corrigé le décrit.')+(t?'\n\nATTENTION : ta figure précédente n’ajoutait pas la réponse. Ajoute CLAIREMENT les éléments demandés par la consigne (par exemple la flèche de la force, avec son nom et sa valeur).':''),true);
+           if(im){
+             let same=false;
+             if(baseSp){const sp=im.schema||im.geo||im.svgSrc||null; if(sp&&JSON.stringify(sp)===JSON.stringify(baseSp)) same=true; else if(im.schema&&baseSp.items&&nIt(im.schema)<=nIt(baseSp)) same=true}
+             if(!same) C.corrSitFig=im;
+           }
+         }catch(e){stop(e)}
+       }
+     }
    }
    /* pas de figure : le texte ne doit renvoyer à aucune figure */
    if(!C.figSit){C.situation=eprUnref(C.situation);C.consignes=C.consignes.map(eprUnref)}
