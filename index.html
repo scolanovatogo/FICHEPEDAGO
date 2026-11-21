@@ -1816,6 +1816,56 @@ async function guideAiExtract(blk,f){
   arr.forEach(x=>{const t=Array.isArray(x&&x.essentiel)?x.essentiel.join('\n'):String(x&&x.essentiel||'').trim(); if(t&&x.n) out.push('=== SÉANCE '+(+x.n)+' ===\n'+t)});
   return out.join('\n\n').slice(0,9000);
 }
+
+/* ===== Figures du document d’accompagnement : l’application prend la photo des images du guide (pages de la leçon) et les place selon le contexte ===== */
+async function guideExtractImages(doc,pageNums,secOfPage){
+  const lib=await pdfLib(), OPS=lib.OPS||{}, out=[];
+  const mul=(m,n)=>[m[0]*n[0]+m[2]*n[1],m[1]*n[0]+m[3]*n[1],m[0]*n[2]+m[2]*n[3],m[1]*n[2]+m[3]*n[3],m[0]*n[4]+m[2]*n[5]+m[4],m[1]*n[4]+m[3]*n[5]+m[5]];
+  const IMG=new Set([OPS.paintImageXObject,OPS.paintInlineImageXObject,OPS.paintImageMaskXObject,OPS.paintJpegXObject,OPS.paintImageXObjectRepeat].filter(x=>x!=null));
+  for(const pn of pageNums.slice(0,40)){
+    try{
+      const pg=await doc.getPage(pn), vp=pg.getViewport({scale:2});
+      const ol=await pg.getOperatorList();
+      let ctm=[1,0,0,1,0,0]; const stack=[]; let boxes=[];
+      for(let k=0;k<ol.fnArray.length;k++){
+        const fn=ol.fnArray[k], a=ol.argsArray[k];
+        if(fn===OPS.save) stack.push(ctm.slice());
+        else if(fn===OPS.restore){if(stack.length) ctm=stack.pop()}
+        else if(fn===OPS.transform) ctm=mul(ctm,a);
+        else if(fn===OPS.paintFormXObjectBegin){stack.push(ctm.slice()); if(Array.isArray(a&&a[0])) ctm=mul(ctm,a[0])}
+        else if(fn===OPS.paintFormXObjectEnd){if(stack.length) ctm=stack.pop()}
+        else if(IMG.has(fn)){
+          const fm=mul(vp.transform,ctm), pts=[[0,0],[1,0],[0,1],[1,1]].map(q=>[fm[0]*q[0]+fm[2]*q[1]+fm[4],fm[1]*q[0]+fm[3]*q[1]+fm[5]]);
+          const xs=pts.map(q=>q[0]),ys=pts.map(q=>q[1]); boxes.push({x0:Math.min(...xs),y0:Math.min(...ys),x1:Math.max(...xs),y1:Math.max(...ys)});
+        }
+      }
+      boxes=boxes.filter(b=>(b.x1-b.x0)>=90&&(b.y1-b.y0)>=70&&!((b.x1-b.x0)>vp.width*0.92&&(b.y1-b.y0)>vp.height*0.75));
+      /* fusion des images voisines qui forment une même figure */
+      let moved=true; while(moved){moved=false;for(let a=0;a<boxes.length&&!moved;a++)for(let b=a+1;b<boxes.length&&!moved;b++){const A=boxes[a],B=boxes[b],g=6;
+        if(A.x0<B.x1+g&&B.x0<A.x1+g&&A.y0<B.y1+g&&B.y0<A.y1+g){boxes[a]={x0:Math.min(A.x0,B.x0),y0:Math.min(A.y0,B.y0),x1:Math.max(A.x1,B.x1),y1:Math.max(A.y1,B.y1)};boxes.splice(b,1);moved=true}}}
+      if(!boxes.length) continue;
+      const cv=document.createElement('canvas'); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+      const cx=cv.getContext('2d'); cx.fillStyle='#fff'; cx.fillRect(0,0,cv.width,cv.height);
+      await pg.render({canvasContext:cx,viewport:vp}).promise;
+      const tc=await pg.getTextContent();
+      const tx=tc.items.filter(it=>it.str&&it.str.trim()).map(it=>({s:it.str,x:vp.transform[0]*it.transform[4]+vp.transform[2]*it.transform[5]+vp.transform[4],y:vp.transform[1]*it.transform[4]+vp.transform[3]*it.transform[5]+vp.transform[5]}));
+      for(const b of boxes){
+        const pad=6,x0=Math.max(0,b.x0-pad),y0=Math.max(0,b.y0-pad),x1=Math.min(cv.width,b.x1+pad),y1=Math.min(cv.height,b.y1+pad),w=x1-x0,h=y1-y0; if(w<60||h<50) continue;
+        const sc=Math.min(1,600/w), c2=document.createElement('canvas'); c2.width=Math.max(1,Math.round(w*sc)); c2.height=Math.max(1,Math.round(h*sc));
+        c2.getContext('2d').drawImage(cv,x0,y0,w,h,0,0,c2.width,c2.height);
+        const ctx=tx.filter(t=>t.y>=b.y0-60&&t.y<=b.y1+70&&t.x>=b.x0-70&&t.x<=b.x1+70).map(t=>t.s).join(' ').replace(/\s+/g,' ').slice(0,260);
+        out.push({src:c2.toDataURL('image/jpeg',0.78),w:c2.width,h:c2.height,dw:Math.min(320,c2.width),credit:'Figure du document d’accompagnement',ctx:(secOfPage(pn)+' '+ctx).trim(),page:pn,area:w*h});
+      }
+    }catch(e){}
+  }
+  return out.sort((a,b)=>b.area-a.area).slice(0,14).sort((a,b)=>a.page-b.page).map(x=>{delete x.area;return x});
+}
+/* figures du guide qui correspondent au contexte d’une séance (mots communs avec ses capacités, contenus et son essentiel) */
+function guideFigsFor(f,sc,max){
+  const L=Array.isArray(f.guideImgs)?f.guideImgs:[]; if(!L.length||!sc) return [];
+  const w=guideWords([sc.capTitre,sc.contenus,sc.essentiel,sc.trace,sc.situation].join(' ')), ws=new Set(guideWords((sc.capTitre||'')+' '+(sc.contenus||'')));
+  return L.map(im=>({im,sc:guideScore(im.ctx||'',w,ws)})).filter(x=>x.sc>=3).sort((a,b)=>b.sc-a.sc).slice(0,max||3).map(x=>({src:x.im.src,w:x.im.w,h:x.im.h,dw:x.im.dw||300,credit:x.im.credit||'',fromGuide:true}));
+}
 let GUIDE_MSG='';
 async function importGuide(file){
   const f=F(); const say=t=>{flash(t);GUIDE_MSG=t;const st=document.getElementById('guideStatus');if(st)st.textContent=t};
@@ -1826,7 +1876,8 @@ async function importGuide(file){
   if(isPdf){
     try{
       say('Lecture du document…'); const r=await pdfRead(file,150);
-      const pgs=r.text.split(/--- page \d+ ---\n/).filter(x=>x.trim());
+      const rawParts=r.text.split(/--- page (\d+) ---\n/); const pgs=[],pnums=[];
+      for(let q=1;q<rawParts.length;q+=2){if((rawParts[q+1]||'').trim()){pgs.push(rawParts[q+1]);pnums.push(+rawParts[q])}}
       if(pgs.join('').replace(/\s/g,'').length>800){
         say('Recherche de la leçon « '+(key||'')+' » dans le document ('+pgs.length+' pages)…');
         const blk=guideLessonText(pgs,f);
@@ -1834,7 +1885,15 @@ async function importGuide(file){
           let res=null, how='';
           if(aiKind()&&(f.seances||[]).length){ try{say('Extraction de l’essentiel pour chaque séance…'); res=await guideAiExtract(blk,f); how='par l’IA'}catch(e){ if(e&&e.code==='cancelled'){say('Annulé.');return} res=null} }
           if(!res){res=guideLocalExtract(blk,f); how='automatiquement (sans IA)'}
-          f.guide=res.slice(0,9000); touch(); say('Leçon repérée dans le guide : « '+blk.title.replace(/\s+/g,' ').slice(0,90)+' ». Essentiel retenu '+how+', séance par séance. Relisez ci-dessous et retirez ce qui ne convient pas.'); render(); return;
+          f.guide=res.slice(0,9000);
+          try{
+            say('Prise des figures du document pour cette leçon…');
+            const real=blk.secs.map(x=>pnums[x.page-1]).filter(Boolean); const lo=Math.min(...real),hi=Math.max(...real);
+            const pages=[];for(let q=lo;q<=hi;q++) pages.push(q);
+            const secOf=pn=>{let t='';for(const x of blk.secs){if(pnums[x.page-1]<=pn&&x.title) t=x.title}return t};
+            f.guideImgs=await guideExtractImages(r.doc,pages,secOf);
+          }catch(e){f.guideImgs=[]}
+          touch(); say('Leçon repérée dans le guide : « '+blk.title.replace(/\s+/g,' ').slice(0,90)+' ». Essentiel retenu '+how+', séance par séance. Relisez ci-dessous et retirez ce qui ne convient pas.'+((f.guideImgs||[]).length?' '+f.guideImgs.length+' figure(s) du document ont été récupérées : elles seront placées dans les séances selon le contexte.':'')); render(); return;
         }
       }
     }catch(e){say('Lecture directe du PDF impossible ('+(e&&e.message?e.message:'erreur')+') : essai d’une autre méthode…')}
@@ -2151,6 +2210,7 @@ function figsBlock(f,s,i){
   const L=Array.isArray(s.figs)?s.figs:[];
   return `<div class="moment"><h4>Figures du cours (autant que nécessaire)</h4>
    ${L.map((im,k)=>`<div class="row" style="align-items:center;gap:10px"><img class="thumb" alt="Figure ${k+1}" src="${im.src}"><label class="f" for="fw_${i}_${k}" style="max-width:190px">Largeur (px)<input type="number" id="fw_${i}_${k}" data-p="seances.${i}.figs.${k}.dw" min="80" max="600" value="${im.dw||300}"></label><button class="btn danger sm" type="button" data-delfig="${i}|${k}">Retirer</button></div>`).join('')}
+   ${(Array.isArray(f.guideImgs)&&f.guideImgs.length)?`<div style="margin-top:8px"><div class="hint">Figures du document d’accompagnement : cliquez sur une figure pour l’ajouter à cette séance</div><div class="row" style="gap:6px;flex-wrap:wrap">${f.guideImgs.map((im,k)=>`<button type="button" class="btn alt sm" data-guidepick="${i}|${k}" title="${esc((im.ctx||'').slice(0,120))}" style="padding:2px"><img alt="Figure du document ${k+1}" src="${im.src}" style="height:56px;display:block"></button>`).join('')}</div></div>`:''}
    <label class="f" for="fd-${i}" style="margin-top:6px"><span class="hint">Décrivez la figure à tracer (facultatif) — ex. : demi-droite graduée de 0 à 6 avec A(1) et B(2,5)</span><input type="text" id="fd-${i}" placeholder="Laissez vide pour que l’application choisisse les figures du cours"></label>
    <div class="row" style="margin-top:6px"><button class="btn alt sm" type="button" data-figadd="${i}">Ajouter des figures tracées automatiquement</button></div></div>`;
 }
@@ -2439,7 +2499,7 @@ async function eprFig(spec,dw,keepCredit){
   im.dw=(spec&&(spec.droiteGraduee||spec.axe))?Math.max(dw||0,420):(dw||320); if(!keepCredit) im.credit=''; im.geo=spec; return im;
 }
 /* ===== Moteur de schémas : l’IA décrit des composants, l’application les dessine proprement (en couleur) ===== */
-const SCH_COL={eau:'#a9def0',jaune:'#ffe600',rouge:'#e02020',vert:'#1f9d3a',bleu:'#1f5fd0',orange:'#ff8c00',violet:'#7a1fa2',gris:'#b4b4b4',noir:'#000000',marron:'#8b5a2b',rose:'#f48fb1',incolore:'#ffffff',blanc:'#ffffff',cuivre:'#b87333',rouille:'#b5522b',bleupale:'#9fd0ff',vertpale:'#bfe8bf',trouble:'#ddd8c8',brun:'#7a4a21',argent:'#d0d0d0',zinc:'#9aa5ad',fer:'#6e6e6e',noirci:'#2b2b2b'};
+const SCH_COL={eau:'#a9def0',jaune:'#ffe600',rouge:'#e02020',vert:'#1f9d3a',bleu:'#1f5fd0',orange:'#ff8c00',violet:'#7a1fa2',gris:'#b4b4b4',noir:'#000000',marron:'#8b5a2b',rose:'#f48fb1',incolore:'#ffffff',blanc:'#ffffff',cuivre:'#b87333',rouille:'#b5522b',bleupale:'#9fd0ff',vertpale:'#bfe8bf',trouble:'#ddd8c8',brun:'#7a4a21',argent:'#d0d0d0',zinc:'#9aa5ad',fer:'#6e6e6e',noirci:'#2b2b2b',alcool:'#e4f2fb',ethanol:'#e4f2fb',eausalee:'#b4d6e8',eausucree:'#cfe4ef',eaudistillee:'#a9def0',huile:'#f0d27a',mercure:'#c3c7cd',petrole:'#c9a96e',essence:'#f3e39a',glycerine:'#e6eedc',lait:'#fbfbf4',vinaigre:'#f1e0b0',sulfatedecuivre:'#4aa3df',permanganate:'#8e1f6e',eaudechaux:'#e9e6dc',saumure:'#b4d6e8'};
 function schemaItems(spec){
   if(Array.isArray(spec)) return spec;
   if(spec&&Array.isArray(spec.items)) return spec.items;
@@ -2449,7 +2509,7 @@ function schemaItems(spec){
 function schemaToSvg(spec){
   const items=schemaItems(spec), W=480, H=300, out=[];
   const num=(v,d)=>{const x=parseFloat(String(v==null?'':v).replace(',','.'));return Number.isFinite(x)?Math.max(-100,Math.min(700,x)):d};
-  const col=(c,d)=>{c=String(c==null?'':c).trim().toLowerCase();if(SCH_COL[c])return SCH_COL[c];if(/^#[0-9a-f]{3,8}$/.test(c))return c;return d};
+  const col=(c,d)=>{c=String(c==null?'':c).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\s_'’-]+/g,'');if(SCH_COL[c])return SCH_COL[c];if(/^#[0-9a-f]{3,8}$/.test(c))return c;return d};
   const esc=t=>String(t==null?'':t).replace(/[<>&"]/g,m=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[m]));
   const f=v=>Math.round(v*10)/10;
   const line=(x1,y1,x2,y2,w,c)=>out.push(`<line x1="${f(x1)}" y1="${f(y1)}" x2="${f(x2)}" y2="${f(y2)}" stroke="${c||'#000'}" stroke-width="${w||2}" stroke-linecap="round"/>`);
@@ -2703,20 +2763,87 @@ function schemaToSvg(spec){
       const bw=num(it.w,22),bh=num(it.h,14); poly([[x,y],[x+bw,y],[x+bw*0.8,y+bh],[x+bw*0.2,y+bh]],SCH_COL.marron,'#000',1.5,true);
     }else if(t==='monticule'||t==='depot'||t==='poudre'){
       const c=col(it.couleur,SCH_COL.marron); out.push(`<path d="M ${f(x)} ${f(y+h)} Q ${f(x+w/2)} ${f(y-h)} ${f(x+w)} ${f(y+h)} Z" fill="${c}" stroke="#555" stroke-width="1.2"/>`);
-    }else if(t==='balance'){
+    }else if(t==='balancenumerique'||(t==='balance'&&/num|electron|digit/.test(String(it.type||it.forme||'')))){
       const ww=num(it.w,140); rect(x+ww*0.12,y,ww*0.76,6,'#bbb','#000',2); poly([[x,y+6],[x+ww,y+6],[x+ww*0.96,y+48],[x+ww*0.04,y+48]],'#e8e8e8','#000',2,true);
       rect(x+ww*0.27,y+16,ww*0.46,20,'#cfe8cf','#000',1.5); text(x+ww/2,y+31,it.valeur||it.texte||'',13,'middle','#000',true);
+    }else if(t==='balance'||t==='roberval'||t==='balanceroberval'||t==='balancederoberval'||t==='balanceadeuxplateaux'||t==='balancedeuxplateaux'){
+      /* balance de Roberval : fléau, aiguille, deux plateaux suspendus ; x,y = pivot du fléau */
+      const bw=num(it.w,190), ang=Math.max(-12,Math.min(12,num(it.incline,0)))*Math.PI/180, hc=num(it.h,110);
+      const Lx=x-bw/2*Math.cos(ang),Ly=y-bw/2*Math.sin(ang),Rx=x+bw/2*Math.cos(ang),Ry=y+bw/2*Math.sin(ang);
+      poly([[x-52,y+hc],[x+52,y+hc],[x+40,y+hc-12],[x-40,y+hc-12]],'#c9c9c9','#000',2.2,true);
+      rect(x-5,y,10,hc-12,'#e2e2e2','#000',2);
+      line(Lx,Ly,Rx,Ry,5,'#444'); circle(x,y,6,'#fff','#000',2.4);
+      line(x,y,x,y-24,2.2); poly([[x-4,y-24],[x+4,y-24],[x,y-34]],'#e02020','#000',1.2,true);
+      const pw=num(it.pw,78);
+      const plate=(ex,ey,items,lab)=>{
+        const py=ey+(num(it.cord,70));
+        line(ex,ey,ex-pw/2,py,1.4); line(ex,ey,ex+pw/2,py,1.4); circle(ex,ey,3,'#000','#000',1);
+        ellipse(ex,py+2,pw/2,5,'#d8d8d8','#000',2);
+        const L=(Array.isArray(items)?items:(items?[items]:[])).slice(0,5); let cx0=ex-(L.length-1)*15;
+        L.forEach((o,k)=>{const ob=(typeof o==='object'&&o)?o:{l:String(o)}; const label=ob.l||ob.label||ob.texte||'', cc=col(ob.c||ob.couleur,/g\b|kg|masse/i.test(label)?'#9a9a9a':'#d9c08a');
+          const bwid=/g\b|kg/i.test(label)?26:30, bh=/g\b|kg/i.test(label)?16:24; const px=L.length===1?ex:cx0+k*30;
+          rect(px-bwid/2,py-bh,bwid,bh,cc,'#000',1.6); text(px,py-bh/2+4,label.length<=6?label:'',10,'middle','#000',true);
+          if(label.length>6) text(px,py-bh-4,label,12)});
+        if(lab) text(ex,py+24,lab,13);
+      };
+      plate(Lx,Ly,it.gauche||it.objet,it.labelG||it.labelGauche); plate(Rx,Ry,it.droite||it.masses,it.labelD||it.labelDroite);
+      if(it.label) text(x,y+hc+18,it.label,13);
+    }else if(t==='dynamometre'||t==='pesant'||t==='ressortpesant'||t==='peson'){
+      /* dynamomètre : x,y = anneau de suspension ; valeur (ex. « 2,5 N ») ou niveau (0 à 1) ; max = graduation maximale en N ; charge = objet suspendu */
+      const mx=Math.max(1,num(it.max,5)), vv=parseFloat(String(it.valeur||'').replace(',','.')), lvl=Number.isFinite(vv)?Math.max(0,Math.min(1,vv/mx)):Math.max(0,Math.min(1,num(it.niveau,.4)));
+      const spring=(t!=='dynamometre'), top=y+8, len0=num(it.h,60), ext=len0*0.7*lvl;
+      circle(x,y+3,4.5,'none','#000',2.2);
+      let hy;
+      if(spring){
+        const yEnd=top+len0+ext, n=10, pts=[[x,top],[x,top+8]];
+        for(let k=0;k<n;k++) pts.push([x+(k%2?7:-7),top+8+(yEnd-top-16)*(k+.5)/n]); pts.push([x,yEnd-8],[x,yEnd]); poly(pts,'none','#000',2,false);
+        rect(x+15,top+len0-8,12,len0*0.7+16,'#fff','#000',1.6);
+        for(let k=0;k<=mx&&k<=10;k++){const yy=top+len0+len0*0.7*k/mx; line(x+15,yy,x+21,yy,1.2); text(x+31,yy+4,String(k),10,'start')}
+        const ptr=top+len0+ext; line(x,ptr,x+27,ptr,2.4,'#e02020'); hy=yEnd;
+      }else{
+        const bh=num(it.h,110), cy=y+8, ch=bh*0.74;
+        rect(x-12,cy,24,ch,'#f6f6f6','#000',2); line(x,cy+4,x,cy+ch-4,1);
+        const step=mx>10?Math.ceil(mx/10):1;
+        for(let k=0;k<=mx;k+=step){const yy=cy+6+(ch-14)*k/mx; line(x+12,yy,x+18,yy,1.4); text(x+22,yy+4,String(k),10,'start')}
+        for(let k=0;k<mx;k+=step){const yy=cy+6+(ch-14)*(k+step/2)/mx; line(x+12,yy,x+15,yy,1)}
+        const py=cy+6+(ch-14)*lvl; line(x-12,py,x+12,py,2.8,'#e02020');
+        line(x,cy+ch,x,cy+ch+10,2.2); hy=cy+ch+10;
+      }
+      out.push(`<path d="M ${f(x)} ${f(hy)} q 8 2 5 9 q -4 6 -9 1" fill="none" stroke="#000" stroke-width="2.2"/>`);
+      if(it.valeur) text(x+(spring?44:36),hy-(spring?len0*0.3:10),'',13);
+      if(it.valeur) text(x-18,hy-(spring?len0*0.2:24),it.valeur,13,'end','#e02020',true);
+      if(it.label) text(x,y-8,it.label,13);
+      const ch2=String(it.charge||'').toLowerCase();
+      if(ch2){const ob=(ch2==='masse'||ch2==='poids'),cw=ob?26:34,chh=ob?30:34,y1=hy+12; line(x,hy+9,x,y1,1.6);
+        if(ob){poly([[x-cw*0.4,y1],[x+cw*0.4,y1],[x+cw*0.5,y1+chh],[x-cw*0.5,y1+chh]],'#9a9a9a','#000',2,true); text(x,y1+chh*0.65,it.chargeLabel||'',11,'middle','#fff',true)}
+        else{rect(x-cw/2,y1,cw,chh,col(it.couleurCharge,SCH_COL.gris),'#000',2); if(it.chargeLabel) text(x,y1+chh/2+4,it.chargeLabel,12)}}
+    }else if(t==='poids'){
+      const mw=num(it.w,38); line(x,y,x,y+14,2); poly([[x-mw*0.4,y+14],[x+mw*0.4,y+14],[x+mw*0.5,y+38],[x-mw*0.5,y+38]],'#9a9a9a','#000',2,true); text(x,y+31,it.label||it.texte||'',12,'middle','#fff',true);
+    }else if(t==='poussee'||t==='archimede'){
+      /* expérience de la poussée d’Archimède : dynamomètre à ressort, solide immergé dans un bécher de liquide ; x,y = coin haut gauche */
+      const cx=x+75, bw=150, bh=125, by=y+102, niv=Math.max(0.3,Math.min(0.85,num(it.niveau,.62))), yl=by+bh*(1-niv), top=y+8;
+      const slope=14, xl=yy=>x+slope*((yy-by)/bh), xr=yy=>x+bw-slope*((yy-by)/bh);
+      poly([[xl(yl),yl],[xl(by+bh),by+bh],[xr(by+bh),by+bh],[xr(yl),yl]],col(it.liquide,SCH_COL.eau),'none',0);
+      poly([[x,by],[x+slope,by+bh],[x+bw-slope,by+bh],[x+bw,by]],'none','#000',2.6,false); line(xl(yl),yl,xr(yl),yl,1.4,'#3d6fa8');
+      const sz=num(it.taille,36), sy=yl+12;
+      circle(cx,y+3,4.5,'none','#000',2.2); const nS=8,yE=top+40,pts=[[cx,top],[cx,top+6]]; for(let k=0;k<nS;k++) pts.push([cx+(k%2?7:-7),top+6+(yE-top-12)*(k+.5)/nS]); pts.push([cx,yE-6],[cx,yE]); poly(pts,'none','#000',2,false);
+      rect(cx+13,top+18,11,50,'#fff','#000',1.6); for(let k=0;k<=5;k++){const yy=top+22+k*8;line(cx+13,yy,cx+19,yy,1.2)} line(cx,yE,cx+24,yE,2.4,'#e02020');
+      line(cx,yE,cx,sy,1.6); rect(cx-sz/2,sy,sz,sz,col(it.solide,SCH_COL.gris),'#000',2.2); if(it.solideLabel) text(cx,sy+sz/2+4,it.solideLabel,12);
+      if(it.valeurAir) text(x-6,top+8,it.valeurAir,12,'end','#555'); if(it.valeurLiquide) text(x-6,top+26,it.valeurLiquide,13,'end','#e02020',true);
+      if(it.label) text(x+bw/2,by+bh+20,it.label,13,'middle','#000',true);
+      if(it.fleches===true){const m=[cx,sy+sz/2]; head(m[0]+sz*0.9,m[1],m[0]+sz*0.9,m[1]-44,'#1f9d3a',9);line(m[0]+sz*0.9,m[1],m[0]+sz*0.9,m[1]-44,3,'#1f9d3a');text(m[0]+sz*0.9+6,m[1]-44,'Π',14,'start','#1f9d3a',true);
+        line(m[0]-sz*0.9,m[1],m[0]-sz*0.9,m[1]+44,3,'#e02020');head(m[0]-sz*0.9,m[1],m[0]-sz*0.9,m[1]+44,'#e02020',9);text(m[0]-sz*0.9-6,m[1]+44,'P',14,'end','#e02020',true)}
     }else if(t==='chronometre'){
       const r=num(it.r,26); rect(x-4,y-r-10,8,10,'#888','#000',1.5); circle(x,y,r,'#fff','#000',3);
       for(let k=0;k<12;k++){const a=Math.PI*k/6;line(x+(r-4)*Math.sin(a),y-(r-4)*Math.cos(a),x+(r-1)*Math.sin(a),y-(r-1)*Math.cos(a),1.4)}
       text(x,y+5,it.valeur||'',13,'middle','#000',true);
-    }else if(t==='dynamometre'){
+    }else if(t==='dynamometreancien'){
       const hh=num(it.h,120),niv=Math.max(0,Math.min(1,num(it.niveau,.4))),py=y+16+(hh-52)*niv;
       circle(x,y+4,4,'none','#000',2); rect(x-9,y+10,18,hh-30,'#fff','#000',2); line(x,y+14,x,y+hh-24,1);
       for(let k=0;k<=8;k++) line(x+9,y+16+(hh-52)*k/8,x+(k%2?14:18),y+16+(hh-52)*k/8,1.2);
       line(x-9,py,x+9,py,2.5,'#e02020'); line(x,y+hh-20,x,y+hh-8,2); out.push(`<path d="M ${f(x)} ${f(y+hh-8)} Q ${f(x+7)} ${f(y+hh+2)} ${f(x)} ${f(y+hh+4)}" fill="none" stroke="#000" stroke-width="2"/>`);
       if(it.valeur) text(x+22,py+4,it.valeur,13,'start','#e02020',true); if(it.label) text(x,y-8,it.label,13);
-    }else if(t==='masse'){
+    }else if(t==='masse'||t==='massemarquee'){
       const mw=num(it.w,38); line(x,y,x,y+14,2); poly([[x-mw*0.4,y+14],[x+mw*0.4,y+14],[x+mw*0.5,y+38],[x-mw*0.5,y+38]],'#9a9a9a','#000',2,true); text(x,y+31,it.label||it.texte||'',12,'middle','#fff',true);
     }else if(t==='hautparleur'){
       rect(x-10,y-12,12,24,'#ddd','#000',2); poly([[x+2,y-12],[x+28,y-26],[x+28,y+26],[x+2,y+12]],'#f4f4f4','#000',2,true); if(it.label) text(x+8,y+42,it.label,13);
@@ -2912,7 +3039,7 @@ async function eprFigOf(spec,dw){
     return await eprFig(spec,dw,false)
   }catch(e){return null}
 }
-const SCH_EXT_DOC='COMPOSANTS SUPPLÉMENTAIRES (repère 480 × 300, y vers le bas ; couleurs par nom ou #hex) : {"t":"polygone","points":[[x,y],…],"noms":["A","B",…],"fill":"…","label":""} ou {"t":"polygone","n":5,"x":,"y":,"r":,"rot":-90} (polygone régulier) ; {"t":"arc","x":,"y":,"r":,"a1":0,"a2":60,"label":""} (centre x,y ; angles en degrés, sens trigonométrique) ; {"t":"secteur","x":,"y":,"r":,"a1":,"a2":,"fill":""} ; {"t":"angle","x":,"y":,"r":,"a1":,"a2":,"label":"60°"} (deux côtés + arc, ou carré si 90°) ; {"t":"ellipse","x":,"y":,"rx":,"ry":,"fill":""} ; {"t":"chemin","d":"M 10 10 L 50 80 Q 90 10 120 60","fill":"none"} (tracé libre) ; {"t":"fonction","x":,"y":,"w":260,"h":170,"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"expr":["x^2-2*x+1"],"points":[[1,0,"A"]]} (courbes de fonctions dans un repère gradué) ; {"t":"histogramme"|"barres"|"batons","x":,"y":,"w":,"h":,"valeurs":[…],"labels":[…]} ; {"t":"camembert","x":,"y":,"r":,"valeurs":[…],"labels":[…]} ; solides : {"t":"cone"|"sphere"|"cylindre"|"cube"|"parallelepipede"|"pyramide"|"tetraedre"|"prismetriangulaire","x":,"y":,"w":,"h":,"noms":["S","A","B","C","D"],"label":""} (arêtes cachées en pointillés) ; {"t":"patroncube","x":,"y":,"c":36} ; {"t":"grille","x":,"y":,"w":,"h":,"pas":25}. Tous les composants se combinent librement dans une même figure, avec "texte", "legende", "fleche", "cote", "ligne", "cercle", "rect".';
+const SCH_EXT_DOC='COMPOSANTS SUPPLÉMENTAIRES (repère 480 × 300, y vers le bas ; couleurs par nom ou #hex) : {"t":"polygone","points":[[x,y],…],"noms":["A","B",…],"fill":"…","label":""} ou {"t":"polygone","n":5,"x":,"y":,"r":,"rot":-90} (polygone régulier) ; {"t":"arc","x":,"y":,"r":,"a1":0,"a2":60,"label":""} (centre x,y ; angles en degrés, sens trigonométrique) ; {"t":"secteur","x":,"y":,"r":,"a1":,"a2":,"fill":""} ; {"t":"angle","x":,"y":,"r":,"a1":,"a2":,"label":"60°"} (deux côtés + arc, ou carré si 90°) ; {"t":"ellipse","x":,"y":,"rx":,"ry":,"fill":""} ; {"t":"chemin","d":"M 10 10 L 50 80 Q 90 10 120 60","fill":"none"} (tracé libre) ; {"t":"fonction","x":,"y":,"w":260,"h":170,"xmin":-5,"xmax":5,"ymin":-5,"ymax":5,"expr":["x^2-2*x+1"],"points":[[1,0,"A"]]} (courbes de fonctions dans un repère gradué) ; {"t":"histogramme"|"barres"|"batons","x":,"y":,"w":,"h":,"valeurs":[…],"labels":[…]} ; {"t":"camembert","x":,"y":,"r":,"valeurs":[…],"labels":[…]} ; solides : {"t":"cone"|"sphere"|"cylindre"|"cube"|"parallelepipede"|"pyramide"|"tetraedre"|"prismetriangulaire","x":,"y":,"w":,"h":,"noms":["S","A","B","C","D"],"label":""} (arêtes cachées en pointillés) ; {"t":"patroncube","x":,"y":,"c":36} ; {"t":"grille","x":,"y":,"w":,"h":,"pas":25}. BALANCE : {"t":"balance","x":240,"y":80,"w":190,"incline":0,"gauche":["solide"],"droite":["50 g","20 g","5 g"],"labelG":"","labelD":""} = balance de Roberval à deux plateaux (x,y = pivot du fléau ; « incline » en degrés, positif si le plateau droit descend ; gauche et droite = objets ou masses marquées posés sur chaque plateau) ; utilise la balance numérique {"t":"balance","type":"numerique","valeur":"125,4 g"} seulement si la situation parle d’une balance électronique. MESURE DES FORCES : {"t":"dynamometre","x":,"y":,"h":110,"max":5,"valeur":"2,5 N","charge":"masse"|"solide","chargeLabel":"200 g"} = dynamomètre à boîtier gradué en newtons ; {"t":"pesant","x":,"y":,"max":5,"valeur":"1,2 N","charge":"solide"} = pesant à ressort (ressort visible, règle graduée) ; {"t":"masse","x":,"y":,"label":"200 g"} (masse marquée) ; EXPÉRIENCE DE LA POUSSÉE D’ARCHIMÈDE (montage complet) : {"t":"poussee","x":150,"y":10,"liquide":"eausalee","solide":"fer","valeurAir":"P = 2,5 N","valeurLiquide":"F = 1,9 N","label":"Eau salée","fleches":false} (solide accroché à un pesant à ressort et immergé dans un bécher ; « fleches »:true ajoute Π et P pour le corrigé). LIQUIDES (couleur du liquide) : eau, eausalee, eausucree, alcool, huile, mercure, petrole, essence, glycerine, lait, vinaigre, sulfatedecuivre, permanganate, eaudechaux, trouble ; solides : fer, cuivre, zinc, argent, rouille, gris, noirci, marron. Tous les composants se combinent librement dans une même figure, avec "texte", "legende", "fleche", "cote", "ligne", "cercle", "rect".';
 /* Mécanisme universel : n’importe quelle figure (géométrie plane ou dans l’espace, courbes, statistiques, schéma de physique, chimie, SVT, technologie, plan, carte…) */
 const FIG_ANY_DOC='RÈGLE GÉNÉRALE : aucune figure n’est hors de portée : tu peux dessiner N’IMPORTE QUELLE figure utile au cours ou à la situation. Choisis le moyen le plus adapté, puis réponds par UN objet JSON :\n(a) géométrie plane (points, segments, droites, cercles, angles, constructions) → {"geo":{…}} au format ci-dessus ;\n(b) schéma de composants (montages électriques, verrerie, appareils, optique, mécanique, solides, courbes, histogrammes, camemberts, polygones, arcs, angles…) → {"items":[…]} avec les composants décrits ;\n(c) tout autre dessin (organe, cellule, cycle, carte, plan, objet technique, démonstration expérimentale, vue de face/dessus/gauche…) → {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 480 340\\" width=\\"480\\" height=\\"340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; traits noirs, légendes en français, fond blanc.\nTu peux aussi combiner : mets plusieurs composants (b) pour une démonstration expérimentale complète (support, appareil, liquide, flèches, légendes).';
 const EPR_EXP_RULE='DISCIPLINE EXPÉRIMENTALE : la situation d’évaluation DÉCRIT ELLE-MÊME le PROTOCOLE EXPÉRIMENTAL complet : le matériel et les produits utilisés (avec leurs valeurs : masses, volumes, tensions, intensités, longueurs…), le montage réalisé, les étapes de la manipulation dans l’ordre (« On… puis on… »), puis les observations ou mesures obtenues (valeurs chiffrées, couleurs, dépôts, indications des appareils). L’élève n’a rien à chercher ni à inventer : tout ce qu’il faut pour répondre est dans la situation (dispositif expérimental ou objet technique concret : montage électrique, circuit, expérience de chimie, appareil de mesure, objet du quotidien, comme dans les travaux pratiques du manuel). Les consignes demandent de décrire, schématiser ou interpréter CETTE expérience. Le schéma correspond exactement au protocole décrit. COHÉRENCE : la situation décrit UN dispositif (ou deux au plus, présentés comme « Expérience 1 » et « Expérience 2 ») directement lié aux capacités et contenus du FOCUS ; elle n’ajoute aucun dispositif étranger au focus ; chaque dispositif décrit dans le texte figure dans le schéma, et chaque élément du schéma est mentionné dans le texte. Le schéma contient aussi chaque objet sur lequel portent les consignes (par exemple le solide immergé dont on demande de représenter les forces) : une consigne ne renvoie jamais à un schéma qui ne montre pas l’objet concerné. NOTATION : la poussée d’Archimède se note P_A (vecteur poussée d’Archimède P_A, en LaTeX \\vec{P}_A), le poids se note P (LaTeX \\vec{P}), jamais F_A ; sur un schéma, étiquette la poussée « P_A » et le poids « P ». SCHÉMA FACULTATIF : fournis « figSit » SEULEMENT si les contenus évalués l’exigent réellement (montage, circuit, expérience ou objet technique que l’élève doit lire, schématiser ou interpréter) ; sinon mets "figSit":null et n’invente aucun schéma décoratif. Le schéma illustre les contenus du focus (par exemple : un circuit pour l’électricité, un solide plongé dans un liquide pour la poussée d’Archimède, l’électrolyse seulement si c’est elle qui est évaluée), jamais un dispositif tiré d’un exemple. Quand il est fourni, il est décrit avec des COMPOSANTS (l’application les dessine proprement, en couleur) : remplis « figSit » par {"items":[…]}. ZONE : 480 (largeur) × 300 (hauteur), origine en haut à gauche, y vers le bas, marge de 15. Les composants sont dessinés dans l’ordre de la liste : d’abord liquides et récipients, puis tubes, objets, fils, flèches, et enfin les textes. Composants (champs entre crochets facultatifs) : {"t":"becher","x","y","w","h","niveau":0.6,["liquide":"eau"],["forme":"cuve"],["label"]} récipient ouvert (x,y = coin haut gauche ; niveau = fraction remplie de 0 à 1 ; « cuve » = bords évasés) ; {"t":"tube","x","y","w":26,"h":150,"gaz":0.4,["couleurGaz":"jaune"]} tube à essais retourné, fermé en haut (gaz = fraction de la hauteur occupée par le gaz, en haut ; le reste est du liquide) ; {"t":"eprouvette","x","y","w","h","niveau"} ; {"t":"erlenmeyer","x","y","w","h","niveau"} ; {"t":"electrode","x" (centre),"y","h"} ; {"t":"bulles","x","y","w","h","n":5} ; dipôles (x,y = centre) : {"t":"pile","x","y","label":"E"} (bornes en x−14 et x+14), {"t":"lampe","x","y","label":"L"} (bornes en x±16), {"t":"interrupteur","x","y","w":50,"ouvert":true,"label":"K"} (bornes en x±25), {"t":"resistor","x","y","w":50,"label":"R"}, {"t":"appareil","x","y","lettre":"A"} (A, V ou M ; bornes en x±16) ; {"t":"fil","points":[[x,y],…]} fils à angles droits, dont les extrémités se raccordent aux bornes ; {"t":"liquide","x","y","w","h"} nappe de liquide ; {"t":"bloc","x","y","w","h",["couleur":"gris"],["centre":"G"]} solide ; {"t":"fleche","x1","y1","x2","y2",["label":"P"],["vec":true],["couleur":"rouge"],["epaisseur":3]} force ou vecteur (pointe en x2,y2) ; {"t":"cote","x1","y1","x2","y2","label":"h",["couleur"]} cote à double flèche ; {"t":"ressort","x","y","h"} ; {"t":"potence","x","y","h","bras"} ; {"t":"flamme","x","y"}; dipôles et appareils supplémentaires : {"t":"transistor","x","y","type":"npn" ou "pnp","label":"T"} (centre ; bornes : base en x−30, collecteur en (x+20, y−30), émetteur en (x+20, y+30)) ; {"t":"capteur","x","y","w":50,"kind":"ldr" (lumière) ou "ctn" (température) ou "niveau" (eau, humidité) ou "presence" ou "son","label"} ; {"t":"buzzer" ou "sonnette","x","y","label"} (bornes x±26) ; {"t":"diode" ou "del","x","y","w":50} ; {"t":"condensateur","x","y"} ; {"t":"rheostat","x","y","w":56} ; {"t":"fusible","x","y"} ; {"t":"transformateur","x","y","n1":"N₁","n2":"N₂"} (bornes en (x±40, y±30)) ; verrerie et matériel : {"t":"tube_a_essais","x","y","w":30,"h":110,"niveau"} (tube droit, ouvert en haut) ; {"t":"ballon","x","y","w":90,"h":120,"niveau"} ; {"t":"burette","x","y","h":150,"niveau"} ; {"t":"entonnoir","x","y","w":70} ; {"t":"thermometre","x","y","h":100,"niveau"} ; {"t":"becbunsen","x","y"} ; mécanique et technologie : {"t":"plan_incline","x","y","w":220,"h":120,"angle":30} ; {"t":"levier","x","y","w":260} ; {"t":"poulie","x","y","r":22,"h":80} ; {"t":"engrenage","x","y","r":30,"dents":12} ; {"t":"ligne","x1","y1","x2","y2"} ; {"t":"texte","x","y","texte"} ; {"t":"legende","x","y","texte","vers":[x,y]} (texte relié par une flèche à l’élément désigné). AUTRES COMPOSANTS, à utiliser dès qu’ils conviennent à la situation (tu peux en superposer plusieurs : bécher + tubes + électrodes + fils…). Verrerie et chimie : {"t":"tubeessais","x","y","w":26,"h":100,"niveau":0.5,["liquide"]} tube droit ouvert en haut ; {"t":"cristallisoir","x","y","w":90,["h":35],"niveau"} ; {"t":"boitepetri","x","y","w":90} ; {"t":"fiole","x","y","w":70,"h":110,"niveau"} fiole jaugée ; {"t":"ampoule","x","y","w":70,"h":120,"niveau"} ampoule à décanter ; {"t":"flacon","x","y","w":50,"h":80,"niveau",["liquide"]} ; {"t":"pipette","x","y","h":110} ; {"t":"comptegouttes","x","y","h":100,["goutte":true]} ; {"t":"bouchon","x","y"} ; {"t":"conduit","points":[[x,y],…]} tube à dégagement ; {"t":"statif","x","y","h":200} ; {"t":"pince","x","y","bras":40} ; {"t":"trepied","x","y","w":100,"h":50} ; {"t":"refrigerant","x1","y1","x2","y2"} ; {"t":"monticule","x","y","w","h","couleur"} poudre, précipité ou dépôt ; {"t":"electrode","x","y","h",["couleur":"cuivre"],["label"]} lame ou électrode colorée. Mesure : {"t":"balance","x","y","w":140,"valeur":"125,4 g"} (plateau à la hauteur y) ; {"t":"chronometre","x","y","valeur"} ; {"t":"dynamometre","x","y","h":120,"niveau":0.4,"valeur":"1,2 N"} ; {"t":"masse","x","y","label":"100 g"} masse marquée suspendue ; {"t":"multimetre","x","y","valeur":"4,5 V"} ; {"t":"graphique","x","y","w":240,"h":150,"points":[[x,y],…],"xmax","ymax","xlabel","ylabel","label"} courbe (x,y = origine en bas à gauche) ; {"t":"repere","x","y","w","h","labelx","labely"}. Électricité et magnétisme : {"t":"bobine","x","y","w":80,"n":5} (bornes en x±w/2) ; {"t":"aimant","x","y","w":100,"h":30} ; {"t":"boussole","x","y","r":24,"angle":0} ; {"t":"hautparleur","x","y"} ; {"t":"terre","x","y"} ; {"t":"noeud","x","y","label"} ; {"t":"courant","x","y","sens":"droite" ou "gauche" ou "haut" ou "bas","label":"I"}. Optique : {"t":"lentille","x","y","h":120,"type":"convergente" ou "divergente","label"} (x,y = centre) ; {"t":"source","x","y"} ; {"t":"rayon","points":[[x,y],…],["couleur"]} rayon lumineux fléché ; {"t":"axe","x1","y1","x2","y2"} axe en pointillés ; {"t":"point","x","y","label":"F"} ; {"t":"miroir","x","y","h"} ; {"t":"ecran","x","y","h"} ; {"t":"prisme","x","y","w"}. Atome et molécule : {"t":"atome","x","y","r":70,"couches":[2,8,1],"noyau":"11+","label"} modèle en couches ; {"t":"electron","x","y"} ; {"t":"boule","x","y","r":16,"symbole":"O","couleur":"rouge",["charge":"2+"]} atome, ion ou bille ; {"t":"liaison","x1","y1","x2","y2","n":1}. Solides et technologie : {"t":"cylindre","x","y","w","h","couleur"} ; {"t":"cube","x","y","w","h","p":24,"couleur"} parallélépipède ; {"t":"roue","x","y","r"} ; {"t":"courroie","x1","y1","x2","y2","r1","r2"} (poulies alignées horizontalement) ; {"t":"chariot","x","y","w"}. Couleurs : eau, jaune, rouge, vert, bleu, orange, violet, gris, noir, marron, rose, incolore, cuivre, rouille, bleupale, vertpale, trouble, brun, argent, zinc, fer, noirci ou #rrggbb. Dessine le dispositif EXACTEMENT comme le décrit le protocole de la situation (mêmes éléments, même disposition), légende chaque élément important par son nom, ajoute les valeurs données par la situation, sans faire apparaître les réponses attendues, et évite que les textes se chevauchent. Pour une question de l’exercice 2 ou 3 qui s’appuie sur un schéma, utilise aussi le champ « fig » de la partie avec le même format ; « figCorrSit » : schéma complété pour le corrigé, OBLIGATOIRE dès qu’une consigne demande de représenter, tracer, dessiner, schématiser ou construire (par exemple représenter une force : flèches avec direction, sens, point d’application et nom). FORME (syntaxe seulement, sans rapport avec ta situation) : {"items":[{"t":"becher","x":150,"y":120,"w":160,"h":130,"niveau":0.6},{"t":"bloc","x":205,"y":150,"w":50,"h":50,"couleur":"gris"},{"t":"legende","x":400,"y":110,"texte":"Solide","vers":[258,170]}]}\n';
@@ -3160,7 +3287,9 @@ ${desc}`;
   if(A){put(s.m.remob,'prof',d.remobProf);put(s.m.remob,'eleve',d.remobEleve);put(s.m.appro,'eleve',d.approEleve);put(s,'synthese',d.synthese);put(s,'essentiel',d.essentiel);put(s,'exoApp',d.exoApp);put(s,'exoMaison',d.exoMaison)}
   else{put(s.m.prereq,'prof',d.prereqProf);put(s.m.prereq,'eleve',d.prereqEleve);put(s,'consignes',d.consignes);put(s,'resolution',d.resolution);put(s,'trace',d.trace);put(s,'exoApp',d.exoApp);put(s,'exoAppSol',d.exoAppSol);put(s,'evalQ',d.evalQ);put(s,'evalR',d.evalR);put(s,'exoMaison',d.exoMaison);put(s,'exoMaisonSol',d.exoMaisonSol)}
   let axisDone=false;
-  if(needsCourseFig(f,s)&&(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))){
+  const guideFigs=(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))?guideFigsFor(f,s,3):[];
+  if(guideFigs.length){s.figs=guideFigs;axisDone=true}
+  else if(needsCourseFig(f,s)&&(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))){
     pstep(i,'tracé de la figure');
     try{let ims=await genCourseFigures(f,i); if(!ims.length&&(needsAxis(f,s)||needsCourseGeo(f,s))) ims=await genCourseFigures(f,i); if(ims.length){s.figs=ims;axisDone=true}}
     catch(e){if(e&&(e.code==='cancelled'||e.code==='rate_limited'||e.code==='not_granted'||e.code==='fatal'))throw e}
@@ -4668,12 +4797,13 @@ root.addEventListener('click',async e=>{
   if(d.imgsearch){const [i,key]=d.imgsearch.split('|');searchImages(i,key);return}
   if(b.dataset.pick){const [i,key,n]=b.dataset.pick.split('|');pickImage(i,key,+n);return}
   if(d.figadd!==undefined){const i=+d.figadd,st=document.getElementById('ai-'+i),inp=document.getElementById('fd-'+i),ins=((inp&&inp.value)||'').trim();b.disabled=true;
-    try{if(!aiKind()){flash(NO_AI,true);b.disabled=false;return}
+    try{
       const ims=await genCourseFigures(f,i,ins,p=>corrAsk(p,st,'Tracé des figures…'));
       if(ims.length){const s=f.seances[i];s.figs=(s.figs||[]).concat(ims);openSeances.add(i);touch();render2();flash(ims.length+' figure(s) ajoutée(s) : vérifiez-les dans la fiche.')}
       else flash('Aucune figure n’a pu être tracée. Décrivez-la dans la case (ex. « demi-droite graduée de 0 à 6 avec A(1) et B(2,5) »).',true)
     }catch(e){flash(errCopy(e),true)}
     b.disabled=false;return}
+  if(d.guidepick){const [i,k]=d.guidepick.split('|').map(Number);const im=(f.guideImgs||[])[k],sc=f.seances[i];if(im&&sc){sc.figs=(sc.figs||[]).concat([{src:im.src,w:im.w,h:im.h,dw:im.dw||300,credit:im.credit||'',fromGuide:true}]);openSeances.add(i);touch();render2();flash('Figure du document ajoutée.')}return}
   if(d.delfig){const [i,k]=d.delfig.split('|');const s=f.seances[+i];if(Array.isArray(s.figs))s.figs.splice(+k,1);else if(s.imgEss)s.imgEss=null;touch();renderKeepOpen(+i);return}
   if(d.delimg){const [i,key]=d.delimg.split('|');f.seances[+i][key]=null;touch();renderKeepOpen(+i);return}
   if(d.ai!==undefined){b.disabled=true;await fillSeance(+d.ai);return}
@@ -4751,7 +4881,7 @@ root.addEventListener('click',async e=>{
     return}
   if(b.dataset&&b.dataset.cmpclear){const pv=b.dataset.cmpclear;compatCfg(pv).key='';save();setGen('Clé '+COMPAT[pv].nom+' effacée.');render2();return}
   if(b.id==='claudeClear'){DB.ai.ckey='';DB.ai.provider='';save();setGen('Clé Claude effacée.');render2();return}
-  if(b.dataset&&b.dataset.clearguide){f.guide='';touch();render();return}
+  if(b.dataset&&b.dataset.clearguide){f.guide='';f.guideImgs=[];touch();render();return}
   if(b.id==='netTest'||b.id==='netTest2'){
     const deep=b.id==='netTest2';const b2=document.getElementById(deep?'netTest':'netTest2');
     const out=document.getElementById('nettest');const put=t=>{if(out)out.textContent=t};
