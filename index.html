@@ -2269,7 +2269,7 @@ async function eprSitFigure(E,situation,withAnswer){
   return null;
 }
 
-const EPR_DRAW=/\b(repr[ée]sente[rz]?|trace[rz]?|construi[st]|dessine[rz]?|sch[ée]matise[rz]?|place[rz]? les points|compl[èe]te[rz]? (?:le|la|l['’]) ?(?:sch[ée]ma|figure|circuit|tableau)|vecteurs?|diagramme|courbe)\b|\béchelle\b/i;
+const EPR_DRAW=/(?:^|\n)\s*(?:\d{1,2}\s?[).\-]\s*)?(?:\*\*)?(?:Repr[ée]sente[rz]?|Trace[rz]?|Construi[st]|Construisez|Dessine[rz]?|Sch[ée]matise[rz]?)\b/i;
 /* Rédige les corrigés manquants des exercices 2 et 3, puis trace la figure du corrigé quand la question demande de représenter ou de tracer */
 async function eprFillCorriges(E,say){
   const C=E.content; if(!C) return 0; let n=0;
@@ -2285,8 +2285,9 @@ async function eprFillCorriges(E,say){
     need.forEach(x=>{const r=arr.find(y=>y&&String(y.id)===x.id)||arr[need.indexOf(x)];const t=eprItems(eprS(r&&(r.corrige||r.corrigé||r.correction)));
       if(has(t)){ if(x.p.type==='relier'){x.p.liens=t;x.p.corrige=has(x.p.corrige)?x.p.corrige:''} else if(x.p.type==='reordre'){x.p.solution=t} else x.p.corrige=t; n++ }});
   }
-  for(const k of ['ex2','ex3']) for(const p of (C[k]||[])){
-    if(p.type||p.figCorr||!EPR_DRAW.test(p.enonce||'')||!has(p.corrige)) continue;
+  for(const p of (C.ex3||[])){
+    /* uniquement les questions traditionnelles dont une consigne demande de représenter ou tracer (jamais les QCM, vrai/faux, etc.) */
+    if(p.type||p.figCorr||!EPR_DRAW.test(eprItems(p.enonce||''))||!has(p.corrige)) continue;
     if(say) say('Tracé de la figure du corrigé…');
     try{const im=await eprSitFigure(E,'Question : '+p.enonce+'\nCorrigé attendu : '+p.corrige,true); if(im){p.figCorr=im;n++}}
     catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}
@@ -3045,7 +3046,7 @@ function buildEprDoc(E){
     doc.push(tb({thick:true,cols:[21,27,40,12],head:[row([hd('Critères'),hd('Indicateurs'),hd('Niveaux de performance'),hd('Barèmes')])],rows:gr,gap:10}));
   }
   doc.push({t:'p',lines:['**__Exercice 2__**'],keep:true,gap:4});
-  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});eprPartBlocks(p,true).forEach(b=>doc.push(b))});
+  (C.ex2||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});eprPartBlocks(Object.assign({},p,{figCorr:null}),true).forEach(b=>doc.push(b))});
   doc.push({t:'p',lines:['**__Exercice 3__**'],keep:true,gap:4});
   (C.ex3||[]).forEach(p=>{doc.push({t:'p',lines:['***'+p.titre.replace(/\s*\(.*$/,'')+'***'],keep:true,gap:2});eprPartBlocks(p,true).forEach(b=>doc.push(b))});
   return doc;
