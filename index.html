@@ -2259,14 +2259,39 @@ function eprUnref(t){
     .replace(/[ \t]{2,}/g,' ').replace(/\s+([,.;:])/g,'$1').trim();
 }
 /* Figure de TOUT type (géométrie, schéma, courbe, graphique, plan, carte, organe…) tracée à partir du TEXTE FINAL de la situation, pour qu’elle corresponde exactement à ce qui est écrit */
-async function eprSitFigure(E,situation){
+async function eprSitFigure(E,situation,withAnswer){
   const exp=['pct','phys','chim'].includes(E.disc);
-  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau la figure qui accompagne cette situation :\n« '+String(situation||'').slice(0,1400)+' »\nChoisis le type de figure qui convient (figure de géométrie, schéma de montage ou d’objet, courbe, graphique, histogramme, plan, carte simplifiée, schéma d’organe ou de cycle…). Elle montre EXACTEMENT les données du texte (points, longueurs, angles, objets, valeurs, légendes) et rien d’autre, sans la réponse attendue.\nFORMATS possibles : (1) figure de géométrie plane : '+GEO_DOC+'\n'+(exp?'(2) schéma de dispositif : '+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'')+'\n':'')+'('+(exp?'3':'2')+') tout autre dessin : {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"480\\" height=\\"340\\" viewBox=\\"0 0 480 340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan, traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement.\nRéponds uniquement par {"figSit":{…}} (géométrie ou {"items":[…]}) ou par {"svg":"…"}.';
+  const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+') et tu dessines au tableau la figure qui accompagne cette situation :\n« '+String(situation||'').slice(0,1400)+' »\nChoisis le type de figure qui convient (figure de géométrie, schéma de montage ou d’objet, courbe, graphique, histogramme, plan, carte simplifiée, schéma d’organe ou de cycle…). Elle montre EXACTEMENT les données du texte (points, longueurs, angles, objets, valeurs, légendes) et rien d’autre, '+(withAnswer?'et elle montre AUSSI la réponse attendue, tracée comme l’élève doit la tracer (par exemple les forces en flèches à l’échelle indiquée, avec leurs noms et leurs valeurs ; une flèche = une ligne plus un petit triangle polygon à la pointe).':'sans la réponse attendue.')+'\nFORMATS possibles : (1) figure de géométrie plane : '+GEO_DOC+'\n'+(exp?'(2) schéma de dispositif : '+EPR_EXP_RULE.replace(/^DISCIPLINE EXPÉRIMENTALE : /,'')+'\n':'')+'('+(exp?'3':'2')+') tout autre dessin : {"svg":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"480\\" height=\\"340\\" viewBox=\\"0 0 480 340\\">…</svg>"} avec uniquement les balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan, traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement.\nRéponds uniquement par {"figSit":{…}} (géométrie ou {"items":[…]}) ou par {"svg":"…"}.';
   for(let t=0;t<2;t++){
     try{const d=await ask(prompt,{temp:0.3});const im=await eprFigOf(d&&(d.svg?{svg:d.svg}:(d.figSit||d.geo||d)),340);if(im) return im}
     catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
   }
   return null;
+}
+
+const EPR_DRAW=/\b(repr[ée]sente[rz]?|trace[rz]?|construi[st]|dessine[rz]?|sch[ée]matise[rz]?|place[rz]? les points|compl[èe]te[rz]? (?:le|la|l['’]) ?(?:sch[ée]ma|figure|circuit|tableau)|vecteurs?|diagramme|courbe)\b|\béchelle\b/i;
+/* Rédige les corrigés manquants des exercices 2 et 3, puis trace la figure du corrigé quand la question demande de représenter ou de tracer */
+async function eprFillCorriges(E,say){
+  const C=E.content; if(!C) return 0; let n=0;
+  const own=p=>p.type==='relier'?has(p.liens):p.type==='reordre'?has(p.solution):has(p.corrige);
+  const need=[]; ['ex2','ex3'].forEach(k=>(C[k]||[]).forEach((p,i)=>{if(!own(p)&&has(p.enonce||p.gauche||p.groupes)) need.push({id:k+'-'+i,k,i,p})}));
+  if(need.length){
+    if(say) say('Rédaction des corrigés manquants…');
+    const prompt='Tu es enseignant de '+eprDiscNom(E)+' au Togo (classe de '+E.classe+'). Rédige le CORRIGÉ COMPLET et EXACT de chaque question ci-dessous (vérifie chaque calcul) : une réponse par ligne, numérotée comme la question (1), 2), 3)…), avec les formules, les valeurs numériques et les unités ; pour une construction ou une représentation à tracer, décris précisément ce qui doit être tracé (grandeurs, échelle, longueur des flèches).\n'+
+      need.map(x=>'['+x.id+'] '+(x.p.titre||'')+' '+(x.p.bareme||'')+'\n'+String(x.p.enonce||'')+(x.p.gauche?'\nColonne gauche : '+x.p.gauche+'\nColonne droite : '+x.p.droite:'')+(x.p.groupes?'\nGroupes : '+x.p.groupes:'')).join('\n\n')+
+      '\nRéponds uniquement par {"corriges":[{"id":"ex3-0","corrige":"1) …\\n2) …"}]}. '+LATEX_RULE;
+    const d=await ask(prompt,{temp:0.2});
+    const arr=Array.isArray(d&&d.corriges)?d.corriges:[];
+    need.forEach(x=>{const r=arr.find(y=>y&&String(y.id)===x.id)||arr[need.indexOf(x)];const t=eprItems(eprS(r&&(r.corrige||r.corrigé||r.correction)));
+      if(has(t)){ if(x.p.type==='relier'){x.p.liens=t;x.p.corrige=has(x.p.corrige)?x.p.corrige:''} else if(x.p.type==='reordre'){x.p.solution=t} else x.p.corrige=t; n++ }});
+  }
+  for(const k of ['ex2','ex3']) for(const p of (C[k]||[])){
+    if(p.type||p.figCorr||!EPR_DRAW.test(p.enonce||'')||!has(p.corrige)) continue;
+    if(say) say('Tracé de la figure du corrigé…');
+    try{const im=await eprSitFigure(E,'Question : '+p.enonce+'\nCorrigé attendu : '+p.corrige,true); if(im){p.figCorr=im;n++}}
+    catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}
+  }
+  return n;
 }
 async function eprMergeParts(old,arr){
   const out=[]; old=old||[];
@@ -2448,6 +2473,145 @@ ${desc}`;
       if(FIG_REF.test(s.situation||'')) (GEN.figMissing=GEN.figMissing||[]).push(i+1)}
   }
 }
+
+/* =========================================================
+   MÉMOIRE DE MODÈLES : chaque fiche (séances, exercices de synthèse) et chaque épreuve réussie est conservée
+   (texte seulement, sans images) dans le navigateur. Quand l'IA n'est pas disponible, l'application compose
+   elle-même une fiche ou une épreuve à partir des modèles enregistrés qui correspondent le mieux.
+   ========================================================= */
+const LIBKEY='fp_lib_v1', LIB_MAX_S=150, LIB_MAX_E=40, LIB_MAX_B=40;
+let LIB=null;
+function libGet(){
+  if(LIB) return LIB;
+  try{LIB=JSON.parse(localStorage.getItem(LIBKEY)||'null')}catch(e){LIB=null}
+  if(!LIB||typeof LIB!=='object') LIB={};
+  for(const k of ['seances','eprs','bilans']) if(!Array.isArray(LIB[k])) LIB[k]=[];
+  return LIB;
+}
+function libSave(){
+  const L=libGet();
+  for(let t=0;t<4;t++){
+    try{localStorage.setItem(LIBKEY,JSON.stringify(L));return true}
+    catch(e){ for(const k of ['seances','eprs','bilans']) L[k]=L[k].sort((a,b)=>b.ts-a.ts).slice(0,Math.floor(L[k].length*0.7)) }
+  }
+  return false;
+}
+const libN=t=>noAccent(String(t==null?'':t)).toLowerCase().replace(/\s+/g,' ').trim();
+const libTok=t=>new Set(libN(t).split(/[^a-z0-9]+/).filter(w=>w.length>=3));
+function libJac(a,b){if(!a.size||!b.size)return 0;let i=0;a.forEach(w=>{if(b.has(w))i++});return i/(a.size+b.size-i)}
+const LIB_REQ_A=['situation','synthese','essentiel','exoApp','exoMaison'];
+const LIB_REQ_B=['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
+const LIB_F_A=['situation','synthese','essentiel','exoApp','exoMaison'];
+const LIB_F_B=['situation','consignes','resolution','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'];
+const libReq=f=>f.tpl==='A'?LIB_REQ_A:LIB_REQ_B;
+function libTrim(arr,max){arr.sort((a,b)=>b.ts-a.ts);if(arr.length>max) arr.length=max}
+function libAddSeance(f,i){
+  try{
+    const s=f.seances[i]; if(!s||s.libSrc||!libReq(f).every(k=>has(s[k]))||!has(s.capTitre)) return;
+    const L=libGet(), flds=f.tpl==='A'?LIB_F_A:LIB_F_B, fo={};
+    flds.forEach(k=>{if(has(s[k])) fo[k]=String(s[k])});
+    const m={}; if(s.m){for(const [mk,ks] of (f.tpl==='A'?[['remob',['prof','eleve']],['appro',['eleve']]]:[['prereq',['prof','eleve']]])){ if(s.m[mk]){m[mk]={};ks.forEach(k=>{if(has(s.m[mk][k])) m[mk][k]=String(s.m[mk][k])})} }}
+    const key=libN([f.disc,f.classe,f.titre,s.capTitre,s.contenus].join('|'))+'|'+libN(s.situation).slice(0,60);
+    const ent={id:uid(),ts:Date.now(),key,disc:f.disc,sub:f.sub||'',classe:f.classe||'',tpl:f.tpl,titre:f.titre||'',capTitre:String(s.capTitre||''),contenus:String(s.contenus||''),f:fo,m};
+    const j=L.seances.findIndex(x=>x.key===key); if(j>=0) L.seances[j]=ent; else L.seances.push(ent);
+    libTrim(L.seances,LIB_MAX_S);
+  }catch(e){}
+}
+function libAddBilan(f){
+  try{
+    const b=ensureBilan(f); if(!b.every(x=>has(x.q)&&has(x.s))) return;
+    const L=libGet(), key=libN([f.disc,f.classe,f.titre].join('|'));
+    const ent={id:uid(),ts:Date.now(),key,disc:f.disc,sub:f.sub||'',classe:f.classe||'',titre:f.titre||'',n:f.seances.length,caps:f.seances.map(x=>(x.capTitre||'')+' '+(x.contenus||'')).join(' '),bilan:b.map(x=>({q:String(x.q),s:String(x.s)}))};
+    const j=L.bilans.findIndex(x=>x.key===key); if(j>=0) L.bilans[j]=ent; else L.bilans.push(ent);
+    libTrim(L.bilans,LIB_MAX_B);
+  }catch(e){}
+}
+function libAddFiche(f){libInit0(f);f.seances.forEach((_,i)=>libAddSeance(f,i));libAddBilan(f);libSave()}
+function libInit0(){libGet()}
+function libScoreSeance(ent,f,s){
+  if(ent.tpl!==f.tpl||ent.disc!==f.disc) return 0;
+  const a=libTok((s.capTitre||'')+' '+(s.contenus||'')), b=libTok(ent.capTitre+' '+ent.contenus);
+  const jac=libJac(a,b); if(jac<0.2) return 0;
+  let sc=jac*10; if(ent.classe===(f.classe||'')) sc+=3; else sc+=0.3;
+  if(libN(ent.titre)===libN(f.titre)) sc+=2; if((ent.sub||'')===(f.sub||'')) sc+=0.5;
+  return sc;
+}
+function libBestSeance(f,i){
+  const s=f.seances[i], taken=new Set(f.seances.map(x=>x.libSrc).filter(Boolean));
+  const c=libGet().seances.map(e=>({e,sc:libScoreSeance(e,f,s)})).filter(x=>x.sc>0&&!taken.has(x.e.id)).sort((x,y)=>y.sc-x.sc);
+  if(!c.length) return null;
+  const top=c.filter(x=>x.sc>=c[0].sc*0.85).slice(0,3);
+  return top[Math.floor(Math.random()*top.length)].e;
+}
+function libHasFiche(f){return f.seances.some((s,i)=>!libReq(f).every(k=>has(s[k]))&&has(s.capTitre)&&libBestSeance(f,i))}
+function libFillSeance(f,i){
+  const s=f.seances[i], ent=libBestSeance(f,i); if(!ent) return false;
+  for(const k of Object.keys(ent.f)) if(!has(s[k])) s[k]=ent.f[k];
+  if(ent.m&&s.m) for(const mk of Object.keys(ent.m)){ if(s.m[mk]) for(const k of Object.keys(ent.m[mk])) if(has(ent.m[mk][k])&&(!has(s.m[mk][k])||s.m[mk][k]===(DEF[f.tpl]&&DEF[f.tpl][mk]&&DEF[f.tpl][mk][k]))) s.m[mk][k]=ent.m[mk][k] }
+  s.libSrc=ent.id; delete s.genPartial;
+  return libReq(f).every(k=>has(s[k]));
+}
+function libFillBilan(f){
+  const sc=libTok(f.seances.map(x=>(x.capTitre||'')+' '+(x.contenus||'')).join(' '));
+  const c=libGet().bilans.filter(b=>b.disc===f.disc).map(b=>({b,sc:libJac(sc,libTok(b.caps))*10+(b.classe===(f.classe||'')?3:0)+(libN(b.titre)===libN(f.titre)?2:0)})).filter(x=>x.sc>=2.5).sort((x,y)=>y.sc-x.sc);
+  if(!c.length) return false;
+  const bl=ensureBilan(f); c[0].b.bilan.forEach((x,i)=>{if(bl[i]&&!(has(bl[i].q)&&has(bl[i].s))){bl[i].q=x.q;bl[i].s=x.s}});
+  return bl.every(x=>has(x.q)&&has(x.s));
+}
+/* ---- épreuves ---- */
+function libEprClean(E){
+  const C=JSON.parse(JSON.stringify(E.content||{}));
+  delete C.figSit; delete C.corrSitFig;
+  for(const k of ['ex2','ex3']) (C[k]||[]).forEach(p=>{delete p.fig;delete p.figCorr});
+  return C;
+}
+function libAddEpr(E){
+  try{
+    const C=E.content; if(!C||!has(C.situation)||!Array.isArray(C.grille)||!C.grille.length||!(C.ex2||[]).length||!(C.ex3||[]).length) return;
+    const L=libGet(), key=libN(C.situation).slice(0,90);
+    const ent={id:uid(),ts:Date.now(),key,disc:E.disc,sub:E.sub||'',classe:E.classe||'',model:eprModel(E),p1:parseN(E.p1),p2:parseN(E.p2),p3:parseN(E.p3),caps:String(E.caps||''),content:libEprClean(E)};
+    const j=L.eprs.findIndex(x=>x.key===key); if(j>=0) L.eprs[j]=ent; else L.eprs.push(ent);
+    libTrim(L.eprs,LIB_MAX_E); libSave();
+  }catch(e){}
+}
+function libPickEpr(E){
+  const m=eprModel(E), used=new Set(E.libUsed||[]), ct=libTok(String(E.caps||'').replace(/^#.*$/gm,''));
+  const base=libGet().eprs.filter(x=>x.disc===E.disc&&x.model===m&&x.p1===parseN(E.p1)&&x.p2===parseN(E.p2)&&x.p3===parseN(E.p3))
+    .map(x=>({x,sc:libJac(ct,libTok(x.caps))*10+(x.classe===(E.classe||'')?3:0.3)+((x.sub||'')===(E.sub||'')?0.5:0)}))
+    .filter(y=>y.sc>=1.8);
+  if(!base.length) return null;
+  let fresh=base.filter(y=>!used.has(y.x.id)); if(!fresh.length){E.libUsed=[];fresh=base}
+  fresh.sort((a,b)=>b.sc-a.sc);
+  const top=fresh.filter(y=>y.sc>=fresh[0].sc*0.8).slice(0,3), A=top[Math.floor(Math.random()*top.length)].x;
+  const others=base.filter(y=>y.x.id!==A.id).sort((a,b)=>b.sc-a.sc).slice(0,3);
+  const B=others.length&&Math.random()<0.6?others[Math.floor(Math.random()*others.length)].x:A;
+  return {A,B};
+}
+function libHasEpr(E){return !!libPickEpr(E)}
+function libComposeEpr(E){
+  const pk=libPickEpr(E); if(!pk) return false;
+  const {A,B}=pk, CA=JSON.parse(JSON.stringify(A.content)), CB=JSON.parse(JSON.stringify(B.content));
+  CA.ex2=CB.ex2||CA.ex2;
+  E.content=CA; E.libUsed=[A.id].concat(E.libUsed||[]).slice(0,60);
+  return true;
+}
+function libCounts(){const L=libGet();return {s:L.seances.length,e:L.eprs.length,b:L.bilans.length}}
+function libCard(){
+  const c=libCounts();
+  return `<section class="card"><h2>Mémoire de modèles <small>fonctionne sans IA</small></h2>
+   <p class="small" style="margin:0 0 8px">Chaque fiche et chaque épreuve préparée est conservée dans ce navigateur (texte seulement, sans images). Quand l’IA n’est pas disponible, l’application compose elle-même la fiche ou l’épreuve à partir des modèles enregistrés qui correspondent à la discipline, à la classe et aux capacités demandées. Relisez toujours le résultat.</p>
+   <div class="small" style="margin-bottom:8px">Enregistré : <b>${c.s}</b> séance(s), <b>${c.b}</b> série(s) d’exercices de synthèse, <b>${c.e}</b> épreuve(s).</div>
+   <div class="row"><button class="btn alt" type="button" id="libHarvest">Ajouter mes fiches et épreuves déjà préparées</button><button class="btn danger sm" type="button" id="libClear">Vider la mémoire de modèles</button></div>
+   <div class="status small muted" id="libSt" role="status" style="margin-top:8px"></div></section>`;
+}
+function libHarvest(){
+  let n0=libCounts();
+  (DB.fiches||[]).forEach(f=>{try{f.seances.forEach((_,i)=>libAddSeance(f,i));libAddBilan(f)}catch(e){}});
+  if(DB.epr&&DB.epr.content) libAddEpr(DB.epr);
+  libSave(); const n1=libCounts();
+  return (n1.s-n0.s)+' séance(s), '+(n1.e-n0.e)+' épreuve(s) ajoutée(s).';
+}
+
 function rememberProgram(f){
   const caps=(f.capacites||[]).filter(c=>has(c.cap)).map(c=>({cap:String(c.cap||'').trim(),contenus:String(c.contenus||'').trim()}));
   if(!caps.length) return;
@@ -2501,12 +2665,12 @@ async function generateAll(f,o){
   o=o||{};
   if(!f.capacites.some(c=>has(c.cap))){setGen('Ajoutez d’abord les capacités et contenus (étape 2).',true);return}
   if(!f.seances.every(x=>has(x.capTitre)&&has(x.contenus))){setGen('Répartissez d’abord les capacités : cliquez sur « Répartir les capacités sur les séances » (étape 2).',true);return}
-  if(!aiKind()){setGen('Pour rédiger automatiquement, activez la rédaction automatique dans Réglages.',true);return}
+  if(!aiKind()&&!libHasFiche(f)){setGen('Pour rédiger automatiquement, activez la rédaction automatique dans Réglages. Aucun modèle enregistré ne correspond non plus à cette leçon.',true);return}
   GEN.running=true;GEN.stop=false;GEN.figMissing=[];GEN.keyLabel='';GEM.keyStates={};lockGen(true);await acquireGenWakeLock();
   const complete=s=>!s.genPartial&&(f.tpl==='A'
     ? ['situation','synthese','essentiel','exoApp','exoMaison'].every(k=>has(s[k]))
     : ['situation','trace','exoApp','exoAppSol','evalQ','evalR','exoMaison','exoMaisonSol'].every(k=>has(s[k])));
-  let failed=[],failWhy='',bilNote='';
+  let failed=[],failWhy='',bilNote='',usedLib=[];
   try{
     if(o.overwrite===true){
       setGen('Réinitialisation demandée : remplacement des textes existants…');
@@ -2526,10 +2690,11 @@ async function generateAll(f,o){
       if(GEN.stop) break;
       if(geminiKeys().length>1) GEM.keyIndex=i%geminiKeys().length;
       pstart(i);let ok=false,last=null;
-      for(let attempt=1;attempt<=3&&!ok&&!GEN.stop;attempt++){
+      for(let attempt=1;attempt<=3&&!ok&&!GEN.stop&&aiKind();attempt++){
         try{
           await genSeanceContent(f,i,{overwrite:false});
           ok=complete(f.seances[i]);
+          if(ok) libAddSeance(f,i);
           if(!ok) throw {code:'incomplete',message:'La réponse reçue est incomplète.'};
           touch();f.genJob.completed=f.seances.length-pending().length;f.genJob.updated=Date.now();f.genJob.lastError='';saveNow();
         }catch(e){
@@ -2542,6 +2707,11 @@ async function generateAll(f,o){
           setGen('Séance '+(i+1)+' : service temporairement indisponible. Nouvelle tentative dans '+Math.round(wait/1000)+' s (tentative '+attempt+'/3)…');
           await geminiWait(wait);
         }
+      }
+      /* IA indisponible ou séance non obtenue : repli sur un modèle enregistré */
+      if(!ok&&!GEN.stop){
+        if(libFillSeance(f,i)&&complete(f.seances[i])){ok=true;usedLib.push(i+1);touch();f.genJob.completed=f.seances.length-pending().length;f.genJob.lastError='';saveNow()}
+        else if(!aiKind()) last={code:'no_ai',message:'Aucun modèle enregistré ne correspond à la séance '+(i+1)+'.'};
       }
       pend(i,ok);
       if(!ok){
@@ -2556,10 +2726,12 @@ async function generateAll(f,o){
     else{
       setGen('Rédaction des exercices de synthèse de la leçon…');pstart(f.seances.length);
       try{if(!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) await genBilan(f,{overwrite:false});touch();}
-      catch(e){if(e&&e.code==='cancelled')throw e;bilNote=' Les exercices de synthèse n’ont pas pu être rédigés ; vous pourrez les reprendre séparément.';}
+      catch(e){if(e&&e.code==='cancelled')throw e;if(libFillBilan(f)){usedLib.push('synthèse');touch()}else bilNote=' Les exercices de synthèse n’ont pas pu être rédigés ; vous pourrez les reprendre séparément.';}
       if(!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse restent incomplets ; utilisez le bouton dédié pour les compléter.';
       f.genJob.status=bilNote?'paused':'done';f.genJob.updated=Date.now();f.genJob.lastError=bilNote;saveNow();
-      setGen('Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+bilNote,!!bilNote);step=3;openSeances=new Set([0]);
+      libAddFiche(f);
+      const libNote=usedLib.length?' Éléments repris de modèles enregistrés (séance(s) '+usedLib.join(', ')+') : relisez-les et adaptez-les à votre leçon.':'';
+      setGen('Fiche préparée : relisez chaque séance à l’étape 3, puis ouvrez l’aperçu.'+libNote+bilNote,!!bilNote);step=3;openSeances=new Set([0]);
     }
     pfinish();
   }catch(e){
@@ -2573,9 +2745,11 @@ async function generateAll(f,o){
 async function fillSeance(i){
   const f=F(); const st=document.getElementById('ai-'+i);
   const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status'+(err?' err':'')}};
-  if(!aiKind()){say(NO_AI,true);return}
+  if(!aiKind()){
+    if(libFillSeance(f,i)){touch();say('Séance composée à partir d’un modèle enregistré : relisez-la et adaptez-la.');openSeances.add(i);render2();return}
+    say(NO_AI+' Aucun modèle enregistré ne correspond à cette séance.',true);return}
   say('Rédaction de la séance en cours…');
-  try{await genSeanceContent(f,i,{overwrite:false});touch();
+  try{await genSeanceContent(f,i,{overwrite:false});libAddSeance(f,i);libSave();touch();
     if(f.seances.every(x=>has(x.situation)&&has(x.exoApp))&&!ensureBilan(f).every(x=>has(x.q)&&has(x.s))){say('Rédaction des exercices de synthèse de la leçon…');try{await genBilan(f,{overwrite:false});touch()}catch(e){if(e&&e.code==='cancelled') throw e}}
     openSeances.add(i);render2();runPendingImageSearches(f)}catch(e){say(errCopy(e),true)}
 }
@@ -2643,7 +2817,8 @@ function parseGrille(txt){
 }
 const grilleTxt=L=>(L||[]).map(l=>[eprS(l.ind),eprS(l.niv),fmtN(parseN(l.pts))].join(' | ')).join('\n');
 const eprL=v=>Array.isArray(v)?v.map(eprS).join('\n'):eprS(v);
-const normPart=p=>{const o={titre:eprS(p&&p.titre),bareme:eprS(p&&p.bareme),enonce:eprS(p&&p.enonce),corrige:eprS(p&&p.corrige)};
+const eprCorrKey=p=>{if(!p)return '';for(const k of ['corrige','corrigé','correction','corriges','corrigés','reponses','réponses','reponse','réponse','solution','solutions','corr']){if(p[k]!=null&&has(eprS(p[k]))&&typeof p[k]!=='object'||Array.isArray(p[k])&&has(eprS(p[k]))) return eprS(p[k])}return ''};
+const normPart=p=>{const o={titre:eprS(p&&p.titre),bareme:eprS(p&&p.bareme),enonce:eprItems(eprS(p&&p.enonce)),corrige:eprItems(eprCorrKey(p))};
   const ty=String(p&&p.type||'').toLowerCase();
   if(/reli/.test(ty)&&p&&has(eprL(p.gauche))&&has(eprL(p.droite))){o.type='relier';o.gauche=eprL(p.gauche);o.droite=eprL(p.droite);o.liens=eprL(p.liens)}
   else if(/ordre|range|arrang/.test(ty)&&p&&has(eprL(p.groupes))){o.type='reordre';o.groupes=eprL(p.groupes);o.solution=eprS(p.solution)}
@@ -2813,24 +2988,34 @@ function eprPartBlocks(p,corr){
   const out=[];
   const NB={nb:true};
   if(p.type==='relier'){
-    const txt=corr?String(p.corrige||''):String(p.enonce||'');
+    const txt=eprItems(corr?String(p.corrige||''):String(p.enonce||''));
     if(has(txt))out.push({t:'p',lines:txt.split('\n'),gap:4,indent:true});
     const G=eprLines(p.gauche),D=eprLines(p.droite),rows=[];
     if(!corr){const n=Math.max(G.length,D.length);for(let i=0;i<n;i++)rows.push(row([cell([G[i]||'']),cell([D[i]||''])]))}
     else eprPairs(p).forEach(([g,d])=>rows.push(row([cell([g]),cell(['⟶'],{align:'center'}),cell([d])])));
     out.push({t:'tbl',cols:corr?[42,16,42]:[50,50],head:[],rows,gap:6});
   }else if(p.type==='reordre'){
-    const txt=eprNoRule(corr?String(p.corrige||''):String(p.enonce||''));
+    const txt=eprNoRule(eprItems(corr?String(p.corrige||''):String(p.enonce||'')));
     if(has(txt))out.push({t:'p',lines:txt.split('\n'),gap:4,indent:true});
     if(corr)out.push({t:'p',lines:['**'+String(p.solution||'')+'**'],gap:6,indent:true});
     else out.push({t:'p',lines:[eprLines(p.groupes).join(' / ')],gap:6,indent:true});
   }else{
-    const fg=capFig(corr?p.figCorr:p.fig), ls=(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(p.enonce):String(corr?p.corrige:p.enonce).split('\n');
+    const fg=capFig(corr?p.figCorr:p.fig), ls=(!corr&&/choisi|bonne r|qcm|choix/i.test(p.titre||''))?eprJoinOpts(eprItems(p.enonce)):eprItems(corr?p.corrige:p.enonce).split('\n');
     if(fg){figFlow(ls,fg,{gap:6,lc:{just:false},p:{just:false,indent:true}}).forEach(b=>out.push(b));return out}
     out.push({t:'p',lines:eprNoRule(ls),gap:6,indent:true});
   }
   if(corr?p.figCorr:p.fig)out.push({t:'img',img:capFig(corr?p.figCorr:p.fig),gap:6});
   return out;
+}
+/* Chaque question numérotée (1) 2) 3) ou 1- 2- 3-) commence sur sa propre ligne ; seule la suite 1, 2, 3… est reconnue (les calculs « 5 - 3 » ne sont pas touchés) */
+function eprItems(t){
+  t=String(t==null?'':t); const re=/(^|[^\n\d])([ \t]+|^)(?:\*\*)?(\d{1,2})\s?(?:\)|-(?=\s))(?=\s*\S)/g;
+  const cut=[]; let m,expect=1; const all=[];
+  const r2=/(?:^|[ \t\n(])(\d{1,2})\s?(?:\)|-(?=\s))/g;
+  while((m=r2.exec(t))){const num=+m[1]; if(num===expect){const pos=m.index+(m[0].length-m[0].replace(/^[ \t\n(]/,'').length); all.push(pos); expect++}}
+  let out='',last=0;
+  all.forEach(pos=>{ if(pos>0&&t[pos-1]!=='\n'){ out+=t.slice(last,pos).replace(/[ \t]+$/,'')+'\n'; last=pos } });
+  return out+t.slice(last);
 }
 /* Saut de ligne avant chaque « Expérience N » et chaque « Consigne N » : la 2ᵉ commence toujours sur une nouvelle ligne */
 function eprBreaks(t){
@@ -2937,7 +3122,7 @@ async function genEpreuve(E){
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties, mais QUATRE parties (I, II, III et IV) dès que « réarrange les groupes de mots » en fait partie (dans ce cas, chaque partie reste courte : 3 items). Les parties sont choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. EXIGENCE DE TRAVAIL (très important) : la situation est notée sur '+fmtN(p1)+' points, soit environ '+fmtN(p1/(m==='43'?2:1))+' points par consigne : chaque consigne doit donc demander un TRAVAIL SUBSTANTIEL à l’élève avant qu’il obtienne ces points, jamais une simple question de cours ni une réponse lisible directement dans le texte. Chaque consigne est UNE MISSION globale, rédigée en une ou deux phrases fluides (par exemple « Explique…, puis détermine…, et justifie… », « Réalise… et présente… »), qui oblige l’élève à mener lui-même plusieurs étapes de travail (organiser les données, calculer ou exploiter des mesures, schématiser ou construire, interpréter, conclure). INTERDIT : découper la consigne en petites questions, en sous-questions numérotées ou lettrées (pas de a), b), c), d), pas de liste) ; l’élève doit trouver seul les étapes à suivre, c’est la grille qui les détaille. Les données de la situation obligent à raisonner : il faut combiner au moins deux informations ou deux étapes de calcul. Chaque étape attendue correspond à des lignes de la grille de correction, qui doit pouvoir détailler au moins 4 étapes notées par consigne.  Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). Chaque consigne (champ « consignes ») ne contient QUE son libellé : n’écris jamais le mot « Consigne » ni son numéro dans le texte. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). La figure de la situation est FACULTATIVE : ajoute-la seulement quand elle aide réellement à comprendre ou à résoudre la situation, et choisis le TYPE de figure que la situation demande, sans te limiter à la géométrie : figure de géométrie (triangle, cercle, droites, points, angles, symétrie, construction, solide, patron), schéma d’un montage ou d’un objet, courbe, graphique, histogramme, diagramme, plan ou croquis à l’échelle, carte simplifiée, schéma d’un organe, d’un cycle ou d’un circuit, ligne du temps… FORMATS : géométrie plane → l’objet décrit plus bas ; montage ou dispositif de physique-chimie → {"items":[…]} s’il est décrit dans les règles de la discipline ; TOUT AUTRE dessin → {"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"340\" viewBox=\"0 0 480 340\">…</svg>"} (balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement, dimensions et valeurs de la situation écrites sur la figure). Quand la situation se résout par un calcul, des données chiffrées, un tableau de mesures décrit ou une observation racontée, omets « figSit » : le texte se suffit et ne renvoie à aucune figure. La figure représente EXACTEMENT ce que le texte décrit. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
-  'CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne, ORGANISÉE PAR CONSIGNE : commence par « Consigne 1 : » puis sa résolution complète ; à la fin de la consigne 1, va à la ligne (\n) et écris « Consigne 2 : » avec sa résolution, et ainsi de suite ; ne mets jamais deux consignes dans la même ligne. Si la situation contient plusieurs expériences, chaque expérience (« Expérience 1 : … », « Expérience 2 : … ») occupe son propre paragraphe, séparé par un saut de ligne.\n\n'+
+  'PRÉSENTATION : dans « enonce » et « corrige » de chaque partie, le contexte vient d’abord, puis chaque question numérotée 1), 2), 3)… sur SA PROPRE LIGNE (sépare par \n). Le champ « corrige » est OBLIGATOIRE pour TOUTES les parties (exercices 2 et 3), avec une réponse par ligne, numérotée comme la question ; quand une question demande de représenter, tracer ou construire (forces en vecteurs, schéma, courbe), le corrigé donne les grandeurs, l’échelle et la longueur des flèches, et « figCorr » contient la figure attendue. CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne, ORGANISÉE PAR CONSIGNE : commence par « Consigne 1 : » puis sa résolution complète ; à la fin de la consigne 1, va à la ligne (\n) et écris « Consigne 2 : » avec sa résolution, et ainsi de suite ; ne mets jamais deux consignes dans la même ligne. Si la situation contient plusieurs expériences, chaque expérience (« Expérience 1 : … », « Expérience 2 : … ») occupe son propre paragraphe, séparé par un saut de ligne.\n\n'+
   'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Elle doit être DÉTAILLÉE, ligne par ligne, comme une vraie grille officielle. Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère est une liste de lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème}. Un indicateur regroupe PLUSIEURS lignes consécutives : RÉPÈTE le même texte d’indicateur, à l’identique, sur chaque ligne de son groupe. Chaque ligne de niveau de performance vaut 0,25 pt (multiples de 0,25 seulement) : un critère de 2,5 pts contient donc 10 lignes, un critère de 2 pts en contient 8. INDICATEURS ET NIVEAUX : '+
   'CM1 (trois indicateurs) : « Adéquation avec le support : données et contraintes identifiées » (UNE ligne par donnée numérique ou contrainte du texte et de la figure, ex. « Côté de la cour : (x + 5) m », « Prix du béton : 2 500 F le m² ») ; « Adéquation avec la consigne (compréhension de la consigne) » (une ligne par tâche demandée : ce qu’il faut exprimer, calculer, factoriser, construire) ; « Justesse de la réponse au regard de la consigne » (une ligne par grandeur finale demandée, ex. « Calculer le coût du béton pour x = 10 »). '+
   'CM2 (deux indicateurs) : « Respect des étapes de l’utilisation des outils » (une ligne par étape de méthode ou d’outil : développement, factorisation, calcul pour une valeur, construction d’un point, tracé, utilisation d’une propriété) ; « Justesse des résultats obtenus au regard des outils et concepts utilisés » (une ligne par résultat attendu AVEC sa valeur exacte : expression, aire, coût, longueurs, périmètre, positions de points…). '+
@@ -2992,7 +3177,8 @@ async function genEpreuve(E){
    }
    /* pas de figure : le texte ne doit renvoyer à aucune figure */
    if(!C.figSit){C.situation=eprUnref(C.situation);C.consignes=C.consignes.map(eprUnref)}
-   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}}
+   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}
+   try{await eprFillCorriges(E)}catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}}
 }
 async function eprImportCaps(files){
   const E=eprInit(); const st=document.getElementById('ep-capst');
@@ -3064,6 +3250,13 @@ function eprSay(t,err){flash(t,err);const el=document.getElementById('ep-st');if
 async function eprAct(a,b){
   const E=eprInit();
   if(a==='raw'){EPR_RAW=!EPR_RAW;render2();return}
+  if(a==='fillcorr'){
+    if(!aiKind()){eprSay(NO_AI,true);return}
+    if(!E.content){eprSay('Préparez d’abord l’épreuve.',true);return}
+    b.disabled=true;
+    try{const n=await eprFillCorriges(E,t=>eprSay(t));save();render();eprSay(n?'Corrigés complétés ('+n+' élément(s)) : relisez-les.':'Tous les corrigés sont déjà présents.')}
+    catch(e){eprSay(errCopy(e),true);b.disabled=false}
+    return}
   if(a==='imgsearch'){
     const q=((document.getElementById('ep-imgq')||{}).value||'').trim(), box=document.getElementById('ep-imgres'); if(!box)return;
     if(!q){box.textContent='Saisissez un mot-clé.';return}
@@ -3085,15 +3278,20 @@ async function eprAct(a,b){
     const have=new Set(String(E.caps).split('\n').map(x=>x.trim()));
     E.caps=[...String(E.caps).split('\n').filter(has),...add.filter(x=>!have.has(x))].join('\n'); save();render();return}
   if(a==='gen'){
-    if(!aiKind()){eprSay(NO_AI,true);return}
+    const noAI=!aiKind();
+    if(noAI&&!libHasEpr(E)){eprSay(NO_AI+' Aucun modèle d’épreuve enregistré ne correspond à ces capacités, à cette classe et à ce barème.',true);return}
     const snapC=E.content;
     if(snapC&&snapC.situation){E.hist=[eprDigest(snapC)].concat(E.hist||[]).slice(0,4);E.prevSit=[eprS(snapC.situation)].concat(E.prevSit||[]).slice(0,4)}
     E.nGen=(E.nGen||0)+1;
     E.content=null; save(); render(); b=document.querySelector('[data-epact="gen"]')||b;
     b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;
     await acquireGenWakeLock();
-    try{await genEpreuve(E);save();render();eprSay('Épreuve préparée : relisez le sujet, le corrigé et la grille, puis téléchargez-la.')}
-    catch(e){if(!E.content&&snapC){E.content=snapC;save();render()}eprSay(errCopy(e),true);b.disabled=false}
+    try{
+      if(noAI){if(!libComposeEpr(E)) throw {code:'no_ai',message:NO_AI};save();render();eprSay('IA indisponible : épreuve composée à partir de modèles enregistrés. Relisez le sujet, le corrigé et la grille.')}
+      else{await genEpreuve(E);libAddEpr(E);save();render();eprSay('Épreuve préparée : relisez le sujet, le corrigé et la grille, puis téléchargez-la.')}}
+    catch(e){
+      if(!E.content&&e&&e.code!=='cancelled'&&libComposeEpr(E)){save();render();eprSay('L’IA n’a pas répondu ('+String(e.message||e.code||'erreur').slice(0,120)+') : épreuve composée à partir de modèles enregistrés. Relisez le sujet, le corrigé et la grille.')}
+      else{if(!E.content&&snapC){E.content=snapC;save();render()}eprSay(errCopy(e),true);b.disabled=false}}
     await releaseGenWakeLock();return}
   if(a==='corr'){
     if(REC){try{REC.stop()}catch(e){}}
@@ -3174,7 +3372,7 @@ function renderEpr(){
    <div class="sheet-wrap" id="eprSheets" aria-label="Aperçu de l’épreuve"><div class="muted">Préparation de l’aperçu…</div></div>`;
   const iS=edit.indexOf('<section class="card"><h2>Sujet</h2>'),iI=edit.indexOf('<section class="card"><h2>Corriger avec'),iT=edit.indexOf('<section class="card"><h2>Télécharger'),iP=edit.indexOf('<div class="sheet-wrap" id="eprSheets"');
   const rawPart=edit.slice(iS,iI),instrPart=edit.slice(iI,iT),dlPart=edit.slice(iT,iP),prevPart=edit.slice(iP);
-  const toggle=`<section class="card"><div class="row"><button class="btn alt" type="button" data-epact="raw" aria-expanded="${EPR_RAW}">${EPR_RAW?'Masquer le texte brut':'Afficher le texte brut (modifier à la main)'}</button></div><div class="muted small" style="margin-top:6px">Le texte brut contient les formules sous forme de code (par exemple $\\frac{3}{4}$). L’aperçu ci-dessus montre le résultat tel qu’il sera imprimé.</div></section>`;
+  const toggle=`<section class="card"><div class="row"><button class="btn alt" type="button" data-epact="raw" aria-expanded="${EPR_RAW}">${EPR_RAW?'Masquer le texte brut':'Afficher le texte brut (modifier à la main)'}</button><button class="btn alt" type="button" data-epact="fillcorr">Compléter les corrigés et les figures du corrigé</button></div><div class="muted small" style="margin-top:6px">Le texte brut contient les formules sous forme de code (par exemple $\\frac{3}{4}$). L’aperçu ci-dessus montre le résultat tel qu’il sera imprimé.</div></section>`;
   return toggle+head+prevPart+dlPart+instrPart+(EPR_RAW?rawPart:'');
 }
 let eprPrevT=null;
@@ -3572,7 +3770,8 @@ function renderMes(){
     <div class="muted small" style="margin-top:8px">Ces coordonnées sont reprises dans toute nouvelle fiche.</div></section>`;
 }
 let SHOWKEYS=false;
-function renderSet(){
+function renderSet(){return renderSet0()+libCard()}
+function renderSet0(){
   const k=aiKind(); const has_=geminiKeys().length>0;
   return `<section class="card"><h2>Rédaction automatique <small>gratuite</small></h2>
    <p class="small" style="margin:0 0 10px">L’application lit seule vos PDF et vos photos, relève la compétence, les capacités, les contenus et le nombre de séances, et répartit les capacités sur les séances. Pour <b>rédiger</b> la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices, elle a besoin d’un service d’IA :</p>
@@ -3716,6 +3915,8 @@ root.addEventListener('click',async e=>{
   if(d.epact){await eprAct(d.epact,b);return}
   if(d.view){view=d.view;SHOWKEYS=false;render();scrollTo(0,0);return}
   if(b.id==='toggleKeys'){SHOWKEYS=!SHOWKEYS;render2();return}
+  if(b.id==='libHarvest'){const r=libHarvest();render2();const st=document.getElementById('libSt');if(st)st.textContent=r;return}
+  if(b.id==='libClear'){if(confirm('Vider la mémoire de modèles ? Vos fiches et votre épreuve en cours ne sont pas touchées.')){LIB={seances:[],eprs:[],bilans:[]};libSave();render2()}return}
   if(d.step){step=+d.step;render();scrollTo(0,0);return}
   if(d.go){step=+d.go;render();scrollTo(0,0);return}
   if(d.ins!==undefined||d.wrap){
@@ -3746,7 +3947,7 @@ root.addEventListener('click',async e=>{
   if(d.mic!==undefined){toggleMic(d.mic,b);return}
   if(d.bilan!==undefined){
     const st=document.getElementById('bil-st'); const say=(t,err)=>{flash(t,err);if(st){st.textContent=t;st.className='status small'+(err?' err':' muted')}};
-    if(!aiKind()){say(NO_AI,true);return}
+    if(!aiKind()){if(libFillBilan(f)){touch();render2();say('Exercices de synthèse repris d’un modèle enregistré : relisez-les.');return}say(NO_AI+' Aucun modèle enregistré ne correspond.',true);return}
     b.disabled=true; say('Rédaction des exercices de synthèse…');
     try{const ok=await genBilan(f,{overwrite:true});touch();render2();const s2=document.getElementById('bil-st');if(s2){s2.textContent=ok?'Exercices de synthèse rédigés : relisez-les.':'Rien n’a été rédigé, réessayez.';s2.className='status small muted'}}
     catch(e){say(errCopy(e),true)}
