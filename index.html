@@ -1707,8 +1707,20 @@ async function ocrItems(file){
   return job;
 }
 function localData(items){const d=progParse(progRows(items));return d}
-function guideBlock(f){
-  const g=String(f.guide||'').trim();
+/* le guide est stocké en une partie générale puis des parties « === SÉANCE n === » : chaque séance ne reçoit que sa partie */
+function guideFor(f,s){
+  const all=String(f.guide||'').trim(); if(!all) return '';
+  const re=/^={2,}\s*S[ÉE]ANCE\s+(\d+)[^\n=]*={2,}\s*$/gim; const marks=[]; let m;
+  while((m=re.exec(all))) marks.push({n:+m[1],at:m.index,end:re.lastIndex});
+  if(!marks.length) return all;
+  const general=all.slice(0,marks[0].at).trim();
+  const idx=(s&&Array.isArray(f.seances))?f.seances.indexOf(s)+1:0;
+  const parts=marks.map((k,j)=>({n:k.n,t:all.slice(k.end,j+1<marks.length?marks[j+1].at:undefined).trim()}));
+  const mine=parts.filter(x=>x.n===idx).map(x=>x.t).join('\n');
+  return [general,mine?('Essentiel du guide pour CETTE séance :\n'+mine):(idx?'':parts.map(x=>'Séance '+x.n+' :\n'+x.t).join('\n\n'))].filter(Boolean).join('\n\n');
+}
+function guideBlock(f,sc){
+  const g=guideFor(f,sc);
   return g?'\nDocument d’accompagnement officiel de la leçon (extraits fournis par l’enseignant). RÈGLES : (1) Reprends MOT POUR MOT, dans l’essentiel à retenir ou la trace écrite, les définitions de ce document (lignes « DÉFINITION » ou termes définis) pour les notions de la séance, et utilise le même vocabulaire ; si le document ne définit pas une notion de la séance, rédige TOI-MÊME une définition claire et exacte, adaptée au niveau. (2) Construis la situation d’apprentissage à partir de l’objet ou de l’activité d’exemple du document (même objet, mêmes données, mêmes figures) plutôt que d’en inventer un autre, et conserve ses caractéristiques essentielles : un objet creux (avec ses cavités) reste creux, un objet plein reste plein, avec les mêmes proportions. (3) Ce document est un guide d’exécution du programme organisé en colonnes (par exemple Contenus, Activités d’apprentissage ou expériences, Matériel, Précisions, Évaluation) : lis chaque colonne d’après son titre, repère la ligne qui correspond aux contenus de la séance et fais exactement ce qu’elle demande. Si le guide décrit une expérience ou une activité, la situation d’apprentissage décrit simplement le problème qui conduit à la réaliser (un personnage, ce qu’il observe, le matériel ou le réactif qu’on lui donne, ce qu’il veut savoir) sans donner le résultat, et la résolution déroule l’expérience : manipulation, observation, conclusion, avec le vocabulaire exact du guide (noms des solutions et des produits, couleurs, formules). La situation ne parle jamais d’autre chose que de ce que demande le guide. (4) Ne contredis pas ce document :\n"""\n'+g.slice(0,7000)+'\n"""\n':'';
 }
 async function enhanceForOcr(file){
@@ -1721,6 +1733,89 @@ async function enhanceForOcr(file){
       x.putImageData(d,0,0);c.toBlob(b=>b?res(b):rej(new Error('Conversion impossible')),'image/png')};im.src=url})}
   finally{URL.revokeObjectURL(url)}
 }
+
+/* ===== Import du guide d’exécution / document d’accompagnement : l’application repère la leçon, puis ne garde que l’essentiel de chaque séance ===== */
+const GUIDE_STOP=new Set('dans pour avec sans cette entre leurs leur ainsi sont etre fait faire plus tout tous toute toutes comme apres avant selon peut doit sous vers chez dont elle elles nous vous ils les des une aux par sur que qui quoi mais donc car son ses ces cet cela celui celle depuis lors alors aussi encore tres mettre leçon lecon capacite capacites contenu contenus'.split(' '));
+function guideWords(txt){const o=[];for(const w of noAccent(String(txt||'')).toLowerCase().split(/[^a-z0-9]+/)) if(w.length>=4&&!GUIDE_STOP.has(w)&&!o.includes(w)) o.push(w.replace(/(s|x)$/,'')); return o}
+function guideClean(raw){
+  const out=[]; let blank=0;
+  for(let l of String(raw||'').split('\n')){
+    l=l.replace(/\s+$/,'').replace(/[ \t]{2,}/g,' ').replace(/^\s+/,'');
+    if(/^---\s*page\s+\d+\s*---$/i.test(l)||/^\d{1,3}$/.test(l)||/^(document d.accompagnement|minist[èe]re|r[ée]publique togolaise|direction de l.enseignement|parec\b)/i.test(l)) continue;
+    if(!l){if(++blank<=1) out.push('');continue} blank=0; out.push(l);
+  }
+  return out.join('\n').trim();
+}
+/* découpe le texte en sections (titres « Thème », « Leçon », « I. », « II. »…) et ignore la table des matières */
+function guideSections(pages){
+  const secs=[]; let cur=null,lesson='';
+  pages.forEach((pg,pi)=>{
+    const lines=pg.split('\n');
+    if(lines.filter(l=>/[_.…]{6,}\s*\d*\s*$/.test(l)).length>=4) return; /* page de table des matières */
+    for(const raw of lines){
+      const l=raw.trim(); if(!l) {if(cur)cur.t.push('');continue}
+      let m;
+      if((m=/^(Th[èe]me\s*\d+)\s*[:\-–]?\s*(.*)$/i.exec(l))&&l.length<120){cur={kind:'theme',lesson:'',title:l,t:[],page:pi+1};secs.push(cur);lesson='';continue}
+      if((m=/^(Le[çc]on\s*\d*)\s*[:\-–]\s*(.*)$/i.exec(l))&&l.length<160){lesson=l;cur={kind:'lecon',lesson,title:l,t:[],page:pi+1};secs.push(cur);continue}
+      if((m=/^(I{1,3}|IV|V|VI{0,3}|IX|X)\s*[.)\-–]\s+\S/.exec(l))&&l.length<140){cur={kind:'part',lesson,title:l,t:[l],page:pi+1};secs.push(cur);continue}
+      if(!cur){cur={kind:'intro',lesson:'',title:'',t:[],page:pi+1};secs.push(cur)}
+      cur.t.push(l);
+    }
+  });
+  return secs.map(x=>({kind:x.kind,lesson:x.lesson,title:x.title,page:x.page,text:x.t.join('\n').trim()})).filter(x=>x.text||x.title);
+}
+function guideScore(text,words,w2){
+  const t=' '+noAccent(String(text||'')).toLowerCase().replace(/[^a-z0-9]+/g,' ')+' '; let sc=0;
+  for(const w of words){const n=t.split(' '+w).length-1; if(n) sc+=Math.min(n,6)*(w2&&w2.has(w)?3:1)}
+  return sc;
+}
+/* texte du guide propre à la leçon : bloc « Leçon » (ou thème) qui ressemble le plus au titre, aux capacités et aux contenus */
+function guideLessonText(pages,f){
+  const secs=guideSections(pages);
+  const titleW=guideWords(f.titre), capW=guideWords((f.seances||[]).map(x=>(x.capTitre||'')+' '+(x.contenus||'')).join(' ')+' '+((f.capacites||[]).map(c=>(c.capacite||c.cap||'')+' '+(c.contenus||'')).join(' ')));
+  const words=[...new Set([...titleW,...capW])], tw=new Set(titleW);
+  /* regroupe les sections par leçon */
+  const groups=[]; let g=null;
+  for(const sct of secs){
+    if(sct.kind==='lecon'||sct.kind==='theme'||!g){g={title:sct.title,secs:[sct]};groups.push(g)} else g.secs.push(sct);
+  }
+  groups.forEach(x=>{const body=x.secs.map(y=>y.text).join('\n');x.score=guideScore(x.title,titleW,tw)*4+guideScore(body,words,tw)/Math.sqrt(1+body.length/4000);x.body=body});
+  /* un thème et sa leçon unique forment un seul bloc */
+  const merged=[]; for(const x of groups){const last=merged[merged.length-1]; if(last&&/^th[èe]me/i.test(last.title)&&last.body.length<400){last.title+=' / '+x.title;last.secs=last.secs.concat(x.secs);last.body+='\n'+x.body;last.score=Math.max(last.score,x.score)} else merged.push(x)}
+  merged.sort((a,b)=>b.score-a.score);
+  const best=merged[0]; if(!best||best.score<=0) return null;
+  return {title:best.title,secs:best.secs,text:guideClean(best.secs.map(y=>(y.title&&!y.text.startsWith(y.title)?y.title+'\n':'')+y.text).join('\n\n'))};
+}
+/* extrait local (sans IA) : pour chaque séance, les sections du bloc de la leçon qui correspondent à ses contenus */
+function guideLocalExtract(blk,f){
+  const seances=f.seances||[];
+  const head='Leçon du guide : '+blk.title.replace(/\s+/g,' ');
+  const cut=(t,n)=>t.length>n?t.slice(0,n).replace(/\s+\S*$/,'')+' […]':t;
+  if(!seances.length) return head+'\n'+cut(blk.text,8000);
+  const parts=blk.secs.filter(x=>x.text);
+  const per=Math.max(900,Math.floor(6500/seances.length));
+  const out=[head];
+  seances.forEach((sc,i)=>{
+    const w=guideWords((sc.capTitre||'')+' '+(sc.contenus||'')); const ws=new Set(w);
+    const ranked=parts.map(x=>({x,s:guideScore(x.title+' '+x.text,w,ws)/Math.sqrt(1+x.text.length/2500)})).filter(r=>r.s>0).sort((a,b)=>b.s-a.s);
+    let acc='';
+    for(const r of ranked){const t=guideClean(r.x.text); if(!t) continue; const add=(acc?'\n':'')+cut(t,Math.min(per,1800)); if((acc+add).length>per) {if(!acc) acc=cut(t,per); break} acc+=add}
+    if(acc) out.push('=== SÉANCE '+(i+1)+' ===\n'+acc);
+  });
+  return out.join('\n\n').slice(0,9000);
+}
+/* condensation par l’IA : ne garde que l’essentiel utile à chaque séance (définitions, activités, matériel, schémas, exemples) */
+async function guideAiExtract(blk,f){
+  const seances=f.seances||[];
+  const list=seances.map((sc,i)=>(i+1)+') '+(sc.capTitre||'')+' — contenus : '+String(sc.contenus||'').slice(0,400)).join('\n');
+  const prompt='Tu aides un professeur ('+discLabel(f)+', classe '+(f.classe||'collège')+') à préparer ses séances. Voici, extrait du document d’accompagnement officiel, le texte de la leçon « '+(f.titre||blk.title)+' » (il peut contenir des parties étrangères à la leçon ou des répétitions).\n-----\n'+blk.text.slice(0,24000)+'\n-----\n'+(list?'Séances de la leçon (capacités et contenus) :\n'+list+'\n':'')+
+   'Pour CHAQUE séance, ne garde que l’ESSENTIEL tiré de ce texte et utile pour rédiger le cours : définitions (recopiées mot pour mot), vocabulaire, activités ou expériences proposées (matériel, manipulation, observations, résultats), objets ou exemples concrets cités, figures ou schémas à réaliser, consignes de dessin. Supprime remerciements, généralités, historique, répétitions et tout ce qui ne concerne pas les contenus de la séance. N’invente rien : ce qui n’est pas dans le texte n’apparaît pas. 700 caractères au plus par séance pour les phrases, listes à puces courtes autorisées.\nRéponds uniquement par {"general":"éléments communs à toute la leçon (matériel, objet d’étude), 600 caractères au plus","seances":[{"n":1,"essentiel":"…"}]}.';
+  const d=await ask(prompt,{temp:0.1});
+  const arr=Array.isArray(d&&d.seances)?d.seances:[]; if(!arr.length&&!has(d&&d.general)) return null;
+  const out=['Leçon du guide : '+blk.title.replace(/\s+/g,' ')]; if(has(d.general)) out.push(String(d.general).trim());
+  arr.forEach(x=>{const t=Array.isArray(x&&x.essentiel)?x.essentiel.join('\n'):String(x&&x.essentiel||'').trim(); if(t&&x.n) out.push('=== SÉANCE '+(+x.n)+' ===\n'+t)});
+  return out.join('\n\n').slice(0,9000);
+}
 let GUIDE_MSG='';
 async function importGuide(file){
   const f=F(); const say=t=>{flash(t);GUIDE_MSG=t;const st=document.getElementById('guideStatus');if(st)st.textContent=t};
@@ -1728,6 +1823,22 @@ async function importGuide(file){
   const words=noAccent(key).toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=4);
   const isPdf=/pdf$/i.test(file.type)||/\.pdf$/i.test(file.name);
   const add=(txt,note)=>{f.guide=((f.guide?f.guide+'\n\n':'')+String(txt).trim()).slice(0,9000);touch();say(note);render()};
+  if(isPdf){
+    try{
+      say('Lecture du document…'); const r=await pdfRead(file,150);
+      const pgs=r.text.split(/--- page \d+ ---\n/).filter(x=>x.trim());
+      if(pgs.join('').replace(/\s/g,'').length>800){
+        say('Recherche de la leçon « '+(key||'')+' » dans le document ('+pgs.length+' pages)…');
+        const blk=guideLessonText(pgs,f);
+        if(blk&&blk.text.length>150){
+          let res=null, how='';
+          if(aiKind()&&(f.seances||[]).length){ try{say('Extraction de l’essentiel pour chaque séance…'); res=await guideAiExtract(blk,f); how='par l’IA'}catch(e){ if(e&&e.code==='cancelled'){say('Annulé.');return} res=null} }
+          if(!res){res=guideLocalExtract(blk,f); how='automatiquement (sans IA)'}
+          f.guide=res.slice(0,9000); touch(); say('Leçon repérée dans le guide : « '+blk.title.replace(/\s+/g,' ').slice(0,90)+' ». Essentiel retenu '+how+', séance par séance. Relisez ci-dessous et retirez ce qui ne convient pas.'); render(); return;
+        }
+      }
+    }catch(e){say('Lecture directe du PDF impossible ('+(e&&e.message?e.message:'erreur')+') : essai d’une autre méthode…')}
+  }
   if(aiKind()==='gemini'&&file.size<14e6){
     try{
       say('Lecture du document…');
@@ -1935,8 +2046,83 @@ function courseFigHints(text){
 function courseFigMissing(text,specs){
   return courseFigRecipes(text).filter(r=>r.need&&!(specs||[]).some(sp=>r.need(sp)));
 }
+/* ===== Figures de géométrie tracées PAR L’APPLICATION (sans IA) dès qu’une notion est citée dans le cours ===== */
+const GT={A:[2.5,5],B:[0,0],C:[7,0.8]};
+const GL=[
+ ['med',/m[ée]dianes?|centre de gravit[ée]/,[
+  ['Médiane issue de A : la droite qui joint le sommet A au milieu I du côté opposé [BC]',{points:GT,construire:[{milieu:'I',de:['B','C']}],polygones:[['A','B','C']],segments:[['A','I'],{p:['B','I'],trait:1},{p:['I','C'],trait:1}]}],
+  ['Les trois médianes d’un triangle se coupent en un même point G : le centre de gravité',{points:GT,construire:[{milieu:'I',de:['B','C']},{milieu:'J',de:['A','C']},{milieu:'K',de:['A','B']},{gravite:'G',de:['A','B','C']}],polygones:[['A','B','C']],segments:[['A','I'],['B','J'],['C','K'],{p:['B','I'],trait:1},{p:['I','C'],trait:1},{p:['A','J'],trait:2},{p:['J','C'],trait:2},{p:['A','K'],trait:3},{p:['K','B'],trait:3}]}]]],
+ ['mdt',/m[ée]diatrices?|cercle circonscrit/,[
+  ['Médiatrice du côté [BC] : la droite perpendiculaire à [BC] en son milieu I',{points:GT,construire:[{milieu:'I',de:['B','C']},{perp:'_P',en:'I',dir:['B','C'],long:3}],polygones:[['A','B','C']],segments:[{p:['B','I'],trait:1},{p:['I','C'],trait:1}],droites:[{p:['I','_P'],label:'(d)'}],anglesDroits:[['C','I','_P']]}],
+  ['Les trois médiatrices se coupent en O, centre du cercle circonscrit au triangle',{points:GT,construire:[{milieu:'I',de:['B','C']},{milieu:'J',de:['A','C']},{milieu:'K',de:['A','B']},{circ:'O',de:['A','B','C']},{perp:'_P1',en:'I',dir:['B','C'],long:3},{perp:'_P2',en:'J',dir:['C','A'],long:3},{perp:'_P3',en:'K',dir:['A','B'],long:3}],polygones:[['A','B','C']],segments:[{p:['B','I'],trait:1},{p:['I','C'],trait:1},{p:['A','J'],trait:2},{p:['J','C'],trait:2},{p:['A','K'],trait:3},{p:['K','B'],trait:3}],droites:[{p:['I','_P1']},{p:['J','_P2']},{p:['K','_P3']}],cercles:[{c:'O',passePar:'A'}]}]]],
+ ['haut',/hauteurs?[^.]{0,60}triangle|triangle[^.]{0,80}hauteurs?|orthocentre|hauteur issue/,[
+  ['Hauteur issue de A : la droite passant par A et perpendiculaire au côté opposé (BC) ; H est le pied de la hauteur',{points:GT,construire:[{proj:'H',de:'A',sur:['B','C']}],polygones:[['A','B','C']],segments:[['A','H']],anglesDroits:[['A','H','C']]}],
+  ['Les trois hauteurs se coupent en un même point H : l’orthocentre',{points:GT,construire:[{proj:'D',de:'A',sur:['B','C']},{proj:'E',de:'B',sur:['A','C']},{proj:'F',de:'C',sur:['A','B']},{ortho:'H',de:['A','B','C']}],polygones:[['A','B','C']],segments:[['A','D'],['B','E'],['C','F']],anglesDroits:[['A','D','C'],['B','E','A'],['C','F','B']]}]]],
+ ['bis',/bissectrices?|cercle inscrit/,[
+  ['Bissectrice de l’angle Â : la demi-droite qui partage l’angle en deux angles égaux',{points:GT,construire:[{bissec:'D',de:['B','A','C']}],polygones:[['A','B','C']],segments:[['A','D']],angles:[{p:['B','A','D'],label:'α'},{p:['D','A','C'],label:'α'}]}],
+  ['Les trois bissectrices se coupent en I, centre du cercle inscrit au triangle',{points:GT,construire:[{bissec:'D',de:['B','A','C']},{bissec:'E',de:['A','B','C']},{bissec:'F',de:['A','C','B']},{inscrit:'I',de:['A','B','C']},{proj:'_T',de:'I',sur:['B','C']}],polygones:[['A','B','C']],segments:[['A','D'],['B','E'],['C','F']],cercles:[{c:'I',passePar:'_T'}]}]]],
+ ['mil',/milieu d['’ ]?un segment|milieu du segment|milieu de \[/,[
+  ['I est le milieu du segment [AB] : AI = IB',{points:{A:[0,0],B:[6,0]},construire:[{milieu:'I',de:['A','B']}],segments:[{p:['A','I'],trait:1},{p:['I','B'],trait:1}]}]]],
+ ['perp',/perpendiculaires?/,[
+  ['Droites perpendiculaires : (d) et (d’) se coupent en formant un angle droit',{points:{_M:[0,0],_N:[6,0],O:[3,0]},construire:[{perp:'_Q',en:'O',dir:['_M','_N'],long:3},{symC:'_R',de:'_Q',centre:'O'}],droites:[{p:['_M','_N'],label:'(d)'},{p:['_Q','_R'],label:'(d’)'}],anglesDroits:[['_N','O','_Q']]}]]],
+ ['par',/parall[èe]les?(?!ogramme)/,[
+  ['Droites parallèles : (d) // (d’) ; elles ne se coupent jamais',{points:{_A:[0,0],_B:[6,0.6],_C:[0,2.5],_D:[6,3.1]},droites:[{p:['_A','_B'],label:'(d)'},{p:['_C','_D'],label:'(d’)'}]}]]],
+ ['symax',/sym[ée]trie axiale|sym[ée]trique par rapport [àa] (?:une |la )?droite|axe de sym[ée]trie/,[
+  ['Symétrie axiale : A’B’C’ est le symétrique de ABC par rapport à la droite (d)',{points:{A:[1,4],B:[0,1],C:[3,0.4],_X:[5,-1],_Y:[5,5.5]},construire:[{sym:'A’',de:'A',axe:['_X','_Y']},{sym:'B’',de:'B',axe:['_X','_Y']},{sym:'C’',de:'C',axe:['_X','_Y']}],polygones:[['A','B','C'],['A’','B’','C’']],segments:[{p:['A','A’'],tirets:true},{p:['B','B’'],tirets:true},{p:['C','C’'],tirets:true}],droites:[{p:['_X','_Y'],label:'(d)'}]}]]],
+ ['symc',/sym[ée]trie centrale|sym[ée]trique par rapport [àa] (?:un |au )?point|centre de sym[ée]trie/,[
+  ['Symétrie centrale de centre O : A’B’C’ est le symétrique de ABC par rapport au point O',{points:{A:[1,4],B:[0,1.2],C:[2.5,0.4],O:[4,2]},construire:[{symC:'A’',de:'A',centre:'O'},{symC:'B’',de:'B',centre:'O'},{symC:'C’',de:'C',centre:'O'}],polygones:[['A','B','C'],['A’','B’','C’']],segments:[{p:['A','A’'],tirets:true},{p:['B','B’'],tirets:true},{p:['C','C’'],tirets:true}]}]]],
+ ['thales',/thal[èe]s/,[
+  ['Théorème de Thalès : M ∈ [AB], N ∈ [AC] et (MN) // (BC), donc AM/AB = AN/AC = MN/BC',{points:{A:[0,5],B:[-3,0],C:[5,0]},construire:[{nom:'M',sur:['A','B'],t:0.4},{nom:'N',sur:['A','C'],t:0.4}],polygones:[['A','B','C']],segments:[['M','N']]}]]],
+ ['pyth',/pythagore|hypot[ée]nuse|triangle rectangle/,[
+  ['Triangle ABC rectangle en A : BC² = AB² + AC² (BC est l’hypoténuse)',{points:{A:[0,0],B:[4,0],C:[0,3]},polygones:[['A','B','C']],anglesDroits:[['B','A','C']],segments:[{p:['A','B'],label:'AB'},{p:['A','C'],label:'AC'},{p:['B','C'],label:'BC'}]}]]],
+ ['cerc',/\b(?:rayon|diam[èe]tre|corde)s?\b/,[
+  ['Cercle de centre O : un rayon [OM], un diamètre [AB] et une corde [CD]',{points:{O:[0,0],A:[-2,0],B:[2,0],M:[1.414,1.414],C:[-1.2,1.6],D:[1.6,-1.2]},cercles:[{c:'O',r:2,label:'(C)'}],segments:[{p:['O','M'],label:'rayon'},['A','B'],{p:['C','D'],tirets:false}]}]]],
+ ['para',/parall[ée]logrammes?/,[
+  ['Parallélogramme ABCD : côtés opposés parallèles et de même longueur ; les diagonales se coupent en leur milieu I',{points:{A:[0,0],B:[5,0],C:[6.5,3],D:[1.5,3]},construire:[{inter:'I',droites:[['A','C'],['B','D']]}],polygones:[['A','B','C','D']],segments:[{p:['A','C'],tirets:true},{p:['B','D'],tirets:true},{p:['A','B'],trait:1},{p:['D','C'],trait:1},{p:['A','D'],trait:2},{p:['B','C'],trait:2}]}]]],
+ ['los',/losanges?/,[
+  ['Losange ABCD : quatre côtés égaux ; les diagonales sont perpendiculaires et se coupent en leur milieu I',{points:{A:[0,2],B:[3,0],C:[6,2],D:[3,4]},construire:[{inter:'I',droites:[['A','C'],['B','D']]}],polygones:[['A','B','C','D']],segments:[{p:['A','C'],tirets:true},{p:['B','D'],tirets:true},{p:['A','B'],trait:1},{p:['B','C'],trait:1},{p:['C','D'],trait:1},{p:['D','A'],trait:1}],anglesDroits:[['A','I','B']]}]]],
+ ['rect',/\brectangles?\b(?! en)/,[
+  ['Rectangle ABCD : quatre angles droits ; les diagonales ont la même longueur',{points:{A:[0,0],B:[6,0],C:[6,3.5],D:[0,3.5]},polygones:[['A','B','C','D']],segments:[{p:['A','C'],tirets:true},{p:['B','D'],tirets:true},{p:['A','B'],trait:1},{p:['D','C'],trait:1},{p:['A','D'],trait:2},{p:['B','C'],trait:2}],anglesDroits:[['B','A','D'],['A','B','C'],['B','C','D'],['C','D','A']]}]]],
+ ['carre',/\bcarr[ée]s?\b/,[
+  ['Carré ABCD : quatre côtés égaux et quatre angles droits',{points:{A:[0,0],B:[4,0],C:[4,4],D:[0,4]},polygones:[['A','B','C','D']],segments:[{p:['A','B'],trait:1},{p:['B','C'],trait:1},{p:['C','D'],trait:1},{p:['D','A'],trait:1}],anglesDroits:[['B','A','D'],['A','B','C'],['B','C','D'],['C','D','A']]}]]],
+ ['trap',/trap[èe]zes?/,[
+  ['Trapèze ABCD : (AB) // (DC)',{points:{A:[0,0],B:[6,0],C:[4.5,3],D:[1.5,3]},polygones:[['A','B','C','D']],segments:[{p:['A','D'],trait:1},{p:['B','C'],trait:1}]}]]],
+ ['isoc',/triangles? isoc[èe]les?/,[
+  ['Triangle isocèle en A : AB = AC ; les angles à la base sont égaux',{points:{A:[3,5],B:[0,0],C:[6,0]},polygones:[['A','B','C']],segments:[{p:['A','B'],trait:1},{p:['A','C'],trait:1}],angles:[{p:['C','B','A'],label:'β'},{p:['A','C','B'],label:'β'}]}]]],
+ ['equi',/triangles? [ée]quilat[ée]ral/,[
+  ['Triangle équilatéral : trois côtés égaux et trois angles de 60°',{points:{A:[3,5.196],B:[0,0],C:[6,0]},polygones:[['A','B','C']],segments:[{p:['A','B'],trait:1},{p:['B','C'],trait:1},{p:['C','A'],trait:1}],angles:[{p:['C','B','A'],label:'60°'},{p:['A','C','B'],label:'60°'},{p:['B','A','C'],label:'60°'}]}]]],
+ ['opp',/oppos[ée]s? par le sommet/,[
+  ['Angles opposés par le sommet : ils sont égaux',{points:{A:[-3,-2],B:[3,2],C:[-3,2],D:[3,-2],O:[0,0]},droites:[{p:['A','B']},{p:['C','D']}],angles:[{p:['B','O','D'],label:'x'},{p:['A','O','C'],label:'x'}]}]]],
+ ['supp',/suppl[ée]mentaires?/,[
+  ['Angles supplémentaires : a + b = 180°',{points:{A:[-5,0],B:[5,0],M:[2,3.5],O:[0,0]},segments:[['A','B'],['O','M']],angles:[{p:['B','O','M'],label:'a'},{p:['M','O','A'],label:'b'}]}]]],
+ ['compl',/compl[ée]mentaires?/,[
+  ['Angles complémentaires : a + b = 90°',{points:{O:[0,0],A:[5,0],B:[0,5],M:[3.2,3.3]},segments:[['O','A'],['O','B'],['O','M']],angles:[{p:['A','O','M'],label:'a'},{p:['M','O','B'],label:'b'}]}]]],
+ ['transl',/translation/,[
+  ['Translation de vecteur MN : A’B’C’ est l’image de ABC (chaque point est déplacé de A vers A’ comme de M vers N)',{points:{A:[0,0],B:[2.5,0],C:[1,2],M:[0,3.5],N:[4,3.5]},construire:[{transl:'A’',de:'A',vecteur:['M','N']},{transl:'B’',de:'B',vecteur:['M','N']},{transl:'C’',de:'C',vecteur:['M','N']}],polygones:[['A','B','C'],['A’','B’','C’']],segments:[['M','N'],{p:['A','A’'],tirets:true}]}]]]
+];
+function localGeoFigs(text){
+  const t=String(text||'').toLowerCase().replace(/’/g,"'");
+  const out=[]; const seen=new Set();
+  for(const [k,re,figs] of GL){
+    if(!re.test(t)) continue;
+    /* « parallèle » ou « perpendiculaire » cités à l’intérieur d’une autre notion déjà traitée : on évite les doublons */
+    if((k==='par'||k==='perp')&&out.length) continue;
+    if(k==='pyth'&&seen.has('haut')) continue;
+    seen.add(k); for(const fg of figs) out.push({legende:fg[0],geo:JSON.parse(JSON.stringify(fg[1]))});
+  }
+  return out.slice(0,6);
+}
+async function localCourseFigs(text){
+  const out=[];
+  for(const x of localGeoFigs(text)){
+    try{const im=await eprFig(x.geo,380,false); im.credit=x.legende; out.push(im)}catch(e){}
+  }
+  return out;
+}
 async function genCourseFigures(f,i,ins,asker,depth){
   const s=f.seances[i];
+  /* 1) notions de géométrie reconnues dans le cours : figures tracées par l’application elle-même (pas besoin d’IA) */
+  {const loc=await localCourseFigs(ins?ins:[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,s.synthese].join('\n')); if(loc.length) return loc}
   const ctxTxt=[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,ins||''].join(' ');
   const prompt='Tu es un enseignant qui trace les figures du COURS au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+', leçon « '+(f.titre||'')+' »).\nCapacité de la séance : '+(s.capTitre||'')+'\nContenus de la séance : '+(s.contenus||'')+'\nEssentiel du cours : '+String(s.essentiel||s.trace||'').slice(0,1500)+(ins?'\nDEMANDE DE L’ENSEIGNANT (trace exactement ce qui est demandé) : '+ins:'')+
     '\nTrace AUTANT de figures que nécessaire pour illustrer les notions du cours (de 1 à 6 : une par notion ou par exemple important ; une seule si une seule suffit). Quand le cours présente PLUSIEURS droites ou notions (par exemple la médiane, la médiatrice, la hauteur et la bissectrice d’un triangle, puis leurs points de concours), trace UNE FIGURE PAR NOTION, chacune avec sa construction complète (le triangle, la droite tracée, le point, les angles droits, les codages), pour que l’élève apprenne à les dessiner ; ne te contente jamais d’une seule figure générale. Si une notion concerne une droite graduée, une demi-droite graduée, des abscisses ou un axe : utilise {"droiteGraduee":{…}} avec les points du cours placés à leurs abscisses (par exemple A, B, C) et "abscisses":true pour écrire l’abscisse à côté de chaque nom ; choisis min, max, pas et sous adaptés (entiers ou décimaux simples) et "demi":"droite" pour une demi-droite graduée (départ à min, souvent 0). Sinon choisis librement le type de figure qui convient à CHAQUE notion, sans aucune limite : figure de géométrie plane (toutes les figures : triangles et leurs droites remarquables, quadrilatères, cercles, angles, polygones, symétries, translations, rotations, Thalès, Pythagore, trigonométrie…), solides et patrons, repères et courbes de fonctions, statistiques (histogramme, diagramme en bâtons ou circulaire), schémas de physique (circuits, forces, optique, mécanique), de chimie (montages, verrerie, électrolyse, filtration, distillation, tests d’identification, modèles atomiques), de SVT (organes, cellules, cycles), de technologie (vues, objets techniques), plans et cartes. Pour une démonstration ou une expérience du cours, dessine le dispositif complet annoté. Si le cours ne gagne rien à être illustré, réponds {"figures":[]}.\n'+GEO_DOC+'\nRéponds uniquement par {"figures":[{"legende":"titre court de la figure (ex. Demi-droite graduée)","geo":{…}}]} où chaque figure porte la clé geo, items ou svg selon son type.';
@@ -2826,7 +3012,7 @@ async function genFigure(f,i){
 Situation : ${s.situation}
 Capacité de la séance : ${s.capTitre}
 La figure doit représenter EXACTEMENT l’objet de la situation (pas un objet générique) avec ses dimensions, et suivre le type de représentation et les conventions du document d’accompagnement s’il en fournit un.
-${guideBlock(f)}Règles : 
+${guideBlock(f,f.seances[i])}Règles : 
 ${GEO_RULE}
 0) Si la figure est un pavé droit, un cube ou une pièce parallélépipédique en perspective cavalière, ne la dessine pas toi-même, UNIQUEMENT si l’objet de la situation EST réellement un pavé droit, un cube ou un bloc de cette forme (brique, boîte, table, bloc…) et que la leçon porte sur sa représentation ; sinon dessine toi-même la figure adaptée à la leçon : réponds {"solide":{"L":longueur,"l":profondeur,"h":hauteur,"unite":"cm","objet":"nom exact de l’objet de la situation","creux":true ou false,"alveoles":2,"epaisseur":épaisseur des parois,"representation":"cavaliere" ou "vues" ou "les deux"},"svg":"","query":""} avec les dimensions de la situation ; l’application trace alors la figure correcte (arêtes cachées en pointillés). « creux » doit être true si la situation ou le document dit que l’objet est creux (avec des alvéoles ou une cavité) et false s’il est plein ou si rien n’est précisé ; prends les dimensions de la situation : respecte exactement ce que disent la situation et le document d’accompagnement. « representation » : « vues » pour les vues de face, de gauche et de dessus, « cavaliere » pour la perspective cavalière, « les deux » si la leçon demande les deux.
 1) Calcule d’abord mentalement les coordonnées de chaque point dans un repère de 480 × 340 (y vers le bas) pour que la figure respecte EXACTEMENT les données de la situation (milieux, parallèles, perpendiculaires, longueurs proportionnelles, angles droits).
@@ -2945,7 +3131,7 @@ async function genSeanceContent0(f,i,o){
 ${regleAcquis}
 Ensemble des capacités et contenus de la leçon :
 ${capsText(f)}
-${guideBlock(f)}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. NIVEAU ET NOTATIONS DU COLLÈGE (à respecter strictement) : INÉQUATIONS ET INTERVALLES SELON LA CLASSE : n’écris jamais le symbole ∞ (huit couché), à aucune classe du collège. En 6e, 5e et 4e, les intervalles ne sont pas connus : la solution s’écrit en mots (« l’ensemble solution est l’ensemble de tous les nombres inférieurs ou égaux à 2 ») et en inégalité simple (x ≤ 2), avec une demi-droite graduée et une flèche pour la direction. En 3e, les intervalles sont connus : l’ensemble solution s’écrit sous forme d’intervalle en remplaçant l’infini par une flèche : +∞ s’écrit par une flèche vers la droite (→) et −∞ par une flèche vers la gauche (←) ; le crochet du côté de la flèche reste toujours ouvert. Exemples : x ≥ 2 donne S = [2 ; →[ ; x < 3 donne S = ]← ; 3[ ; x ≤ 5 donne S = ]← ; 5]. On peut aussi l’illustrer sur une droite graduée. Respecte strictement la classe de la leçon. SYSTÈME D’INÉQUATIONS DANS ℝ (3e) : on résout chaque inéquation, on représente les deux ensembles solutions sur la même droite graduée en hachurant la partie qui est solution (traits obliques dans un sens pour la 1ʳᵉ inéquation, dans l’autre sens pour la 2ᵉ), l’intersection est la partie doublement hachurée, puis on écrit la solution du système sous forme d’intervalle (avec flèches à la place de ∞) ou « pas de solution » si l’intersection est vide ; le corrigé montre cette figure hachurée. Pas de racines carrées (√) en classe de 4e. Pour le théorème de Pythagore, utilise uniquement des carrés parfaits familiers : côtés entiers ne dépassant pas 14 et carrés parfaits à portée de main (le plus grand carré utilisé est 14² = 196, de préférence 12² = 144), par exemple les triplets 3-4-5, 6-8-10, 5-12-13, 9-12-15. Dans les solutions, n’emploie aucune notion ni notation que les élèves de la classe n’ont pas étudiée, même si un exercice pourrait être résolu avec elle. CONSTRUCTIONS : quand la séance traite d’une construction ou de droites et points remarquables (médiatrices, bissectrices, médianes, hauteurs, centre de gravité, cercle inscrit ou circonscrit, orthocentre, etc.), l’essentiel à retenir contient la méthode de construction étape par étape avec les instruments du niveau (en 6e, pour la médiatrice : on trouve d’abord le milieu avec la règle graduée, puis on trace la perpendiculaire en ce milieu avec l’équerre), et une figure doit montrer la construction complète faite pour les élèves. Pour les séances de calcul ou de résolution d’équations, aucune esquisse n’est nécessaire sauf si elle aide vraiment à résoudre la situation. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
+${guideBlock(f,f.seances[i])}Rédige en français, niveau ${f.classe||'collège'}, ton sobre et exact, directement utilisable en classe. La situation d’apprentissage reste courte (35 à 50 mots) car elle est copiée au tableau pendant une séance de 55 minutes, mais elle contient toutes les données utiles. PÉRIMÈTRE : reste STRICTEMENT dans les capacités et contenus de cette séance. N’introduis aucune notion, définition, exemple, formule ou vocabulaire qui n’y figure pas (ni de séances ultérieures, ni d’un autre niveau). Quand un contenu est introduit par « Exemples » ou « Cas de », ce sont seulement des exemples à citer : ne les transforme pas en notions à définir. La capacité de la séance est exactement celle indiquée, sans l’élargir. NIVEAU ET NOTATIONS DU COLLÈGE (à respecter strictement) : INÉQUATIONS ET INTERVALLES SELON LA CLASSE : n’écris jamais le symbole ∞ (huit couché), à aucune classe du collège. En 6e, 5e et 4e, les intervalles ne sont pas connus : la solution s’écrit en mots (« l’ensemble solution est l’ensemble de tous les nombres inférieurs ou égaux à 2 ») et en inégalité simple (x ≤ 2), avec une demi-droite graduée et une flèche pour la direction. En 3e, les intervalles sont connus : l’ensemble solution s’écrit sous forme d’intervalle en remplaçant l’infini par une flèche : +∞ s’écrit par une flèche vers la droite (→) et −∞ par une flèche vers la gauche (←) ; le crochet du côté de la flèche reste toujours ouvert. Exemples : x ≥ 2 donne S = [2 ; →[ ; x < 3 donne S = ]← ; 3[ ; x ≤ 5 donne S = ]← ; 5]. On peut aussi l’illustrer sur une droite graduée. Respecte strictement la classe de la leçon. SYSTÈME D’INÉQUATIONS DANS ℝ (3e) : on résout chaque inéquation, on représente les deux ensembles solutions sur la même droite graduée en hachurant la partie qui est solution (traits obliques dans un sens pour la 1ʳᵉ inéquation, dans l’autre sens pour la 2ᵉ), l’intersection est la partie doublement hachurée, puis on écrit la solution du système sous forme d’intervalle (avec flèches à la place de ∞) ou « pas de solution » si l’intersection est vide ; le corrigé montre cette figure hachurée. Pas de racines carrées (√) en classe de 4e. Pour le théorème de Pythagore, utilise uniquement des carrés parfaits familiers : côtés entiers ne dépassant pas 14 et carrés parfaits à portée de main (le plus grand carré utilisé est 14² = 196, de préférence 12² = 144), par exemple les triplets 3-4-5, 6-8-10, 5-12-13, 9-12-15. Dans les solutions, n’emploie aucune notion ni notation que les élèves de la classe n’ont pas étudiée, même si un exercice pourrait être résolu avec elle. CONSTRUCTIONS : quand la séance traite d’une construction ou de droites et points remarquables (médiatrices, bissectrices, médianes, hauteurs, centre de gravité, cercle inscrit ou circonscrit, orthocentre, etc.), l’essentiel à retenir contient la méthode de construction étape par étape avec les instruments du niveau (en 6e, pour la médiatrice : on trouve d’abord le milieu avec la règle graduée, puis on trace la perpendiculaire en ce milieu avec l’équerre), et une figure doit montrer la construction complète faite pour les élèves. Pour les séances de calcul ou de résolution d’équations, aucune esquisse n’est nécessaire sauf si elle aide vraiment à résoudre la situation. DÉFINITIONS : l’essentiel à retenir ou la trace écrite contient TOUJOURS la définition claire de chaque notion nouvelle de la séance (celle du document d’accompagnement si elle existe, sinon une définition rédigée par toi). COHÉRENCE : l’objet ou le contexte de la situation (par exemple un objet, un circuit, une figure) est le fil rouge de toute la séance ; la résolution, l’essentiel à retenir ou la trace écrite, les exercices et la figure doivent reprendre CE MÊME objet avec ses données, sans passer à un autre objet ou à un solide générique. NUMÉROTATION : dans l’essentiel à retenir (ou la trace écrite), la résolution et les solutions, chaque titre est numéroté en chiffres romains (**I.**, **II.**, **III.**…) et chaque sous-titre en chiffres (**1.**, **2.**, **3.**…, puis a), b) au besoin), le numéro étant écrit en gras au début du titre ; les exercices sont numérotés (Exercice 1, Exercice 2…).\nCONTRÔLE DES CALCULS INTÉGRÉ À LA RÉDACTION (OBLIGATOIRE) : avant de produire le JSON final, effectue soigneusement chaque calcul nécessaire et établis chaque résultat exact. Vérifie dans le même travail que les formules sont adaptées, que les unités sont cohérentes, que les étapes conduisent bien au résultat annoncé et que chaque corrigé répond exactement à l’exercice posé. Pour les opérations numériques, montre les étapes utiles. Si tu détectes une erreur dans ton raisonnement, corrige-la AVANT de rédiger la réponse finale. Ne présente jamais une approximation comme un résultat exact. Cette vérification fait partie de cette unique rédaction : aucune seconde intervention d’un autre vérificateur ne doit être lancée après la génération. ${LATEX_RULE}
 RÈGLE ABSOLUE : cette séance traite UNIQUEMENT « contenusDeLaSeance » (clé du JSON ci-dessus). Si une même capacité sert à plusieurs séances, ne reprends JAMAIS le contenu, la situation ni les exemples des séances précédentes (séancesPrecedentes, situationsDejaEcrites) : cette séance apporte des notions NOUVELLES, celles de ses contenus et d’elles seules.
 Réponds uniquement par un objet JSON avec ces clés (valeurs en texte, lignes séparées par \\n) :
 ${desc}`;
@@ -4205,7 +4391,7 @@ function stepCaps(f){
    <div class="muted small" style="margin-top:8px">${esc(diagText())}</div>${aiKind()?'':'<div style="margin-top:8px"><button class="btn alt sm" data-view="set">Activer la rédaction automatique (clé gratuite)</button></div>'}
   </section>
   <section class="card"><h2>Guide d’exécution / document d’accompagnement <small>facultatif</small></h2>
-   <p class="muted small" style="margin:0 0 10px">Déposez le guide d’exécution du programme (ou le document d’accompagnement) de la discipline : l’application repère la leçon, lit les colonnes du tableau (contenus, activités, matériel…) et s’en sert pour cadrer les situations et les résolutions. Une photo ou un PDF des pages de la leçon suffit. L’application garde seulement le texte utile (pas le document entier) et s’en sert pour rédiger les situations, les activités et les figures. Si le fichier est un grand guide, elle retient les 4 pages les plus proches du titre de la leçon.</p>
+   <p class="muted small" style="margin:0 0 10px">Déposez le guide d’exécution du programme (ou le document d’accompagnement) de la discipline : l’application repère la leçon, lit les colonnes du tableau (contenus, activités, matériel…) et s’en sert pour cadrer les situations et les résolutions. Une photo ou un PDF des pages de la leçon suffit. L’application garde seulement le texte utile (pas le document entier) et s’en sert pour rédiger les situations, les activités et les figures. Si le fichier est un grand guide (PDF), elle repère la leçon d’après son titre, ses capacités et ses contenus, puis ne garde que l’essentiel de chaque séance : importez d’abord le tableau des capacités et contenus, ensuite le guide.</p>
    <div class="row"><label class="btn alt" for="guideImg" style="cursor:pointer">Ajouter une photo</label><input type="file" id="guideImg" accept="image/*" hidden>
     <label class="btn alt" for="guidePdf" style="cursor:pointer">Ajouter un PDF</label><input type="file" id="guidePdf" accept="application/pdf,.pdf" hidden>
     <label class="btn alt" for="guideAny" style="cursor:pointer">Autre sélecteur</label><input type="file" id="guideAny" hidden>${f.guide?'<button class="btn danger sm" data-clearguide="1">Retirer</button>':''}</div>
