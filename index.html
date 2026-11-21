@@ -309,7 +309,7 @@ let saveT=null;
 function setStatus(t,bad){const el=document.getElementById('savestate'); if(el){el.textContent=t;el.className='save-state'+(bad?' bad':'');}}
 function saveNow(){
   clearTimeout(saveT);saveT=null;
-  try{localStorage.setItem(KEY,JSON.stringify(DB));setStatus(memOnly?'Non enregistré (navigateur bloqué)':'Enregistré',memOnly);return true}
+  try{localStorage.setItem(KEY,JSON.stringify(DB));setStatus(memOnly?'Non enregistré (navigateur bloqué)':'Enregistré',memOnly);try{if(!ACCT_APPLY) acctChanged()}catch(e2){}return true}
   catch(e){setStatus('Mémoire du navigateur pleine ou bloquée : exportez votre fiche',true);return false}
 }
 function save(){
@@ -317,6 +317,181 @@ function save(){
   saveT=setTimeout(saveNow,350);
 }
 const F=()=>DB.fiches.find(f=>f.id===DB.cur);
+/* =========================================================
+   Compte et synchronisation entre appareils (serveur Cloudflare + KV)
+   Les données sont chiffrées dans le navigateur avec une clé dérivée du mot de passe :
+   le serveur ne voit que du texte chiffré.
+   ========================================================= */
+const ACCT_KEY='fp_acct';
+let ACCT=(()=>{try{return JSON.parse(localStorage.getItem('fp_acct')||'null')||{}}catch(e){return {}}})();
+let ACCT_BUSY=false,ACCT_T=null,ACCT_APPLY=false;
+const acctPersist=()=>{try{localStorage.setItem(ACCT_KEY,JSON.stringify(ACCT))}catch(e){}};
+const acctOn=()=>!!(ACCT&&ACCT.token&&ACCT.url&&ACCT.ek);
+const acctHM=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+function acctStatus(t,err){
+  try{flash(t,err)}catch(e){}
+  const el=document.getElementById('acct-st'); if(el){el.textContent=t;el.className='status small'+(err?' err':' muted')}
+}
+const u8b64=u=>{let s='';for(let i=0;i<u.length;i+=8192)s+=String.fromCharCode.apply(null,u.subarray(i,i+8192));return btoa(s)};
+const b64u8=b=>Uint8Array.from(atob(b),c=>c.charCodeAt(0));
+const u8hex=u=>[...u].map(x=>x.toString(16).padStart(2,'0')).join('');
+async function acctDerive(pass,salt){
+  const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(pass),'PBKDF2',false,['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:new TextEncoder().encode(salt),iterations:150000},k,256));
+}
+async function acctKeys(user,pass){
+  const u=String(user).toLowerCase().trim();
+  const [a,e]=await Promise.all([acctDerive(pass,'fp-auth|'+u),acctDerive(pass,'fp-enc|'+u)]);
+  return {auth:u8hex(a),ek:u8b64(e)};
+}
+async function acctEnc(text){
+  const key=await crypto.subtle.importKey('raw',b64u8(ACCT.ek),'AES-GCM',false,['encrypt']);
+  let data=new TextEncoder().encode(text),flag=0;
+  if(typeof CompressionStream==='function'){try{data=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());flag=1}catch(e){data=new TextEncoder().encode(text);flag=0}}
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,data));
+  const out=new Uint8Array(13+ct.length); out[0]=flag; out.set(iv,1); out.set(ct,13);
+  return u8b64(out);
+}
+async function acctDec(b){
+  const u=b64u8(b), flag=u[0];
+  const key=await crypto.subtle.importKey('raw',b64u8(ACCT.ek),'AES-GCM',false,['decrypt']);
+  let data=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:u.slice(1,13)},key,u.slice(13)));
+  if(flag===1) data=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  return new TextDecoder().decode(data);
+}
+async function acctApi(path,method,body){
+  const r=await fetch(String(ACCT.url).replace(/\/+$/,'')+path,{method:method||'GET',headers:Object.assign({'Content-Type':'application/json'},ACCT.token?{Authorization:'Bearer '+ACCT.token}:{}),body:body?JSON.stringify(body):undefined});
+  let j={}; try{j=await r.json()}catch(e){}
+  if(!r.ok){const e=new Error(j.error||('Erreur '+r.status)); e.status=r.status; e.data=j; throw e}
+  return j;
+}
+const acctSnap=()=>JSON.stringify({v:1,db:DB,lib:libGet()});
+async function acctPush(force){
+  if(!acctOn()||ACCT_BUSY) return false;
+  ACCT_BUSY=true; acctStatus('Synchronisation du compte…');
+  try{
+    const blob=await acctEnc(acctSnap());
+    const j=await acctApi('/data','PUT',{baseRev:ACCT.rev||0,blob,force:!!force});
+    ACCT.rev=j.rev; ACCT.dirty=false; ACCT.conflict=false; ACCT.last=Date.now(); acctPersist();
+    acctStatus('Données synchronisées à '+acctHM()+'.'); return true;
+  }catch(e){
+    if(e.status===409){ACCT.conflict=true; acctPersist(); acctStatus('Les données du compte ont changé depuis un autre appareil. Choisissez : charger celles du compte, ou remplacer celles du compte par cet appareil.',true)}
+    else if(e.status===401){ACCT.token=''; acctPersist(); acctStatus('Session expirée : reconnectez-vous.',true)}
+    else acctStatus('Synchronisation impossible : '+(e.message||e)+'. Nouvel essai plus tard.',true);
+    return false;
+  }finally{ACCT_BUSY=false}
+}
+async function acctApply(j){
+  const snap=JSON.parse(await acctDec(j.blob));
+  ACCT_APPLY=true;
+  try{
+    DB=Object.assign({profile:null,fiches:[],cur:null,progs:null,ai:{key:'',keys:[],model:''}},snap.db||{});
+    if(!DB.progs) DB.progs=JSON.parse(JSON.stringify(SEED_PROGS));
+    if(!DB.ai) DB.ai={key:'',model:''}; if(!Array.isArray(DB.ai.keys)) DB.ai.keys=[DB.ai.key||''];
+    DB.ai.keys=DB.ai.keys.map(x=>String(x||'').trim()).filter(Boolean).slice(0,30); if(!DB.ai.key) DB.ai.key=DB.ai.keys.find(Boolean)||'';
+    for(const f of DB.fiches) for(const s of f.seances) ensureSeance(s,f.tpl);
+    if(snap.lib&&typeof snap.lib==='object'){LIB=snap.lib;libGet();libSave()}
+    saveNow();
+  }finally{ACCT_APPLY=false}
+  ACCT.rev=j.rev; ACCT.dirty=false; ACCT.conflict=false; ACCT.last=Date.now(); acctPersist();
+}
+async function acctPull(){
+  const j=await acctApi('/data','GET');
+  if(!j.blob){acctStatus('Le compte ne contient pas encore de données.');return false}
+  await acctApply(j); acctStatus('Données du compte chargées à '+acctHM()+'.'); return true;
+}
+function acctChanged(){
+  if(ACCT_APPLY||!acctOn()||ACCT.conflict) return;
+  ACCT.dirty=true; acctPersist(); clearTimeout(ACCT_T); ACCT_T=setTimeout(()=>acctPush(false),12000);
+}
+async function acctCheck(){
+  if(!acctOn()) return;
+  try{
+    const m=await acctApi('/data?meta=1','GET'), srv=m.rev||0;
+    if(srv>(ACCT.rev||0)){
+      if(!ACCT.dirty){ if(await acctPull()) render2() }
+      else{ACCT.conflict=true; acctPersist(); acctStatus('Les données du compte ont changé depuis un autre appareil. Ouvrez Réglages → Compte pour choisir.',true)}
+    }else if(ACCT.dirty&&!ACCT.conflict) acctChanged();
+  }catch(e){ if(e.status===401){ACCT.token='';acctPersist()} }
+}
+function acctBoot(){ setTimeout(acctCheck,1500); document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible') acctCheck()}) }
+async function acctSign(mode){
+  const val=id=>String((document.getElementById(id)||{}).value||'').trim();
+  const url=val('acctUrl').replace(/\/+$/,''), user=val('acctUser').toLowerCase(), pass=String((document.getElementById('acctPass')||{}).value||''), invite=val('acctInvite');
+  if(!/^https:\/\/[^\s]+$/.test(url)){acctStatus('Saisissez l’adresse complète du serveur, qui commence par https://',true);return}
+  if(!/^[a-z0-9._-]{3,32}$/.test(user)){acctStatus('Identifiant : 3 à 32 caractères (lettres, chiffres, point, tiret), sans espace ni accent.',true);return}
+  if(pass.length<8){acctStatus('Mot de passe : au moins 8 caractères.',true);return}
+  acctStatus('Calcul de la clé de chiffrement…');
+  try{
+    const k=await acctKeys(user,pass);
+    ACCT={url,user,ek:k.ek,token:'',rev:0,dirty:false};
+    const j=await acctApi('/'+mode,'POST',{user,auth:k.auth,invite});
+    ACCT.token=j.token; acctPersist();
+    const srv=await acctApi('/data','GET');
+    const hasLocal=(DB.fiches&&DB.fiches.length>0)||((DB.ai&&DB.ai.keys)||[]).length>0;
+    if(srv.blob){
+      if(!hasLocal||confirm('Ce compte contient déjà des données.\n\nOK : charger les données du compte sur cet appareil (elles remplacent celles de cet appareil).\nAnnuler : garder celles de cet appareil et remplacer celles du compte.')){
+        await acctApply(srv); acctStatus('Connecté. Vos données et vos clés ont été chargées depuis le compte.');
+      }else{ ACCT.rev=srv.rev; acctPersist(); await acctPush(true) }
+    }else{ ACCT.rev=0; acctPersist(); await acctPush(false); }
+    render2();
+  }catch(e){
+    ACCT.token=''; ACCT.ek=''; acctPersist();
+    acctStatus(e.status?e.message:('Connexion au serveur impossible : '+(e.message||e)+'. Vérifiez l’adresse du serveur.'),true);
+  }
+}
+async function acctAct(a){
+  if(a==='register'||a==='login'){await acctSign(a);return}
+  if(a==='logout'){
+    try{await acctApi('/logout','POST')}catch(e){}
+    ACCT={url:ACCT.url,user:ACCT.user}; acctPersist(); acctStatus('Déconnecté. Les données restent sur cet appareil.'); render2(); return;
+  }
+  if(a==='sync'){
+    if(!acctOn()) return;
+    if(ACCT.conflict){acctStatus('Choisissez ci-dessous : charger le compte ou remplacer le compte.',true);return}
+    try{
+      const m=await acctApi('/data?meta=1','GET'), srv=m.rev||0;
+      if(srv>(ACCT.rev||0)){
+        if(ACCT.dirty){ACCT.conflict=true;acctPersist();acctStatus('Les données du compte ont changé depuis un autre appareil. Choisissez ci-dessous.',true);render2();return}
+        await acctPull(); render2(); return;
+      }
+      await acctPush(false); render2();
+    }catch(e){acctStatus(e.message||String(e),true)}
+    return;
+  }
+  if(a==='takeServer'){
+    if(!confirm('Charger les données du compte ? Elles remplacent celles de cet appareil.')) return;
+    try{await acctPull(); render2()}catch(e){acctStatus(e.message||String(e),true)}
+    return;
+  }
+  if(a==='forceLocal'){
+    if(!confirm('Remplacer les données du compte par celles de cet appareil ?')) return;
+    ACCT.conflict=false; try{const m=await acctApi('/data?meta=1','GET'); ACCT.rev=m.rev||0}catch(e){}
+    await acctPush(true); render2(); return;
+  }
+}
+function acctCard(){
+  const on=acctOn();
+  const urlDef=ACCT.url||((DB.ai&&DB.ai.acctUrl)||'');
+  if(on) return `<section class="card"><h2>Compte <small>synchronisation entre vos appareils</small></h2>
+   <p class="small" style="margin:0 0 8px">Connecté : <b>${esc(ACCT.user||'')}</b>${ACCT.last?' · dernière synchronisation à '+esc(new Date(ACCT.last).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})):''}</p>
+   <div class="row"><button class="btn" data-acct="sync">Synchroniser maintenant</button><button class="btn alt" data-acct="logout">Se déconnecter</button></div>
+   ${ACCT.conflict?'<div class="note" style="margin-top:10px">Les données du compte ont changé depuis un autre appareil.<div class="row" style="margin-top:8px"><button class="btn" data-acct="takeServer">Charger celles du compte</button><button class="btn danger" data-acct="forceLocal">Remplacer celles du compte par cet appareil</button></div></div>':''}
+   <div id="acct-st" class="status small muted" role="status" style="margin-top:8px"></div>
+   <div class="note" style="margin-top:10px">Vos fiches, épreuves, clés et réglages sont envoyés au serveur <b>chiffrés avec votre mot de passe</b> : le serveur ne peut pas les lire. Si vous oubliez le mot de passe, les données du compte ne peuvent pas être récupérées. Les changements sont envoyés automatiquement quelques secondes après chaque modification.</div>
+  </section>`;
+  return `<section class="card"><h2>Compte <small>retrouver vos données sur un autre appareil</small></h2>
+   <p class="small" style="margin:0 0 10px">Créez un compte sur votre serveur Cloudflare, puis connectez-vous avec le même identifiant et le même mot de passe depuis un ordinateur ou un autre téléphone : vous retrouvez vos fiches, vos épreuves et vos clés. Le code du serveur se trouve dans le fichier <b>cloudflare-comptes.js</b>.</p>
+   <label class="f" for="acctUrl" style="max-width:520px">Adresse du serveur de comptes<input type="text" id="acctUrl" autocomplete="off" value="${esc(urlDef)}" placeholder="https://fiches-compte.votre-nom.workers.dev"></label>
+   <label class="f" for="acctUser" style="max-width:520px;margin-top:8px">Identifiant (sans espace ni accent)<input type="text" id="acctUser" autocomplete="username" value="${esc(ACCT.user||'')}" placeholder="par exemple : koffi"></label>
+   <label class="f" for="acctPass" style="max-width:520px;margin-top:8px">Mot de passe (8 caractères au moins)<input type="password" id="acctPass" autocomplete="current-password" value="" placeholder="votre mot de passe"></label>
+   <label class="f" for="acctInvite" style="max-width:520px;margin-top:8px">Code d’invitation (seulement si le serveur en demande un)<input type="password" id="acctInvite" autocomplete="off" value=""></label>
+   <div class="row" style="margin-top:10px"><button class="btn" data-acct="register">Créer le compte</button><button class="btn alt" data-acct="login">Se connecter</button></div>
+   <div id="acct-st" class="status small muted" role="status" style="margin-top:8px"></div>
+  </section>`;
+}
+
 
 /* =========================================================
    Balisage léger : **gras**  *italique*  __souligné__  $formule$  [[blue:texte]] [[red:..]] [[box:..]]
@@ -4636,7 +4811,7 @@ let SHOWKEYS=false;
 function renderSet(){return renderSet0()+libCard()}
 function renderSet0(){
   const k=aiKind(); const has_=geminiKeys().length>0;
-  return `<section class="card"><h2>Rédaction automatique <small>gratuite</small></h2>
+  return `${acctCard()}<section class="card"><h2>Rédaction automatique <small>gratuite</small></h2>
    <p class="small" style="margin:0 0 10px">L’application lit seule vos PDF et vos photos, relève la compétence, les capacités, les contenus et le nombre de séances, et répartit les capacités sur les séances. Pour <b>rédiger</b> la situation d’apprentissage, la résolution, l’essentiel à retenir et les exercices, elle a besoin d’un service d’IA :</p>
    <div class="note" style="margin-bottom:10px">Les services d’IA entièrement sans compte ne sont plus fiables (je les ai vérifiés : le texte y est limité ou payant). La solution gratuite et stable est une <b>clé gratuite</b> : elle s’obtient en une minute avec votre compte Gmail, sans carte bancaire.</div>
    <ol class="small" style="margin:0 0 12px;padding-left:20px;display:grid;gap:4px">
@@ -4866,6 +5041,7 @@ root.addEventListener('click',async e=>{
     catch(e){Object.assign(DB.ai,before);save();setGen(errCopy(e),true)}
     finally{b.disabled=false}
     return}
+  if(b.dataset&&b.dataset.acct){acctAct(b.dataset.acct);return}
   if(b.dataset&&b.dataset.cmpsave){
     const pv=b.dataset.cmpsave,cfg=compatCfg(pv),nm=COMPAT[pv].nom;
     const v=(document.getElementById('cmpKey_'+pv).value||'').trim()||cfg.key||'';
@@ -5035,5 +5211,6 @@ window.addEventListener('resize',fitSheets);
 loadDB();
 render();
 initSample();
+acctBoot();
 </script>
 </body></html>
