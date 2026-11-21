@@ -473,11 +473,17 @@ function buildDoc(f0){
     doc.push({t:'p',lines:['**__Déroulement de la leçon__**'],keep:true,gap:4});
   }
   /* --- Séances --- */
+  const capShown=(s)=>{
+    const base=String(s.capTitre||''), nz=x=>String(x||'').toLowerCase().replace(/\s+/g,' ').trim();
+    if(!has(base)||sea.filter(x=>nz(x.capTitre)===nz(base)).length<2) return base;
+    const cs=String(s.contenus||'').split('\n').map(x=>x.replace(/^\s*[-•–*]\s*/,'').trim()).filter(Boolean);
+    return cs.length?base+' : '+cs.join(' ; '):base;
+  };
   sea.forEach((s,i)=>{
     const startIdx=doc.length;
     const ord=ORD[i]||(i+1)+'e';
-    const titre=A?('**'+ord+' séance : '+(has(s.capNum)?mk(s.capNum)+' : ':'')+'[[blue:'+mk(s.capTitre)+']]**')
-                :('**Séance '+(i+1)+' : '+(has(s.capNum)?mk(s.capNum)+' : ':'')+'[[blue:'+mk(s.capTitre)+']]**');
+    const titre=A?('**'+ord+' séance : '+(has(s.capNum)?mk(s.capNum)+' : ':'')+'[[blue:'+mk(capShown(s))+']]**')
+                :('**Séance '+(i+1)+' : '+(has(s.capNum)?mk(s.capNum)+' : ':'')+'[[blue:'+mk(capShown(s))+']]**');
     if(A){
       doc.push({t:'p',lines:[titre],keep:true,gap:6});
       doc.push({t:'p',lines:['__Situation d’apprentissage ('+ord.toLowerCase()+' séance)__'],keep:true,gap:4});
@@ -524,7 +530,7 @@ function buildDoc(f0){
       if(has(s.resolution)) rows.push(...grp([row([cell(['**__[[red:RÉSOLUTION DE LA SITUATION D’APPRENTISSAGE]]__**'],{span:3,align:'center'})]),...lines(s.resolution).map(x=>row([cell([x],{span:3,just:true})]))]));
       rows.push(row([cell(['**__[[red:INSTITUTIONNALISATION (trace écrite)]]__** **(10 min)**'],{span:3,align:'center'})],{keep:true}));
       const tl=lines(s.trace).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])));
-      { const consL=['**Consignes au prof**',...lines(s.consignes).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])))], capL='***[[blue:Capacités : '+mk(s.capTitre)+']]***';
+      { const consL=['**Consignes au prof**',...lines(s.consignes).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])))], capL='***[[blue:Capacités : '+mk(capShown(s))+']]***';
         const prs=figPairs(tl,[s.traceImg,...figsOf(s)]);
         if(!prs){ rows.push(row([cell(consL,{sm:true}),cell([capL,...tl],{span:2})])) }
         else{
