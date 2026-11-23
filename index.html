@@ -3285,9 +3285,9 @@ function schemaToSvg(spec){
 async function eprFigOf(spec,dw){
   if(typeof spec==='string'&&/<svg[\s>]/i.test(spec)) spec={svg:spec};
   if(!spec||typeof spec!=='object') return null;
-  if(!spec.svg&&schemaItems(spec).length){try{const im=await svgToPngImage(schemaToSvg(spec));im.dw=(dw&&dw<320)?360:420;im.credit='';im.schema=spec;return im}catch(e){return null}}
+  if(!spec.svg&&schemaItems(spec).length){try{const im=await svgToPngImage(schemaToSvg(spec));im.dw=Math.max(dw||0,460);im.credit='';im.schema=spec;return im}catch(e){return null}}
   try{
-    if(typeof spec.svg==='string'&&/<svg[\s>]/i.test(spec.svg)&&!spec.geo){const im=await svgToPngImage(spec.svg);im.dw=Math.max(300,Math.min(dw||340,480));im.credit='';im.svgSrc=spec.svg;return im}
+    if(typeof spec.svg==='string'&&/<svg[\s>]/i.test(spec.svg)&&!spec.geo){const im=await svgToPngImage(spec.svg);im.dw=Math.max(420,Math.min(dw||340,520));im.credit='';im.svgSrc=spec.svg;return im}
     return await eprFig(spec,dw,false)
   }catch(e){return null}
 }
@@ -4147,9 +4147,11 @@ function eprPartBlocks(p,corr){
   const out=[];
   const NB={nb:true};
   if(p.type==='relier'){
-    const txt=eprItems(corr?String(p.corrige||''):String(p.enonce||''));
-    if(has(txt))out.push({t:'p',lines:txt.split('\n'),gap:4,indent:true});
     const G=eprLines(p.gauche),D=eprLines(p.droite),rows=[];
+    let txt=eprItems(corr?String(p.corrige||''):String(p.enonce||''));
+    /* les éléments à relier ne figurent que dans le tableau : on retire de l'énoncé les lignes « 1) … » ou « a) … » qui les répètent */
+    if(!corr&&(G.length||D.length)) txt=txt.split('\n').filter(l=>!/^\s*(\d+|[a-hA-H])\s*[).\-–:]\s*\S/.test(l)).join('\n');
+    if(has(txt))out.push({t:'p',lines:txt.split('\n'),gap:4,indent:true});
     if(!corr){const n=Math.max(G.length,D.length);for(let i=0;i<n;i++)rows.push(row([cell([G[i]||'']),cell([D[i]||''])]))}
     else eprPairs(p).forEach(([g,d])=>rows.push(row([cell([g]),cell(['⟶'],{align:'center'}),cell([d])])));
     out.push({t:'tbl',cols:corr?[42,16,42]:[50,50],head:[],rows,gap:6});
@@ -4366,7 +4368,7 @@ async function genEpreuve(E){
    }
    /* pas de figure : le texte ne doit renvoyer à aucune figure */
    if(!C.figSit){C.situation=eprUnref(C.situation);C.consignes=C.consignes.map(eprUnref)}
-   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,300);C[k][i].figCorr=await eprFigOf(r.figCorr,300)}}
+   for(const k of ['ex2','ex3']){const arr=d[k]||[];for(let i=0;i<C[k].length;i++){const r=arr[i]||{};C[k][i].fig=await eprFigOf(r.fig,380);C[k][i].figCorr=await eprFigOf(r.figCorr,380)}}
    try{await eprFillCorriges(E)}catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}
    try{await eprScopeFix(E)}catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai'))throw e}
    if(expDisc) eprFixNotation(C);}
