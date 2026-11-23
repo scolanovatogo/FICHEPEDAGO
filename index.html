@@ -2399,7 +2399,10 @@ async function localCourseFigs(text){
 async function genCourseFigures(f,i,ins,asker,depth){
   const s=f.seances[i];
   /* 1) notions de géométrie reconnues dans le cours : figures tracées par l’application elle-même (pas besoin d’IA) */
-  {const loc=await localCourseFigs(ins?ins:[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,s.synthese].join('\n')); if(loc.length) return loc}
+  let locKeep=[];
+  {const loc=await localCourseFigs(ins?ins:[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,s.synthese].join('\n'));
+   /* une droite graduée / un axe demande aussi l'IA (valeurs, points, intervalles) : on garde les figures locales ET on trace l'axe */
+   if(loc.length){ if(!ins&&needsAxis(f,s)) locKeep=loc; else return loc } }
   const ctxTxt=[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,ins||''].join(' ');
   const prompt='Tu es un enseignant qui trace les figures du COURS au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+', leçon « '+(f.titre||'')+' »).\nCapacité de la séance : '+(s.capTitre||'')+'\nContenus de la séance : '+(s.contenus||'')+'\nEssentiel du cours : '+String(s.essentiel||s.trace||'').slice(0,1500)+(ins?'\nDEMANDE DE L’ENSEIGNANT (trace exactement ce qui est demandé) : '+ins:'')+
     '\nTrace AUTANT de figures que nécessaire pour illustrer les notions du cours (de 1 à 6 : une par notion ou par exemple important ; une seule si une seule suffit). Quand le cours présente PLUSIEURS droites ou notions (par exemple la médiane, la médiatrice, la hauteur et la bissectrice d’un triangle, puis leurs points de concours), trace UNE FIGURE PAR NOTION, chacune avec sa construction complète (le triangle, la droite tracée, le point, les angles droits, les codages), pour que l’élève apprenne à les dessiner ; ne te contente jamais d’une seule figure générale. Si une notion concerne une droite graduée, une demi-droite graduée, des abscisses ou un axe : utilise {"droiteGraduee":{…}} avec les points du cours placés à leurs abscisses (par exemple A, B, C) et "abscisses":true pour écrire l’abscisse à côté de chaque nom ; choisis min, max, pas et sous adaptés (entiers ou décimaux simples) et "demi":"droite" pour une demi-droite graduée (départ à min, souvent 0). Sinon choisis librement le type de figure qui convient à CHAQUE notion, sans aucune limite : figure de géométrie plane (toutes les figures : triangles et leurs droites remarquables, quadrilatères, cercles, angles, polygones, symétries, translations, rotations, Thalès, Pythagore, trigonométrie…), solides et patrons, repères et courbes de fonctions, statistiques (histogramme, diagramme en bâtons ou circulaire), schémas de physique (circuits, forces, optique, mécanique), de chimie (montages, verrerie, électrolyse, filtration, distillation, tests d’identification, modèles atomiques), de SVT (organes, cellules, cycles), de technologie (vues, objets techniques), plans et cartes. Pour une démonstration ou une expérience du cours, dessine le dispositif complet annoté. Si le cours ne gagne rien à être illustré, réponds {"figures":[]}.\n'+GEO_DOC+'\nRéponds uniquement par {"figures":[{"legende":"titre court de la figure (ex. Demi-droite graduée)","geo":{…}}]} où chaque figure porte la clé geo, items ou svg selon son type.';
@@ -2421,7 +2424,7 @@ async function genCourseFigures(f,i,ins,asker,depth){
       catch(e){if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e}
     }
   }
-  return out;
+  return [...locKeep,...out].slice(0,8);
 }
 const figsOf=s=>[...(Array.isArray(s.figs)?s.figs:[]),...(s.imgEss?[s.imgEss]:[])];
 function figsBlock(f,s,i){
@@ -3403,6 +3406,7 @@ function figSpecOf(d){
   {const cc=d.circuit||(d.figSit&&d.figSit.circuit)||(d.figure&&d.figure.circuit); if(cc&&typeof cc==='object'){const it=circItems(cc); if(it.length) return {items:it}}}
   if(typeof d.svg==='string'&&/<svg[\s>]/i.test(d.svg)) return {svg:d.svg};
   const g=d.figSit||d.figure||d;
+  if(g&&typeof g==='object'&&(g.droiteGraduee||g.axe)) return {droiteGraduee:g.droiteGraduee||g.axe};
   if(g&&typeof g==='object'){ if(g.svg&&typeof g.svg==='string'&&/<svg[\s>]/i.test(g.svg)) return {svg:g.svg}; if(g.geo&&typeof g.geo==='object') return g.geo; if(schemaItems(g).length) return g; if(g.points||g.segments||g.cercles||g.droites) return g }
   if(d.geo&&typeof d.geo==='object') return d.geo;
   if(Array.isArray(d.items)) return {items:d.items};
