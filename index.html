@@ -403,7 +403,12 @@ async function acctPull(){
 }
 function acctChanged(){
   if(ACCT_APPLY||!acctOn()||ACCT.conflict) return;
-  ACCT.dirty=true; acctPersist(); clearTimeout(ACCT_T); ACCT_T=setTimeout(()=>acctPush(false),12000);
+  ACCT.dirty=true; acctPersist(); clearTimeout(ACCT_T); ACCT_T=setTimeout(acctAuto,12000);
+}
+function acctAuto(){
+  clearTimeout(ACCT_T);
+  if(GEN.running){ACCT_T=setTimeout(acctAuto,5000);return}
+  acctPush(false);
 }
 async function acctCheck(){
   if(!acctOn()) return;
@@ -582,6 +587,8 @@ const lines=s=>{
   return o.length?o:[''];
 };
 const BIL_T=['Exercice 1 : Vrai ou faux','Exercice 2 : Questions directes, phrases à compléter et relier par des flèches','Situation-problème 1','Situation-problème 2','Situation-problème 3'];
+function bilSig(f){return (f.titre||'')+'|'+(f.classe||'')+'|'+(f.seances||[]).map(x=>(x.capTitre||'')+'~'+String(x.contenus||'').replace(/\s+/g,' ').trim()).join('||')}
+function bilanFresh(f){const b=ensureBilan(f);if(b.some(x=>has(x.q)||has(x.s))&&f.bilanSig!==bilSig(f)){b.forEach(x=>{x.q='';x.s=''});f.bilanSig=''}return b}
 function ensureBilan(f){if(!Array.isArray(f.bilan)||f.bilan.length!==5) f.bilan=BIL_T.map((t,i)=>({q:'',s:'',...((f.bilan||[])[i]||{})}));return f.bilan}
 const has=s=>String(s??'').trim().length>0;
 
@@ -3682,9 +3689,10 @@ function libFillSeance(f,i){
 }
 function libFillBilan(f){
   const sc=libTok(f.seances.map(x=>(x.capTitre||'')+' '+(x.contenus||'')).join(' '));
-  const c=libGet().bilans.filter(b=>b.disc===f.disc).map(b=>({b,sc:libJac(sc,libTok(b.caps))*10+(b.classe===(f.classe||'')?3:0)+(libN(b.titre)===libN(f.titre)?2:0)})).filter(x=>x.sc>=2.5).sort((x,y)=>y.sc-x.sc);
+  const c=libGet().bilans.filter(b=>b.disc===f.disc&&libJac(sc,libTok(b.caps))>=0.25).map(b=>({b,sc:libJac(sc,libTok(b.caps))*10+(b.classe===(f.classe||'')?3:0)+(libN(b.titre)===libN(f.titre)?2:0)})).filter(x=>x.sc>=2.5).sort((x,y)=>y.sc-x.sc);
   if(!c.length) return false;
-  const bl=ensureBilan(f); c[0].b.bilan.forEach((x,i)=>{if(bl[i]&&!(has(bl[i].q)&&has(bl[i].s))){bl[i].q=x.q;bl[i].s=x.s}});
+  const bl=bilanFresh(f); c[0].b.bilan.forEach((x,i)=>{if(bl[i]&&!(has(bl[i].q)&&has(bl[i].s))){bl[i].q=x.q;bl[i].s=x.s}});
+  f.bilanSig=bilSig(f);
   return bl.every(x=>has(x.q)&&has(x.s));
 }
 /* ---- épreuves ---- */
@@ -3854,7 +3862,7 @@ async function generateAll(f,o){
     else if(pending().length){f.genJob.status='paused';setGen('Préparation en pause : séance(s) non terminée(s) '+pending().map(i=>i+1).join(', ')+'. Les textes déjà terminés sont enregistrés. Cliquez de nouveau sur « Préparer les séances » pour reprendre.',true);}
     else{
       setGen('Rédaction des exercices de synthèse de la leçon…');pstart(f.seances.length);
-      try{if(!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) await genBilan(f,{overwrite:false});touch();}
+      try{if(!bilanFresh(f).every(x=>has(x.q)&&has(x.s))) await genBilan(f,{overwrite:false});touch();}
       catch(e){if(e&&e.code==='cancelled')throw e;if(libFillBilan(f)){usedLib.push('synthèse');touch()}else bilNote=' Les exercices de synthèse n’ont pas pu être rédigés ; vous pourrez les reprendre séparément.';}
       if(!ensureBilan(f).every(x=>has(x.q)&&has(x.s))) bilNote=' Les exercices de synthèse restent incomplets ; utilisez le bouton dédié pour les compléter.';
       f.genJob.status=bilNote?'paused':'done';f.genJob.updated=Date.now();f.genJob.lastError=bilNote;saveNow();
@@ -3884,7 +3892,7 @@ async function fillSeance(i){
 }
 
 async function genBilan(f,o){
-  const bl=ensureBilan(f);
+  const bl=bilanFresh(f);
   if(!(o&&o.overwrite)&&bl.every(x=>has(x.q)&&has(x.s))) return false;
   const sea=f.seances.map((x,k)=>(k+1)+'. '+(x.capTitre||'')+(has(x.contenus)?' — contenus : '+String(x.contenus).replace(/\s*\n\s*/g,' ; ').slice(0,260):'')+(has(x.essentiel)?' — à retenir : '+String(x.essentiel).replace(/\s*\n\s*/g,' ').slice(0,300):'')).join('\n');
   const prompt='Tu es enseignant au Togo ('+discLabel(f)+', classe '+(f.classe||'collège')+'). Leçon : « '+(f.titre||'')+' »'+(has(f.competence)?'. Compétence : '+f.competence:'')+'.\nVoici les '+f.seances.length+' séances de la leçon, de la première à la dernière :\n'+sea+'\n\n'+
@@ -3922,6 +3930,7 @@ async function genBilan(f,o){
   await Promise.all(Array.from({length:Math.min(3,parts.length)},async()=>{while(nx<parts.length&&!fatal){await doPart(parts[nx++])}}));
   if(fatal&&fatal.code==='cancelled') throw fatal;
   GEN.bilWhy=fatal?String(fatal.message||fatal.code).slice(0,160):'';
+  if(bl.some(x=>has(x.q))) f.bilanSig=bilSig(f);
   return bl.some(x=>has(x.q));
 }
 /* =========================================================
@@ -4458,7 +4467,7 @@ async function eprAct(a,b){
     if(snapC&&snapC.situation){E.hist=[eprDigest(snapC)].concat(E.hist||[]).slice(0,4);E.prevSit=[eprS(snapC.situation)].concat(E.prevSit||[]).slice(0,4)}
     E.nGen=(E.nGen||0)+1;
     E.content=null; save(); render(); b=document.querySelector('[data-epact="gen"]')||b;
-    b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;
+    b.disabled=true; eprSay('Préparation de l’épreuve (sujet, corrigé et grille)… cela peut prendre une minute ou deux.'); GEN.stop=false;GEN.running=true;
     await acquireGenWakeLock();
     try{
       if(noAI){if(!libComposeEpr(E)) throw {code:'no_ai',message:NO_AI};save();render();eprSay('IA indisponible : épreuve composée à partir de modèles enregistrés. Relisez le sujet, le corrigé et la grille.')}
@@ -4466,7 +4475,7 @@ async function eprAct(a,b){
     catch(e){
       if(!E.content&&e&&e.code!=='cancelled'&&libComposeEpr(E)){save();render();eprSay('L’IA n’a pas répondu ('+String(e.message||e.code||'erreur').slice(0,120)+') : épreuve composée à partir de modèles enregistrés. Relisez le sujet, le corrigé et la grille.')}
       else{if(!E.content&&snapC){E.content=snapC;save();render()}eprSay(errCopy(e),true);b.disabled=false}}
-    await releaseGenWakeLock();return}
+    GEN.running=false;await releaseGenWakeLock();if(typeof acctChanged==='function')acctChanged();return}
   if(a==='corr'){
     if(REC){try{REC.stop()}catch(e){}}
     const ta=document.getElementById('corr-ep'),ins=((ta&&ta.value)||'').trim();
