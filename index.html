@@ -2724,7 +2724,7 @@ function schemaItems(spec){
   if(spec&&spec.schema) return Array.isArray(spec.schema)?spec.schema:(Array.isArray(spec.schema.items)?spec.schema.items:[]);
   return [];
 }
-function schemaToSvg(spec){
+function schemaToSvg0(spec){
   const items=schemaItems(spec), W=480, H=300, out=[];
   const num=(v,d)=>{const x=parseFloat(String(v==null?'':v).replace(',','.'));return Number.isFinite(x)?Math.max(-100,Math.min(700,x)):d};
   const col=(c,d)=>{c=String(c==null?'':c).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\s_'’-]+/g,'');if(SCH_COL[c])return SCH_COL[c];if(/^#[0-9a-f]{3,8}$/.test(c))return c;return d};
@@ -3282,6 +3282,35 @@ function schemaToSvg(spec){
 }
 
 
+
+/* Montage à transistor dessiné « à la main » par l'IA (fils mal reliés) : les composants sont repris et le montage est redessiné
+   par le gabarit automatique (tous les fils reliés aux bornes) ; les autres éléments de la figure (dynamomètre, bécher…) sont placés dans un second panneau. */
+function circRebuild(items){
+  if(!Array.isArray(items)||!items.some(o=>o&&/transistor/i.test(String(o.t||o.type||'')))) return null;
+  if(items.some(o=>o&&o.t==='fil'&&o.exact===true)) return null;
+  const CIRC=/^(transistor|capteur|ldr|ctn|photoresistance|thermistance|resistor|resistance|conducteurohmique|rheostat|pile|generateur|batterie|source|buzzer|sonnette|alarme|avertisseur|lampe|ampoule|del|led|diode|moteur|moteurelectrique|relais|interrupteur|interrupteurferme|fil|noeud|borne|masse)$/;
+  const kind=o=>String(o.t||o.type||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[\s_-]+/g,'');
+  const circ=[],oth=[];
+  items.forEach(o=>{ if(!o||typeof o!=='object') return; (CIRC.test(kind(o))?circ:oth).push(o) });
+  const comps=circ.filter(o=>!/^(fil|noeud|borne|masse)$/.test(kind(o))).map(o=>circNorm(o));
+  const pick=f=>{const i=comps.findIndex(f); return i<0?null:comps.splice(i,1)[0]};
+  const tr=pick(c=>c.t==='transistor'); if(!tr) return null;
+  const spec={type:'transistor',transistor:tr.type||tr.sens||'npn'};
+  const cap=pick(c=>c.t==='capteur'), res=pick(c=>c.t==='resistor'), pile=pick(c=>c.t==='pile'), ch=pick(c=>/^(buzzer|lampe|del|moteur|relais)$/.test(c.t));
+  if(cap){ if(/^(ctn|ldr|capteur|photorésistance|thermistance)$/i.test(String(cap.label||'').trim())) cap.label=''; spec.capteur=cap } if(res) spec.resistance=res; if(pile) spec.pile=pile; if(ch) spec.charge=ch;
+  if(/pnp/i.test(String(tr.type||tr.sens||''))) spec.type='transistor pnp';
+  const phys=oth.filter(o=>!/^(texte|legende|cote)$/.test(kind(o)));
+  return {circuit:spec, others:phys.length?oth:[]};
+}
+function schemaToSvg(spec){
+  let rb=null; try{ rb=circRebuild(schemaItems(spec)) }catch(e){}
+  if(!rb) return schemaToSvg0(spec);
+  const cs=schemaToSvg0({items:circItems(rb.circuit)});
+  if(!rb.others.length) return cs;
+  const inner=(svg,vb,x,y,w,h)=>svg.replace(/^<svg[^>]*>/,'<svg x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" viewBox="'+vb+'">');
+  const os=schemaToSvg0({items:rb.others});
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 562" width="480" height="562"><rect width="480" height="562" fill="#fff"/>'+inner(cs,'30 6 420 262',30,0,420,262)+inner(os,'0 0 480 300',0,262,480,300)+'</svg>';
+}
 async function eprFigOf(spec,dw){
   if(typeof spec==='string'&&/<svg[\s>]/i.test(spec)) spec={svg:spec};
   if(!spec||typeof spec!=='object') return null;
