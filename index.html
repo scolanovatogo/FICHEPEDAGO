@@ -1777,17 +1777,33 @@ function outlineLines(arr){
   const NB='\u00a0\u00a0\u00a0\u00a0';
   const t1=/^\s*(?:__|\*\*)\s*([IVX]+)\s*[.)]\s+(.+?)\s*(?:__|\*\*)\s*:?\s*$/, t2=/^\s*(?:__|\*\*)\s*(\d{1,2})\s*[.)]\s+(.+?)\s*(?:__|\*\*)\s*:?\s*$/, t3=/^\s*(?:__|\*\*)\s*([a-h])\s*[.)]\s+(.+?)\s*(?:__|\*\*)\s*:?\s*$/;
   const jr=/^\s*(?:__|\*\*)*\s*Je retiens\s*(?:__|\*\*)*\s*:?\s*(?:__|\*\*)*\s*(.*)$/i, em=/^\s*(?:__|\*\*)*\s*Exercices? de maison\s*(?:__|\*\*)*\s*:?\s*(.*)$/i;
-  if(!Array.isArray(arr)||!arr.some(x=>t1.test(x))) return arr;
+  const KW='D[ée]finitions?|Propri[ée]t[ée]s?|Th[ée]or[èe]mes?|Remarques?|Exemples?|Notations?|Vocabulaire|M[ée]thodes?|R[èe]gles?|Formules?|Cons[ée]quences?|Cas particuliers?|Rappels?|Application|D[ée]monstration';
+  const kw=new RegExp('^\\s*(?:(?:[a-h]|\\d{1,2})\\s*[.)]\\s+)?(?:__|\\*\\*)*\\s*('+KW+')\\s*(?:__|\\*\\*)*\\s*:?\\s*(?:__|\\*\\*)*\\s*(.*)$','i');
+  const pl=(re,l)=>{const m=re.exec(l); return m&&m[2].length<=70&&!/[.?!;]\s*$/.test(m[2])?m:null};
+  const P1=/^\s*([IVX]+)\s*[.)]\s+(.+?)\s*:?\s*$/, P2=/^\s*(\d{1,2})\s*[.)]\s+(.+?)\s*:?\s*$/, P3=/^\s*([a-h])\s*[.)]\s+(.+?)\s*:?\s*$/;
+  const hasOutline=arr.some(x=>t1.test(x)||pl(P1,x));
+  if(!Array.isArray(arr)) return arr;
   return arr.map(l=>{ let m;
+    if(hasOutline){
+      if(!t1.test(l)&&(m=pl(P1,l))) return '**__'+m[1]+'. '+m[2].replace(/[_*]+/g,'')+'__**';
+      if(!t2.test(l)&&!kw.test(l)&&(m=pl(P2,l))) return NB+'**__'+m[1]+'. '+m[2].replace(/[_*]+/g,'')+'__** :';
+      if(!t3.test(l)&&!kw.test(l)&&(m=pl(P3,l))) return NB+NB+'**__[[red:'+m[1]+'. '+m[2].replace(/[_*\[\]]+/g,'')+']]__** :';
+    }
+    if((m=kw.exec(l))&&!/^\s*\*\*__/.test(l)){ const lead=/^\s*([a-h]|\d{1,2})\s*[.)]\s+/.exec(l); const rest=(m[2]||'').replace(/(?:__|\*\*)+\s*$/,'').trim(); return (lead?(/\d/.test(lead[1])?NB:NB+NB):'')+'**__'+(lead?lead[1]+'. ':'')+m[1].charAt(0).toUpperCase()+m[1].slice(1)+'__**'+(rest?' : '+rest:' :') }
     if((m=t1.exec(l))) return '**__'+m[1]+'. '+m[2].replace(/[_*]+/g,'').replace(/\s*:\s*$/,'')+'__**';
     if((m=t2.exec(l))) return NB+'**__'+m[1]+'. '+m[2].replace(/[_*]+/g,'').replace(/\s*:\s*$/,'')+'__** :';
     if((m=t3.exec(l))) return NB+NB+'**__[[red:'+m[1]+'. '+m[2].replace(/[_*\[\]]+/g,'').replace(/^red:/,'').replace(/\s*:\s*$/,'')+']]__** :';
-    if((m=jr.exec(l))) return '**__Je retiens :__** '+m[1];
+    if((m=jr.exec(l))) return '**__Je retiens :__** '+String(m[1]).replace(/(?:__|\*\*)+\s*$/,'').trim();
     if((m=em.exec(l))&&!/^\s*\S+\s*$/.test(m[1]||'x')) return '**__Exercice de maison__** : '+m[1];
     return l});
 }
+function mathBits(txt){
+  if(typeof txt!=='string'||!txt) return txt;
+  return txt.split(/(\$[^$\n]*\$)/).map((seg,k)=>k%2?seg:seg.replace(/(^|[^\w$\\])([xyzXYZ])_\{?([A-Za-z0-9]{1,3})\}?(?![\w$])/g,'$1$$$2_{$3}$$')).join('');
+}
 function fixTitleNumbers(txt){
   if(typeof txt!=='string'||!txt) return txt;
+  txt=mathBits(txt);
   const L=txt.split('\n');
   const lvl=l=>{const m=/^\s*(?:__|\*\*)\s*(?:([IVX]+)|(\d{1,2})|([a-h]))\s*[.)]\s+\S/.exec(l); if(!m) return 0; return m[1]?1:m[2]?2:3};
   const strip=(i,kind)=>{L[i]=L[i].replace(kind===3?/^(\s*(?:__|\*\*)\s*)[a-h]\s*[.)]\s+/:/^(\s*(?:__|\*\*)\s*)\d{1,2}\s*[.)]\s+/,'$1')};
@@ -2604,6 +2620,19 @@ function sectionFor(s,key,ins){
   secs.forEach(o=>{const T=tok(o.title+' '+o.own); let c=0; q.forEach(w=>{if(T.has(w)) c++}); const sc=c+o.lvl*0.01; if(c>=1&&sc>bs){bs=sc;best=o}});
   return best;
 }
+function inRepereLesson(f,s){return /rep[èe]re|coordonn|abscisse|ordonn|orthonorm|vecteur/i.test([f.titre,s.capTitre,s.contenus].join(' '))}
+function repereFigFromText(txt,lesson){
+  const re=/\b([A-Z])\s*\(\s*(-?\d+(?:[.,]\d+)?)\s*[;,]\s*(-?\d+(?:[.,]\d+)?)\s*\)/g, P={}; let m, n=0;
+  while((m=re.exec(String(txt||'')))&&n<3){ if(!P[m[1]]){P[m[1]]=[+m[2].replace(',','.'),+m[3].replace(',','.')]; n++} }
+  const ks=Object.keys(P); if(!ks.length) return null;
+  const xs=ks.map(k=>P[k][0]),ys=ks.map(k=>P[k][1]);
+  const sp={points:Object.assign({},P),repere:{xmin:Math.floor(Math.min(0,...xs))-1,xmax:Math.ceil(Math.max(0,...xs))+1,ymin:Math.floor(Math.min(0,...ys))-1,ymax:Math.ceil(Math.max(0,...ys))+1,pas:1,grille:true,coordonnees:true},segments:[]};
+  if(ks.length>=2){ const [a,b]=ks, vec=/vecteur/i.test(lesson)&&!/distance|norme/i.test(lesson);
+    sp.segments.push({p:[a,b],fleche:vec});
+    if(/distance|norme|longueur|pythagore/i.test(lesson)){ const c=['C','H','K','L'].find(x=>!P[x])||'C'; sp.points[c]=[P[b][0],P[a][1]];
+      sp.segments.push({p:[a,c],tirets:true},{p:[c,b],tirets:true}); sp.anglesDroits=[[a,c,b]] } }
+  return sp;
+}
 function instrLocalFig(ins){
   const t=String(ins||''); if(!t.trim()) return null;
   const c=instrCoordFig(t); if(c) return c.geo;
@@ -2635,7 +2664,7 @@ async function genCourseFigures(f,i,ins,asker,depth,secKey){
   let locKeep=[];
   set3D([f.titre,s.capTitre,s.contenus,s.essentiel].join(' '));
   const opLesson=/additi|soustrac|multipli|divis|somme|diff[ée]rence|produit|quotient|op[ée]ration|calcul|comparai|ranger|ordre/i.test([f.titre,s.capTitre].join(' '));
-  const lopt=ins?undefined:{geo:needsCourseGeo(f,s)||/techno/i.test([f.disc,f.sub].join(' ')),
+  const lopt=ins?undefined:{geo:(needsCourseGeo(f,s)&&!inRepereLesson(f,s))||/techno/i.test([f.disc,f.sub].join(' ')),
     dec:/rang|partie enti|partie d[ée]cimale/i.test([s.capTitre,s.contenus].join(' '))&&!opLesson&&!(f.seances||[]).some((x,k)=>k!==i&&x&&x._dec)};
   let locFallback=[];
   const SEC=ins?sectionFor(s,secKey,ins):null, secTxt=SEC?(SEC.title+'\n'+SEC.text).slice(0,900):'';
@@ -2656,7 +2685,12 @@ async function genCourseFigures(f,i,ins,asker,depth,secKey){
    if(loc.some(im=>/^Rang de chaque chiffre/.test(String(im.credit||'')))) s._dec=true;
    /* une droite graduée / un axe demande aussi l'IA (valeurs, points, intervalles) : on garde les figures locales ET on trace l'axe */
    if(loc.length){ if(!ins&&(needsAxis(f,s)||loc.every(im=>/^Rang de chaque chiffre/.test(String(im.credit||''))))) locKeep=loc; else return loc } }
-  const ctxTxt=[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,ins||''].join(' ');
+  const inRep=inRepereLesson(f,s);
+  if(!ins&&inRep){
+    const sp=repereFigFromText([s.situation,s.synthese,s.essentiel,s.trace].join('\n'),[f.titre,s.capTitre,s.contenus].join(' '));
+    if(sp){try{const im=await eprFig(sp,420,false); if(im){im.credit=''; return [im]}}catch(e){}}
+  }
+  const ctxTxt=[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,ins||'',inRep?'[LEÇON DANS UN REPÈRE : toute figure est tracée DANS un repère gradué avec ses axes, les points sont placés avec leurs coordonnées ; aucune figure « libre » hors repère]':''].join(' ');
   const prompt='Tu es un enseignant qui trace les figures du COURS au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+', leçon « '+(f.titre||'')+' »).\nCapacité de la séance : '+(s.capTitre||'')+'\nContenus de la séance : '+(s.contenus||'')+'\nEssentiel du cours : '+String(s.essentiel||s.trace||'').slice(0,1500)+(ins?'\nDEMANDE DE L’ENSEIGNANT (PRIORITAIRE, elle remplace le reste : trace UNIQUEMENT la figure décrite, une seule figure sauf si plusieurs sont demandées ; respecte EXACTEMENT les noms de points, valeurs, longueurs, angles, graduations, positions et couleurs écrits ; n’ajoute aucun autre élément ni aucune autre figure du cours) : '+ins:'')+
     (ins?'':'\nTrace AUTANT de figures que nécessaire pour illustrer les notions du cours (de 1 à 6 : une par notion ou par exemple important ; une seule si une seule suffit). Quand le cours présente PLUSIEURS droites ou notions (par exemple la médiane, la médiatrice, la hauteur et la bissectrice d’un triangle, puis leurs points de concours), trace UNE FIGURE PAR NOTION, chacune avec sa construction complète (le triangle, la droite tracée, le point, les angles droits, les codages), pour que l’élève apprenne à les dessiner ; ne te contente jamais d’une seule figure générale. Si une notion concerne une droite graduée, une demi-droite graduée, des abscisses ou un axe : utilise {"droiteGraduee":{…}} avec les points du cours placés à leurs abscisses (par exemple A, B, C) et "abscisses":true pour écrire l’abscisse à côté de chaque nom ; choisis min, max, pas et sous adaptés (entiers ou décimaux simples) et "demi":"droite" pour une demi-droite graduée (départ à min, souvent 0). Sinon choisis librement le type de figure qui convient à CHAQUE notion, sans aucune limite : figure de géométrie plane (toutes les figures : triangles et leurs droites remarquables, quadrilatères, cercles, angles, polygones, symétries, translations, rotations, Thalès, Pythagore, trigonométrie…), solides et patrons, repères et courbes de fonctions, statistiques (histogramme, diagramme en bâtons ou circulaire), schémas de physique (circuits, forces, optique, mécanique), de chimie (montages, verrerie, électrolyse, filtration, distillation, tests d’identification, modèles atomiques), de SVT (organes, cellules, cycles), de technologie (vues, objets techniques), plans et cartes. Pour une démonstration ou une expérience du cours, dessine le dispositif complet annoté. Si le cours ne gagne rien à être illustré, réponds {"figures":[]}.\n'+GEO_DOC+'\nRéponds uniquement par {"figures":[{"legende":"titre court de la figure (ex. Demi-droite graduée)","geo":{…}}]} où chaque figure porte la clé geo, items ou svg selon son type.');
   const prompt2=prompt+'\n'+COURSE_FIG_RULE+(courseFigHints(ctxTxt)?'\n'+courseFigHints(ctxTxt):'');
@@ -2936,6 +2970,7 @@ function geoSvg(spec){
     out.push(line(Q[a],Q[b],sg.tirets===true,2));link(a,b);
     const m=[(Q[a][0]+Q[b][0])/2,(Q[a][1]+Q[b][1])/2],ux=Q[b][0]-Q[a][0],uy=Q[b][1]-Q[a][1],ln=Math.hypot(ux,uy)||1;
     const nx=-uy/ln,ny=ux/ln;
+    if(sg.fleche===true){const hx=Q[b][0],hy=Q[b][1]; out.push(`<polygon points="${f1(hx)},${f1(hy)} ${f1(hx-11*ux/ln+4.5*nx)},${f1(hy-11*uy/ln+4.5*ny)} ${f1(hx-11*ux/ln-4.5*nx)},${f1(hy-11*uy/ln-4.5*ny)}" fill="#000"/>`)}
     const k=Math.max(0,Math.min(3,Math.round(+sg.trait||0)));
     {const c1=[0.5*ux/ln+0.866*nx,0.5*uy/ln+0.866*ny],c2=[0.5*ux/ln-0.866*nx,0.5*uy/ln-0.866*ny];
     const fl=v=>(v[0]<0||(Math.abs(v[0])<1e-9&&v[1]>0))?[-v[0],-v[1]]:v;
