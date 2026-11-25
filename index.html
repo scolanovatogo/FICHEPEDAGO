@@ -307,10 +307,42 @@ function loadDB(){
 }
 let saveT=null;
 function setStatus(t,bad){const el=document.getElementById('savestate'); if(el){el.textContent=t;el.className='save-state'+(bad?' bad':'');}}
+/* stockage de secours (IndexedDB) quand localStorage (≈5 Mo) est plein */
+const IDB_FLAG='fp_idb_ts';
+function idbOpen(){return new Promise((res,rej)=>{try{const r=indexedDB.open('fp-store',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}catch(e){rej(e)}})}
+async function idbPut(k,v){const d=await idbOpen();return new Promise((res,rej)=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>res(true);t.onerror=()=>rej(t.error)})}
+async function idbGet(k){const d=await idbOpen();return new Promise((res,rej)=>{const t=d.transaction('kv','readonly').objectStore('kv').get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error)})}
+async function idbDel(k){try{const d=await idbOpen();d.transaction('kv','readwrite').objectStore('kv').delete(k)}catch(e){}}
 function saveNow(){
   clearTimeout(saveT);saveT=null;
-  try{localStorage.setItem(KEY,JSON.stringify(DB));setStatus(memOnly?'Non enregistré (navigateur bloqué)':'Enregistré',memOnly);try{if(!ACCT_APPLY) acctChanged()}catch(e2){}return true}
-  catch(e){setStatus('Mémoire du navigateur pleine ou bloquée : exportez votre fiche',true);return false}
+  const json=JSON.stringify(DB);
+  const ok=()=>{try{localStorage.removeItem(IDB_FLAG)}catch(e){} setStatus(memOnly?'Non enregistré (navigateur bloqué)':'Enregistré',memOnly);try{if(!ACCT_APPLY) acctChanged()}catch(e2){}return true};
+  try{localStorage.setItem(KEY,json);return ok()}catch(e){}
+  /* 1) la bibliothèque de réutilisation (copie allégée) est réduite pour libérer de la place */
+  for(let t=0;t<3;t++){
+    try{const L=libGet(); for(const k of ['seances','eprs','bilans']) L[k]=L[k].sort((a,b)=>b.ts-a.ts).slice(0,Math.floor(L[k].length*0.5)); try{localStorage.setItem(LIBKEY,JSON.stringify(L))}catch(e){localStorage.removeItem(LIBKEY)}}catch(e){}
+    try{localStorage.setItem(KEY,json);return ok()}catch(e){}
+  }
+  /* 2) stockage de secours : base IndexedDB du navigateur (capacité bien plus grande) */
+  const ts=Date.now();
+  idbPut('db',{ts,json}).then(()=>{try{localStorage.setItem(IDB_FLAG,String(ts))}catch(e){} setStatus('Enregistré (stockage étendu)',false);try{if(!ACCT_APPLY) acctChanged()}catch(e2){}}).catch(()=>{
+    /* 3) dernier recours : copie sans les figures (images), le texte est conservé ; les figures restent en mémoire vive et dans le compte */
+    let light=json; try{light=JSON.stringify(DB,(k,v)=>(typeof v==='string'&&v.length>1500&&v.startsWith('data:image'))?'':v)}catch(e){}
+    const okL=(msg)=>{setStatus(msg,false);try{if(!ACCT_APPLY) acctChanged()}catch(e2){}};
+    try{localStorage.setItem(KEY,light);okL('Enregistré sans les figures (mémoire de l’appareil limitée) : elles restent dans le compte');return}catch(e){}
+    idbPut('db',{ts,json:light}).then(()=>{try{localStorage.setItem(IDB_FLAG,String(ts))}catch(e){} okL('Enregistré sans les figures (mémoire de l’appareil limitée)')})
+      .catch(()=>setStatus('Mémoire du navigateur pleine ou bloquée : quittez la navigation privée, libérez de la place sur le téléphone ou exportez votre fiche',true));
+  });
+  return true;
+}
+async function idbBoot(){
+  try{
+    if(!localStorage.getItem(IDB_FLAG)) return;
+    const r=await idbGet('db'); if(!r||!r.json) return;
+    const d=JSON.parse(r.json); DB=Object.assign(DB,d);
+    for(const f of DB.fiches||[]) for(const s of f.seances||[]) ensureSeance(s,f.tpl);
+    render();
+  }catch(e){}
 }
 function save(){
   clearTimeout(saveT);
@@ -434,11 +466,18 @@ async function acctSign(mode){
   if(!/^https:\/\/[^\s]+$/.test(url)){acctStatus('Saisissez l’adresse complète du serveur, qui commence par https://',true);return}
   if(!/^[a-z0-9._-]{3,32}$/.test(user)){acctStatus('Identifiant : 3 à 32 caractères (lettres, chiffres, point, tiret), sans espace ni accent.',true);return}
   if(pass.length<8){acctStatus('Mot de passe : au moins 8 caractères.',true);return}
+  if(mode==='login'&&pass!==pass.trim()&&!confirm('Le mot de passe saisi commence ou finit par un espace (souvent ajouté par le clavier du téléphone). Continuer quand même ?')) return;
   acctStatus('Calcul de la clé de chiffrement…');
   try{
-    const k=await acctKeys(user,pass);
-    ACCT={url,user,ek:k.ek,token:'',rev:0,dirty:false};
-    const j=await acctApi('/'+mode,'POST',{user,auth:k.auth,invite});
+    const vars=mode==='login'?[...new Set([pass,pass.normalize('NFC'),pass.trim(),pass.trim().normalize('NFC'),pass.normalize('NFKC')])]:[pass];
+    let k,j,last=null;
+    for(let vi=0;vi<vars.length;vi++){
+      k=await acctKeys(user,vars[vi]);
+      ACCT={url,user,ek:k.ek,token:'',rev:0,dirty:false};
+      try{ j=await acctApi('/'+mode,'POST',{user,auth:k.auth,invite}); last=null; break }
+      catch(e){ last=e; if(!(e&&(e.status===401||e.status===403))||vi===vars.length-1) break }
+    }
+    if(last) throw last;
     ACCT.token=j.token; acctPersist();
     const srv=await acctApi('/data','GET');
     const hasLocal=(DB.fiches&&DB.fiches.length>0)||((DB.ai&&DB.ai.keys)||[]).length>0;
@@ -450,7 +489,7 @@ async function acctSign(mode){
     render2();
   }catch(e){
     ACCT.token=''; ACCT.ek=''; acctPersist();
-    acctStatus(e&&e.status?acctErrText(e.message):('Connexion au serveur impossible : '+(acctErrText(e)||'réponse inattendue')+'. Vérifiez l’adresse du serveur et la connexion internet.'),true);
+    acctStatus(e&&e.status?(acctErrText(e.message)+((e.status===401||e.status===403)&&mode==='login'?' (identifiant utilisé : « '+user+' », mot de passe de '+pass.length+' caractères — comparez avec le premier appareil.) Vérifiez : même identifiant (en minuscules), même mot de passe que sur le premier appareil (majuscules, espaces) et même adresse de serveur. Si le compte a été créé avec une ancienne version de l’application, mettez d’abord à jour l’application sur le premier appareil.':'')):('Connexion au serveur impossible : '+(acctErrText(e)||'réponse inattendue')+'. Vérifiez l’adresse du serveur et la connexion internet.'),true);
   }
 }
 async function acctAct(a){
@@ -503,8 +542,9 @@ function acctCard(){
   return `<section class="card"><h2>Compte <small>retrouver vos données sur un autre appareil</small></h2>
    <p class="small" style="margin:0 0 10px">Créez un compte sur votre serveur Cloudflare, puis connectez-vous avec le même identifiant et le même mot de passe depuis un ordinateur ou un autre téléphone : vous retrouvez vos fiches, vos épreuves et vos clés. Le code du serveur se trouve dans le fichier <b>cloudflare-comptes.js</b>.</p>
    <label class="f" for="acctUrl" style="max-width:520px">Adresse du serveur de comptes<input type="text" id="acctUrl" autocomplete="off" value="${esc(urlDef)}" placeholder="https://fiches-compte.votre-nom.workers.dev"></label>
-   <label class="f" for="acctUser" style="max-width:520px;margin-top:8px">Identifiant (sans espace ni accent)<input type="text" id="acctUser" autocomplete="username" value="${esc(ACCT.user||'')}" placeholder="par exemple : koffi"></label>
-   <label class="f" for="acctPass" style="max-width:520px;margin-top:8px">Mot de passe (8 caractères au moins)<input type="password" id="acctPass" autocomplete="current-password" value="" placeholder="votre mot de passe"></label>
+   <label class="f" for="acctUser" style="max-width:520px;margin-top:8px">Identifiant (sans espace ni accent)<input type="text" id="acctUser" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(ACCT.user||'')}" placeholder="par exemple : koffi"></label>
+   <label class="f" for="acctPass" style="max-width:520px;margin-top:8px">Mot de passe (8 caractères au moins)<input type="password" id="acctPass" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" value="" placeholder="votre mot de passe"></label>
+   <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" onchange="document.getElementById('acctPass').type=this.checked?'text':'password'"> Afficher le mot de passe (pour vérifier majuscules et espaces)</label>
    <label class="f" for="acctInvite" style="max-width:520px;margin-top:8px">Code d’invitation (seulement si le serveur en demande un)<input type="password" id="acctInvite" autocomplete="off" value=""></label>
    <div class="row" style="margin-top:10px"><button class="btn" data-acct="register">Créer le compte</button><button class="btn alt" data-acct="login">Se connecter</button></div>
    <div id="acct-st" class="status small muted" role="status" style="margin-top:8px"></div>
@@ -2458,6 +2498,7 @@ const COURSE_FIG_RULE='RÈGLE DE REPRÉSENTATION : dès que le cours nomme une f
 const COURSE_RECIPES=[
  {nom:'médiatrice',re:/m[ée]diatrices?/i,need:sp=>/"perp"|"circ"/.test(sp),txt:'triangle ABC bien visible ; pour CHAQUE côté : son milieu nommé, la médiatrice tracée en trait plein ({"perp":…} puis la droite), l’angle droit en ce milieu et les petits traits égaux de codage ; les trois médiatrices concourent en O = {"circ":"O","de":["A","B","C"]}.'},
  {nom:'cercle circonscrit',re:/circonscrit/i,need:sp=>/"circ"/.test(sp)&&/"passePar"|"cercles"/.test(sp),txt:'triangle ABC ; les trois médiatrices (milieux, angles droits, codages) ; leur point de concours O = {"circ":"O","de":["A","B","C"]} ; le cercle {"c":"O","passePar":"A"} qui passe par A, B et C ; [OA], [OB], [OC] en pointillés.'},
+ {nom:'droite des milieux',re:/droites? des milieux|milieux de(?:s)? (?:deux |trois )?c[ôo]t[ée]s|joignant les milieux/i,need:sp=>/"milieu"/.test(sp)&&/"polygones"/.test(sp),txt:'triangle ABC ; I milieu de [AB] et J milieu de [AC] ({"milieu":"I","de":["A","B"]}, {"milieu":"J","de":["A","C"]}) avec petits traits de codage sur les moitiés ; le segment [IJ] tracé ; JAMAIS deux droites parallèles seules : toujours le triangle complet.'},
  {nom:'médiane',re:/m[ée]dianes?/i,need:sp=>/"milieu"/.test(sp),txt:'triangle ABC ; pour chaque côté son milieu (petits traits de codage sur les deux moitiés) et la médiane qui joint le sommet opposé à ce milieu ; les trois médianes se coupent en G = {"gravite":"G","de":["A","B","C"]}.'},
  {nom:'centre de gravité',re:/centre de gravit|point de gravit/i,need:sp=>/"gravite"/.test(sp),txt:'triangle ABC ; les trois médianes tracées ; le point G = {"gravite":"G","de":["A","B","C"]} nommé à leur intersection.'},
  {nom:'hauteur',re:/hauteurs?/i,need:sp=>/"proj"|"ortho"/.test(sp),txt:'triangle ABC ; pour CHAQUE sommet : le pied {"proj":…} de la perpendiculaire au côté opposé (côté prolongé si besoin), la hauteur en trait plein et l’angle droit marqué ; les trois hauteurs concourent en H = {"ortho":"H","de":["A","B","C"]}.'},
@@ -2486,6 +2527,15 @@ function courseFigMissing(text,specs){
 /* ===== Figures de géométrie tracées PAR L’APPLICATION (sans IA) dès qu’une notion est citée dans le cours ===== */
 const GT={A:[2.5,5],B:[0,0],C:[7,0.8]};
 const GL=[
+ ['dmil',/droites? des milieux|joignant les milieux|joint les milieux|milieux de(?:s)? (?:deux |trois )?c[ôo]t[ée]s|milieu de \[[a-z]{2}\] et[^.]{0,30}milieu de \[[a-z]{2}\]/,[
+  ['Droite des milieux : I milieu de [AB], J milieu de [AC] ; (IJ) // (BC) et IJ = BC/2',(txt)=>{
+    const T=String(txt||'').toUpperCase(); const m=/TRIANGLE\s+([A-Z])([A-Z])([A-Z])/.exec(T);
+    let [A,B,C]=m?[m[1],m[2],m[3]]:['A','B','C'];
+    const mi=[...T.matchAll(/MILIEU\s+([A-Z])\s+(?:DE|DU SEGMENT|DU CÔTÉ)\s*\[?([A-Z])([A-Z])\]?/g)].filter(x=>[A,B,C].includes(x[2])&&[A,B,C].includes(x[3]));
+    let I='I',J='J'; if(mi.length>=2&&mi[0][1]!==mi[1][1]){I=mi[0][1];J=mi[1][1]; const s1=[mi[0][2],mi[0][3]],s2=[mi[1][2],mi[1][3]]; const com=s1.find(x=>s2.includes(x)); if(com){const o1=s1.find(x=>x!==com),o2=s2.find(x=>x!==com); A=com;B=o1;C=o2}}
+    const L=[A,B,C,I,J]; if(new Set(L).size<5){A='A';B='B';C='C';I='I';J='J'}
+    return {points:{[A]:[2.5,5],[B]:[0,0],[C]:[7,0.8]},construire:[{milieu:I,de:[A,B]},{milieu:J,de:[A,C]}],polygones:[[A,B,C]],segments:[{p:[I,J]},{p:[A,I],trait:1},{p:[I,B],trait:1},{p:[A,J],trait:2},{p:[J,C],trait:2}]}
+  }]]],
  ['dec',/partie enti[èe]re|partie d[ée]cimale|rangs? des chiffres|rang de chaque chiffre|rangs? d['e ]un nombre/,[
   ['Rang de chaque chiffre d’un nombre décimal : partie entière et partie décimale',t=>{let m=null,re=/(\d{1,3}(?:[ \u00a0]?\d{3})*[,.]\d{1,4})/g,q;while((q=re.exec(t))){const v=q[1].replace(/[ \u00a0]/g,'');if(v.replace(/[,.]/,'').length<=7){m=v;break}}return {items:[{t:'rangs',nombre:m||'35,274',x:240,y:36}]}}]]],
  ['med',/m[ée]dianes?|centre de gravit[ée]/,[
@@ -2500,6 +2550,8 @@ const GL=[
  ['bis',/bissectrices?|cercle inscrit/,[
   ['Bissectrice de l’angle Â : la demi-droite qui partage l’angle en deux angles égaux',{points:GT,construire:[{bissec:'D',de:['B','A','C']}],polygones:[['A','B','C']],segments:[['A','D']],angles:[{p:['B','A','D'],label:'α'},{p:['D','A','C'],label:'α'}]}],
   ['Les trois bissectrices se coupent en I, centre du cercle inscrit au triangle',{points:GT,construire:[{bissec:'D',de:['B','A','C']},{bissec:'E',de:['A','B','C']},{bissec:'F',de:['A','C','B']},{inscrit:'I',de:['A','B','C']},{proj:'_T',de:'I',sur:['B','C']}],polygones:[['A','B','C']],segments:[['A','D'],['B','E'],['C','F']],cercles:[{c:'I',passePar:'_T'}]}]]],
+ ['dm',/droites? des milieux|milieux?[^.]{0,30}\bdes? (?:deux )?c[ôo]t[ée]s|milieux?[^.]{0,30}c[ôo]t[ée]s? \[|milieu d['’ ]?un c[ôo]t[ée]|joint(?:es)? les milieux/,[
+  ['Droite des milieux : I milieu de [AB], J milieu de [AC] ; alors (IJ) est parallèle à (BC) et IJ = BC ÷ 2',{points:GT,construire:[{milieu:'I',de:['A','B']},{milieu:'J',de:['A','C']}],polygones:[['A','B','C']],segments:[{p:['I','J']},{p:['A','I'],trait:1},{p:['I','B'],trait:1},{p:['A','J'],trait:2},{p:['J','C'],trait:2}]}]]],
  ['mil',/milieu d['’ ]?un segment|milieu du segment|milieu de \[/,[
   ['I est le milieu du segment [AB] : AI = IB',{points:{A:[0,0],B:[6,0]},construire:[{milieu:'I',de:['A','B']}],segments:[{p:['A','I'],trait:1},{p:['I','B'],trait:1}]}]]],
  ['perp',/perpendiculaires?/,[
@@ -2760,6 +2812,8 @@ function localGeoFigs(text,opt){
     /* « parallèle » ou « perpendiculaire » cités à l’intérieur d’une autre notion déjà traitée : on évite les doublons */
     if((k==='par'||k==='perp')&&out.length) continue;
     if(k==='pyth'&&seen.has('haut')) continue;
+    if((k==='mil'||k==='thales')&&seen.has('dm')) continue;
+    if(k==='mil'&&seen.has('dmil')) continue;
     seen.add(k); for(const fg of figs){const sp=typeof fg[1]==='function'?fg[1](String(text||'')):JSON.parse(JSON.stringify(fg[1])); out.push(sp&&sp.items?{legende:fg[0],items:sp.items}:{legende:fg[0],geo:sp})}
   }
   return out.slice(0,6);
@@ -2769,6 +2823,19 @@ async function localCourseFigs(text,opt){
   for(const x of localGeoFigs(text,opt)){
     try{const im=x.items?await eprFigOf({items:x.items},380):await eprFig(x.geo,380,false); if(im){im.credit=x.legende; out.push(im)}}catch(e){}
   }
+  return out;
+}
+/* Contrôle de cohérence (sans IA) entre le texte demandé / la section du cours et la figure géométrique tracée */
+function figStructDefects(spec,txt){
+  const out=[]; if(!spec||typeof spec!=='object'||!spec.points||!txt) return out;
+  const T=String(txt).replace(/’/g,"'"); const have=new Set(Object.keys(spec.points).filter(k=>k[0]!=='_'));
+  for(const c of (Array.isArray(spec.construire)?spec.construire:[])){ const n=c&&(c.milieu||c.sym||c.symC||c.proj||c.inter||c.parallelogramme||c.transl||c.rot||c.sur||c.nom||c.circ||c.inscrit||c.ortho||c.gravite||c.bissec||c.perp); if(n) have.add(String(n)) }
+  const need=new Set(); let m;
+  for(const re of [/\[([A-Z])([A-Z])\]/g,/\(([A-Z])([A-Z])\)/g]) while((m=re.exec(T))){need.add(m[1]);need.add(m[2])}
+  if((m=/triangle\s+([A-Z])([A-Z])([A-Z])\b/.exec(T))){need.add(m[1]);need.add(m[2]);need.add(m[3])}
+  const miss=[...need].filter(k=>!have.has(k)); if(miss.length) out.push('Les points '+miss.join(', ')+' cités dans le texte sont absents de la figure : place-les et nomme-les.');
+  if(/milieux?/i.test(T)&&!(Array.isArray(spec.construire)&&spec.construire.some(c=>c&&c.milieu))&&!(Array.isArray(spec.segments)&&spec.segments.some(g=>g&&g.trait))) out.push('Le texte parle d’un milieu : construis-le avec {"milieu":"I","de":["A","B"]} et marque les deux moitiés égales (trait).');
+  if(/\b[A-Z]\s*\(\s*-?\d+(?:[.,]\d+)?\s*[;,]\s*-?\d+/.test(T)&&!spec.repere) out.push('Les points ont des coordonnées : trace la figure DANS un repère gradué (champ "repere").');
   return out;
 }
 async function genCourseFigures(f,i,ins,asker,depth,secKey){
@@ -2813,7 +2880,17 @@ async function genCourseFigures(f,i,ins,asker,depth,secKey){
   const out=[], specs=[];
   for(const x of arr.slice(0,6)){
     if(!x||typeof x!=='object') continue;
-    const spec=figSpecOf(x); if(!spec) continue;
+    let spec=figSpecOf(x); if(!spec) continue;
+    if(!depth&&(ins||secTxt)){
+      try{
+        const chk=(ins||'')+' '+secTxt, df=figStructDefects(spec,chk);
+        if(df.length){
+          const d2=await (asker?asker:ask)(prompt2+'\n'+SCH_CATALOG+'\n'+FIG_ANY_DOC+'\nCORRIGE la figure précédente : '+df.join(' ')+' Redessine UNE figure complète, objet {"geo":{…}}.')||{};
+          const a2=Array.isArray(d2.figures)&&d2.figures[0]?d2.figures[0]:d2, sp2=figSpecOf(a2);
+          if(sp2&&figStructDefects(sp2,chk).length<df.length) spec=sp2;
+        }
+      }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e }
+    }
     try{const im=await eprFigOf(spec,spec.droiteGraduee||spec.axe?420:380); if(!im) continue; if(has(x.legende)) im.credit=String(x.legende).trim(); out.push(im); specs.push(JSON.stringify(spec))}catch(e){}
   }
   /* notion nommée dans le cours mais figure incomplète (par exemple un triangle sans ses médiatrices) : une relance ciblée par notion */
@@ -5823,6 +5900,7 @@ window.addEventListener('resize',fitSheets);
 /* ---------- démarrage ---------- */
 loadDB();
 render();
+idbBoot();
 initSample();
 acctBoot();
 </script>
