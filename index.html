@@ -849,8 +849,7 @@ function splitRowFit(b,r,room,M){
   if(!best) return null;
   return [{row:best[0],h:mr(best[0])},{row:best[1],h:mr(best[1])}];
 }
-function paginate0(doc,k){
-  const CHH=CONTENT_H-PAGE_ADJ;
+function paginate(doc,k){
   const M=document.getElementById('measure'); M.style.setProperty('--k',k||1); M.style.setProperty('--lh',lhOf(k));
   const meas=doc.map(b=>{
     if(b.t==='tbl'){
@@ -874,9 +873,9 @@ function paginate0(doc,k){
     const m=meas[bi];
     if(b.pb){if(used>0) np(); corr=pages.length-1}
     if(b.t!=='tbl'){
-      if(b.lines&&b.lines.every(x=>!String(x).trim())&&(used===0||used+m.h>CHH)) return;
+      if(b.lines&&b.lines.every(x=>!String(x).trim())&&(used===0||used+m.h>CONTENT_H)) return;
       let need=m.h; if(b.keep){let j=bi+1;while(doc[j]&&doc[j].keep&&doc[j].t!=='tbl'){need+=meas[j].h;j++}need+=firstPiece(j)}
-      if(used+need>CHH&&used>0) np();
+      if(used+need>CONTENT_H&&used>0) np();
       cur().push({html:blockHTML(b)}); used+=m.h; return;
     }
     const rows=b.rows.slice(), rowH=m.rowH.slice();
@@ -886,14 +885,14 @@ function paginate0(doc,k){
       let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
       const kp=(rows[e].keep&&e+1<rows.length)?(rowSplittable(rows[e+1])?Math.min(rowH[e+1],80):rowH[e+1]):0;
       let need=h+kp+(chunk?0:m.headH);
-      if(i===e&&!kp&&used+need>CHH){
-        const room=CHH-used-(chunk?0:m.headH);
+      if(i===e&&!kp&&used+need>CONTENT_H){
+        const room=CONTENT_H-used-(chunk?0:m.headH);
         if(room>=60&&rowSplittable(rows[i])){
           const sp=splitRowFit(b,rows[i],room,M);
           if(sp){rows.splice(i,1,sp[0].row,sp[1].row);rowH.splice(i,1,sp[0].h,sp[1].h);h=rowH[i];need=h+(chunk?0:m.headH)}
         }
       }
-      if(used+need>CHH&&used>0){np();chunk=null;need=h+kp+m.headH}
+      if(used+need>CONTENT_H&&used>0){np();chunk=null;need=h+kp+m.headH}
       if(!chunk){chunk={b,rows:[]};cur().push(chunk);used+=m.headH}
       for(let k=i;k<=e;k++) chunk.rows.push(rows[k]); used+=h;
       i=e+1;
@@ -904,19 +903,6 @@ function paginate0(doc,k){
   if(corr!==null) outP.corr=pages.slice(0,corr).filter(p=>p.length).length;
   return outP;
 }
-let PAGE_ADJ=0;
-/* contrôle réel : si une page déborde (formules, polices), on repagine avec une marge plus grande */
-function paginate(doc,k){
-  PAGE_ADJ=0; let out;
-  for(let t=0;t<5;t++){
-    out=paginate0(doc,k);
-    const M=document.getElementById('measure'); let over=0;
-    out.forEach(p=>{M.innerHTML='<div>'+p+'</div>'; const h=M.firstElementChild.getBoundingClientRect().height; over=Math.max(over,h-CONTENT_H-12)});
-    M.innerHTML='';
-    if(over<=0) break; PAGE_ADJ+=Math.ceil(over)+4;
-  }
-  PAGE_ADJ=0; return out;
-}
 /* Épreuve : pages numérotées « Page 1 sur n » ; corrigé type : numérotation à part, pour que l’élève ne croie pas qu’il manque des pages */
 function pgLabel(pages,i,f){
   const c=(f&&f.__exam&&typeof pages.corr==='number'&&pages.corr>0)?pages.corr:null;
@@ -926,7 +912,7 @@ function pgLabel(pages,i,f){
 function footerLeft(f){
   if(f.__exam){const w=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');return {who:w,rest:(f.examTitle||'Épreuve')+' - '+discLabel(f)+(has(f.classe)?' '+f.classe:'')+' ',titre:''}}
   const who=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');
-  return {who, rest:discLabel(f)+(has(f.classe)?' '+f.classe:'')+(has(f.leconNo)||has(f.titre)?' - Leçon'+(has(f.leconNo)?' '+f.leconNo:'')+' :':'')+' ', titre:has(f.titre)?(t0=>t0.charAt(0)+t0.slice(1).toLowerCase())(String(f.titre).replace(/[_*]+/g,'').trim()):''};
+  return {who, rest:discLabel(f)+(has(f.classe)?' '+f.classe:'')+(has(f.leconNo)||has(f.titre)?' - Leçon'+(has(f.leconNo)?' '+f.leconNo:'')+' :':'')+' ', titre:has(f.titre)?(f.titre.charAt(0)+f.titre.slice(1).toLowerCase()):''};
 }
 function pagesHTML(f,pages,k){
   const fl=footerLeft(f);
