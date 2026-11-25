@@ -734,7 +734,6 @@ function buildDoc(f0){
       rows.push(row([cell([],{sm:true}),cell(lines(m0.prof)),cell(lines(m0.eleve))]));
       rows.push(mo('orga'));
       rows.push(mo('commun'));
-      if(has(s.resolution)) rows.push(...grp([row([cell(['**__[[red:RÉSOLUTION DE LA SITUATION D’APPRENTISSAGE]]__**'],{span:3,align:'center'})]),...lines(s.resolution).map(x=>row([cell([x],{span:3,just:true})]))]));
       rows.push(row([cell(['**__[[red:INSTITUTIONNALISATION (trace écrite)]]__** **(10 min)**'],{span:3,align:'center'})],{keep:true}));
       const tl=outlineLines(lines(s.trace)).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])));
       { const consL=['**Consignes au prof**',...lines(s.consignes).filter((x,k,a)=>has(x)||(k>0&&has(a[k-1])))], capL='***[[blue:Capacités : '+mk(capShown(s))+']]***';
@@ -5245,8 +5244,7 @@ function stepSeances(f){
       ${fld('Exercice de maison','seances.'+i+'.exoMaison',{rows:4,wide:true,hint:'Ex. CIAM 4e Page … N° …'})}`
     :`
       ${fld('Correction de l’exercice de maison précédent','seances.'+i+'.correction',{wide:true,hint:'Laissez vide pour le texte habituel'})}
-      ${fld('Résolution de la situation (avant le cours)','seances.'+i+'.resolution',{rows:4,wide:true,hint:'Résolution ou explication de la situation qui aboutit à la notion'})}
-      ${fld('Consignes au prof','seances.'+i+'.consignes',{rows:3,wide:true})}
+            ${fld('Consignes au prof','seances.'+i+'.consignes',{rows:3,wide:true})}
       ${fld('Trace écrite (institutionnalisation)','seances.'+i+'.trace',{rows:8,wide:true,hint:'Une ligne = un paragraphe'})}
       ${fld('Exercice d’application','seances.'+i+'.exoApp',{rows:3})}${fld('Solution de l’exercice d’application','seances.'+i+'.exoAppSol',{rows:3})}
       ${fld('Récapitulation','seances.'+i+'.recap',{wide:true,hint:'Laissez vide pour le texte habituel'})}
