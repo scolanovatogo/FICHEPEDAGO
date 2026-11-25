@@ -849,7 +849,8 @@ function splitRowFit(b,r,room,M){
   if(!best) return null;
   return [{row:best[0],h:mr(best[0])},{row:best[1],h:mr(best[1])}];
 }
-function paginate(doc,k){
+function paginate0(doc,k){
+  const CHH=CONTENT_H-PAGE_ADJ;
   const M=document.getElementById('measure'); M.style.setProperty('--k',k||1); M.style.setProperty('--lh',lhOf(k));
   const meas=doc.map(b=>{
     if(b.t==='tbl'){
@@ -873,9 +874,9 @@ function paginate(doc,k){
     const m=meas[bi];
     if(b.pb){if(used>0) np(); corr=pages.length-1}
     if(b.t!=='tbl'){
-      if(b.lines&&b.lines.every(x=>!String(x).trim())&&(used===0||used+m.h>CONTENT_H)) return;
+      if(b.lines&&b.lines.every(x=>!String(x).trim())&&(used===0||used+m.h>CHH)) return;
       let need=m.h; if(b.keep){let j=bi+1;while(doc[j]&&doc[j].keep&&doc[j].t!=='tbl'){need+=meas[j].h;j++}need+=firstPiece(j)}
-      if(used+need>CONTENT_H&&used>0) np();
+      if(used+need>CHH&&used>0) np();
       cur().push({html:blockHTML(b)}); used+=m.h; return;
     }
     const rows=b.rows.slice(), rowH=m.rowH.slice();
@@ -885,14 +886,14 @@ function paginate(doc,k){
       let h=0; for(let k=i;k<=e;k++) h+=rowH[k];
       const kp=(rows[e].keep&&e+1<rows.length)?(rowSplittable(rows[e+1])?Math.min(rowH[e+1],80):rowH[e+1]):0;
       let need=h+kp+(chunk?0:m.headH);
-      if(i===e&&!kp&&used+need>CONTENT_H){
-        const room=CONTENT_H-used-(chunk?0:m.headH);
+      if(i===e&&!kp&&used+need>CHH){
+        const room=CHH-used-(chunk?0:m.headH);
         if(room>=60&&rowSplittable(rows[i])){
           const sp=splitRowFit(b,rows[i],room,M);
           if(sp){rows.splice(i,1,sp[0].row,sp[1].row);rowH.splice(i,1,sp[0].h,sp[1].h);h=rowH[i];need=h+(chunk?0:m.headH)}
         }
       }
-      if(used+need>CONTENT_H&&used>0){np();chunk=null;need=h+kp+m.headH}
+      if(used+need>CHH&&used>0){np();chunk=null;need=h+kp+m.headH}
       if(!chunk){chunk={b,rows:[]};cur().push(chunk);used+=m.headH}
       for(let k=i;k<=e;k++) chunk.rows.push(rows[k]); used+=h;
       i=e+1;
@@ -903,6 +904,19 @@ function paginate(doc,k){
   if(corr!==null) outP.corr=pages.slice(0,corr).filter(p=>p.length).length;
   return outP;
 }
+let PAGE_ADJ=0;
+/* contrôle réel : si une page déborde (formules, polices), on repagine avec une marge plus grande */
+function paginate(doc,k){
+  PAGE_ADJ=0; let out;
+  for(let t=0;t<5;t++){
+    out=paginate0(doc,k);
+    const M=document.getElementById('measure'); let over=0;
+    out.forEach(p=>{M.innerHTML='<div>'+p+'</div>'; const h=M.firstElementChild.getBoundingClientRect().height; over=Math.max(over,h-CONTENT_H-12)});
+    M.innerHTML='';
+    if(over<=0||t>=1) break; PAGE_ADJ=Math.min(Math.ceil(over)+4,26);
+  }
+  PAGE_ADJ=0; return out;
+}
 /* Épreuve : pages numérotées « Page 1 sur n » ; corrigé type : numérotation à part, pour que l’élève ne croie pas qu’il manque des pages */
 function pgLabel(pages,i,f){
   const c=(f&&f.__exam&&typeof pages.corr==='number'&&pages.corr>0)?pages.corr:null;
@@ -912,7 +926,7 @@ function pgLabel(pages,i,f){
 function footerLeft(f){
   if(f.__exam){const w=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');return {who:w,rest:(f.examTitle||'Épreuve')+' - '+discLabel(f)+(has(f.classe)?' '+f.classe:'')+' ',titre:''}}
   const who=[f.prenom,(f.nom||'').toUpperCase()].filter(Boolean).join(' ');
-  return {who, rest:discLabel(f)+(has(f.classe)?' '+f.classe:'')+(has(f.leconNo)||has(f.titre)?' - Leçon'+(has(f.leconNo)?' '+f.leconNo:'')+' :':'')+' ', titre:has(f.titre)?(f.titre.charAt(0)+f.titre.slice(1).toLowerCase()):''};
+  return {who, rest:discLabel(f)+(has(f.classe)?' '+f.classe:'')+(has(f.leconNo)||has(f.titre)?' - Leçon'+(has(f.leconNo)?' '+f.leconNo:'')+' :':'')+' ', titre:has(f.titre)?(t0=>t0.charAt(0)+t0.slice(1).toLowerCase())(String(f.titre).replace(/[_*]+/g,'').trim()):''};
 }
 function pagesHTML(f,pages,k){
   const fl=footerLeft(f);
@@ -1712,7 +1726,99 @@ function runProvider(k,prompt,opts){
   if(k==='gemini') return geminiJson(prompt,opts);
   return compatJson(k,prompt,opts);
 }
-async function ask(prompt,opts){
+/* ===== Nombres en lettres / en chiffres (français) ===== */
+const NB_U=['zéro','un','deux','trois','quatre','cinq','six','sept','huit','neuf','dix','onze','douze','treize','quatorze','quinze','seize','dix-sept','dix-huit','dix-neuf'];
+const NB_D=['','','vingt','trente','quarante','cinquante','soixante'];
+function nb100(n,fin){ // 0..99
+  if(n<20) return NB_U[n];
+  const d=Math.floor(n/10),u=n%10;
+  if(d===7||d===9){ const b=d===7?'soixante':'quatre-vingt'; const r=10+u; return (d===7&&u===1)?'soixante et onze':b+'-'+NB_U[r] }
+  if(d===8) return u?'quatre-vingt-'+NB_U[u]:'quatre-vingt'+(fin?'s':'');
+  return NB_D[d]+(u===1?' et un':u?'-'+NB_U[u]:'');
+}
+function nb1000(n,fin){ // 0..999
+  const c=Math.floor(n/100),r=n%100; let s='';
+  if(c){ s=(c===1?'cent':NB_U[c]+' cent'); if(!r&&c>1&&fin) s+='s'; }
+  if(r) s+=(s?' ':'')+nb100(r,fin&&true);
+  return s||(n===0?'zéro':'');
+}
+function entierEnLettres(n){
+  n=Math.floor(Math.abs(+n)); if(!isFinite(n)) return '';
+  if(n===0) return 'zéro';
+  if(n>=1e15) return String(n);
+  const grp=[[1e12,'billion'],[1e9,'milliard'],[1e6,'million']]; let out=[];
+  let rest=n;
+  for(const [v,nm] of grp){ const q=Math.floor(rest/v); if(q){ out.push(nb1000(q,false)+' '+nm+(q>1?'s':'')); rest%=v } }
+  const mil=Math.floor(rest/1000); rest%=1000;
+  if(mil) out.push(mil===1?'mille':nb1000(mil,false)+' mille');
+  if(rest) out.push(nb1000(rest,true));
+  return out.join(' ').replace(/ +/g,' ').trim();
+}
+const NB_RANG=['dixième','centième','millième','dix-millième','cent-millième','millionième'];
+function nombreEnLettres(x,mode){
+  let s=String(x).trim().replace(/\s|\u00a0/g,'').replace('.',',');
+  const neg=/^[-−–]/.test(s); s=s.replace(/^[-−–+]/,'');
+  const m=/^(\d+)(?:,(\d+))?$/.exec(s); if(!m) return String(x);
+  const ent=entierEnLettres(+m[1]); let dec=(m[2]||'').replace(/0+$/,''), out;
+  if(!dec) out=ent;
+  else if(mode==='u'&&dec.length<=NB_RANG.length){
+    const dn=+dec, rg=NB_RANG[dec.length-1]+(dn>1?'s':'');
+    out=(+m[1]===0?'':ent+' unité'+(+m[1]>1?'s':'')+' et ')+entierEnLettres(dn)+' '+rg;
+  } else {
+    const zs=dec.match(/^0*/)[0].length; // zéros après la virgule
+    out=ent+' virgule '+'zéro '.repeat(zs)+entierEnLettres(+dec);
+    out=out.replace('zéro zéro','zéro zéro');
+  }
+  return (neg?'moins ':'')+out;
+}
+function lettresEnNombre(txt){
+  let t=String(txt).toLowerCase().replace(/[’']/g,' ').replace(/-/g,' ').replace(/\s+/g,' ').trim();
+  const neg=/^moins /.test(t); t=t.replace(/^moins /,'');
+  const U={zéro:0,zero:0,un:1,une:1,deux:2,trois:3,quatre:4,cinq:5,six:6,sept:7,huit:8,neuf:9,dix:10,onze:11,douze:12,treize:13,quatorze:14,quinze:15,seize:16,vingt:20,vingts:20,trente:30,quarante:40,cinquante:50,soixante:60};
+  const parse=s=>{ // entier
+    let tot=0,cur=0; const w=s.split(' ').filter(x=>x&&x!=='et');
+    for(const x of w){
+      if(x in U){ cur+=U[x] }
+      else if(/^quatre$/.test(x)) cur+=4;
+      else if(/^cents?$/.test(x)){ cur=(cur||1)*100 }
+      else if(x==='mille'){ tot+=(cur||1)*1000; cur=0 }
+      else if(/^millions?$/.test(x)){ tot+=(cur||1)*1e6; cur=0 }
+      else if(/^milliards?$/.test(x)){ tot+=(cur||1)*1e9; cur=0 }
+      else if(/^billions?$/.test(x)){ tot+=(cur||1)*1e12; cur=0 }
+      else if(x==='quatre'){cur+=4}
+      else return NaN;
+    }
+    return tot+cur;
+  };
+  const fix=s=>s.replace(/quatre vingts?/g,'quatrevingt').replace(/quatrevingt/g,'80 ');
+  const P=s=>{ s=s.trim(); const q=/^(.*?)(?:^| )quatre vingts? ?(.*)$/.exec(s); if(!/quatre vingt/.test(s)) return parse(s);
+    const a=s.split(/quatre vingts?/); const left=a[0].trim(), right=(a[1]||'').trim();
+    let L=left?parse(left):0; if(left&&isNaN(L)) return NaN; let R=right?parse(right):0; if(right&&isNaN(R)) return NaN;
+    return (left?L*1:0)+80+R; };
+  let r;
+  const mr=/^(.*) virgule (.*)$/.exec(t);
+  const mu=/^(?:(.*?) unit[ée]s? et )?(.*) (dixièmes?|dixiemes?|centièmes?|centiemes?|millièmes?|milliemes?)$/.exec(t);
+  if(mu){ const e=mu[1]?P(mu[1]):0, d=P(mu[2]); const k=/^dix/.test(mu[3])?1:/^cent/.test(mu[3])?2:3; r=e+d/Math.pow(10,k) }
+  else if(mr){ const e=P(mr[1]); let dw=mr[2], z=0; while(/^zéro /.test(dw)||/^zero /.test(dw)){dw=dw.replace(/^z[ée]ro /,'');z++} const d=P(dw); if(isNaN(e)||isNaN(d)) return null; r=+(e+'.'+'0'.repeat(z)+d) }
+  else r=P(t);
+  if(r===undefined||isNaN(r)) return null;
+  return (neg?'−':'')+String(+r.toFixed(8)).replace('.',',');
+}
+/* marqueurs écrits par l'IA : ⟦L:3,25⟧ (en lettres)  ⟦L:3,25|u⟧ (« unités et centièmes »)  ⟦C:trois virgule vingt-cinq⟧ (en chiffres) */
+function nbMarqueurs(v){
+  if(typeof v==='string'){
+    if(v.indexOf('⟦')<0) return v;
+    return v.replace(/⟦L:\s*([^⟧|]+?)\s*(?:\|\s*(u)\s*)?⟧/g,(m,a,u)=>nombreEnLettres(a,u))
+            .replace(/⟦C:\s*([^⟧]+?)\s*⟧/g,(m,a)=>{const r=lettresEnNombre(a);return r===null?a:r});
+  }
+  if(Array.isArray(v)) return v.map(nbMarqueurs);
+  if(v&&typeof v==='object'){ const o={}; for(const k of Object.keys(v)) o[k]=nbMarqueurs(v[k]); return o }
+  return v;
+}
+const NB_RULE=' NOMBRES EN LETTRES / EN CHIFFRES : chaque fois qu’un énoncé demande d’écrire un nombre en lettres (ou en chiffres), n’écris JAMAIS toi-même la forme convertie dans les réponses, corrigés et solutions : écris le nombre dans un marqueur que l’application convertit sans erreur : ⟦L:3,25⟧ pour « en lettres » (⟦L:3,25|u⟧ pour la forme « trois unités et vingt-cinq centièmes »), ⟦C:trois virgule vingt-cinq⟧ pour « en chiffres ». Exemple : « Écris 3,25 en lettres. » → solution : ⟦L:3,25⟧.';
+
+async function ask(prompt,opts){ return nbMarqueurs(await ask0(prompt,opts)) }
+async function ask0(prompt,opts){
   opts=opts||{};
   const k=aiKind();
   if(k==='free') return freeJson(prompt);
@@ -1818,7 +1924,7 @@ function fixTitleNumbers(txt){
 }
 const ROMAINS=['I','II','III','IV','V','VI','VII','VIII','IX','X'];
 const MODELE_TRACE=' MODÈLE DE RÉDACTION (valable pour TOUTES les disciplines et TOUTES les leçons : mathématiques, physique-chimie, SVT, technologie, français, anglais, histoire-géographie, éducation civique…) : la DÉFINITION, la règle ou la propriété est TROUVÉE À PARTIR DE LA SITUATION D’APPRENTISSAGE, jamais énoncée d’abord dans l’abstrait. Sous chaque titre, commence par ce que la situation a fait apparaître, avec ses données exactes (« Dans la situation problème, nous avons obtenu / observé / mesuré / lu / constaté … »), puis déduis la notion étape par étape, UNE IDÉE PAR LIGNE, puis conclus par la définition ou la propriété. Exemples : mathématiques : « 1 est **l’abscisse** et se note x_A » puis « Le couple (x_A ; y_A) est le **couple de coordonnées** du point A. » ; physique : « Nous avons mesuré une masse de 200 g et un poids de 2 N » puis « Le **poids** d’un corps est la force …» ; SVT : « Nous avons observé que … » puis « La **photosynthèse** est … » ; français/anglais : « Dans le texte, nous avons relevé … » puis « Un **verbe conjugué** … » ; histoire-géographie : « Le document montre que … » puis « La **colonisation** désigne … ». Mets les mots-clés en gras avec **…**. Ne répète jamais une définition déjà donnée et n’écris pas de bloc « Définition » générique avant les titres. Après les sous-titres d’une partie, écris une ligne « Je retiens : » suivie de la formule ou propriété à retenir (en **gras**) lorsqu’il y en a une. N’écris PAS d’« Exercice de maison » dans le cours : les exercices de maison restent dans leur champ habituel, sans référence de manuel. Sous-titres de la forme « 1. Titre : » / « a. Titre : » (deux-points à la fin).';
-const TITRES_RULE=(i)=>MODELE_TRACE+' '+'NUMÉROTATION DES TITRES (obligatoire, chaque titre seul sur sa ligne et souligné avec __titre__) : GRAND TITRE en chiffres romains (I., II., III., IV.…), SOUS-TITRE en chiffres (1., 2., 3.…), SOUS-SOUS-TITRE en lettres minuscules (a., b., c.…). Le début de chaque capacité traitée dans la séance est un GRAND TITRE : celui de cette séance est numéroté « '+(ROMAINS[i]||'I')+'. » (si la séance traite plusieurs capacités, un grand titre par capacité, numérotés à la suite). Exemple : __I. Les droites particulières d’un triangle__ / __1. Les médiatrices__ / __a. Définition__ / __b. Construction__ / __2. Les médianes__ / __a. Définition__… Un titre qui n’a pas de frère n’est PAS numéroté : n’écris « a. » que s’il y a au moins un « b. » dans le même groupe (sinon écris seulement « Définition »), et « 1. » que s’il y a un « 2. ». Ne mets AUCUN autre système de numérotation pour les titres.';
+const TITRES_RULE=(i)=>MODELE_TRACE+' '+'NUMÉROTATION DES TITRES (obligatoire, chaque titre seul sur sa ligne et souligné avec __titre__) : GRAND TITRE en chiffres romains (I., II., III., IV.…), SOUS-TITRE en chiffres (1., 2., 3.…), SOUS-SOUS-TITRE en lettres minuscules (a., b., c.…). Le début de chaque capacité traitée dans la séance est un GRAND TITRE : celui de cette séance est numéroté « '+(ROMAINS[i]||'I')+'. » (si la séance traite plusieurs capacités, un grand titre par capacité, numérotés à la suite). Exemple : __I. Les droites particulières d’un triangle__ / __1. Les médiatrices__ / __a. Définition__ / __b. Construction__ / __2. Les médianes__ / __a. Définition__… Un titre qui n’a pas de frère n’est PAS numéroté : n’écris « a. » que s’il y a au moins un « b. » dans le même groupe (sinon écris seulement « Définition »), et « 1. » que s’il y a un « 2. ». Ne mets AUCUN autre système de numérotation pour les titres.'+NB_RULE;
 const LATEX_RULE='Écris toute fraction, puissance, racine ou symbole mathématique en LaTeX entre signes dollar (ex. $\\frac{3}{4}$, $x^{2}$, $\\sqrt{a+b}$, $\\overrightarrow{AB}$, $\\mathbb{Q}$, $\\parallel$). TOUTE formule LaTeX (système d’inéquations, accolade, tableau, ≥, ≤, fraction…) est ENTRE SIGNES DOLLAR et sans « \\displaystyle » : jamais de code LaTeX hors des dollars. Exemple de système : $\\left\\{\\begin{array}{l} 2x+1>5 \\\\ -x+4\\ge 1 \\end{array}\\right.$. Mets en **gras** les mots clés et souligne les titres avec __titre__. N’utilise aucune autre balise.';
 const LATEX_RULE_EPR=LATEX_RULE.replace('Mets en **gras** les mots clés et souligne les titres avec __titre__.','Mets en **gras** les mots clés. Ne souligne RIEN (aucun __ ... __), pas même « Choisis la bonne réponse » ou « Complète le texte suivant ».');
 async function extractProgramme(f,src,hint){
@@ -4620,7 +4726,7 @@ async function genEpreuve(E){
   'STRUCTURE OBLIGATOIRE : Exercice 1 « Situation d’évaluation » ('+fmtN(p1)+' pts) ; Exercice 2 « Questions objectives » ('+fmtN(p2)+' pts) ; Exercice 3 « Questions traditionnelles » ('+fmtN(p3)+' pts).\n'+modele+'\n'+'RÈGLE PRIORITAIRE POUR L’EXERCICE 2 (elle remplace le nombre de parties du modèle) : l’exercice 2 comporte TROIS parties, mais QUATRE parties (I, II, III et IV) dès que « réarrange les groupes de mots » en fait partie (dans ce cas, chaque partie reste courte : 3 items). Les parties sont choisies parmi ces types : vrai ou faux, choisis la bonne réponse, complète, réarrange les groupes de mots, relie par une flèche (appariement). Privilégie vrai ou faux, choisis la bonne réponse et complète. « Réarrange » peut venir de temps en temps : il prend peu de place, avec une propriété ou une phrase courte décomposée en 4 groupes de mots (4 lignes, type « reordre »). « Relier » (appariement) vient rarement ; quand il est choisi, il REMPLACE « choisis la bonne réponse » (les deux se ressemblent : n’utilise jamais les deux dans la même épreuve) et reste limité à 4 éléments. Chaque partie reste courte (3 à 4 items). Ajuste les barèmes pour que le total de l’exercice 2 reste EXACT. Objectif : l’énoncé de l’épreuve tient sur UNE page.\n'+
   'La somme des barèmes de chaque exercice doit être EXACTEMENT égale à son total. Adapte le nombre d’items si les totaux diffèrent du modèle. Les questions portent sur les contenus enseignés ci-dessus, au niveau de la classe, sans notion non vue. SITUATION D’ÉVALUATION : une situation de la vie courante, concrète et réaliste, que l’élève peut imaginer, observer ou expérimenter (manipuler, mesurer, essayer, comparer, construire, partager, estimer, observer un phénomène) et qui l’amène à réfléchir. Elle est en rapport DIRECT avec les contenus demandés : le contenu est nécessaire pour la résoudre, ce n’est pas un simple décor. 3 à 6 phrases, avec des données numériques précises (ou des observations précises dans une discipline expérimentale), puis la ou les consignes qui demandent une production évaluable. EXIGENCE DE TRAVAIL (très important) : la situation est notée sur '+fmtN(p1)+' points, soit environ '+fmtN(p1/(m==='43'?2:1))+' points par consigne : chaque consigne doit donc demander un TRAVAIL SUBSTANTIEL à l’élève avant qu’il obtienne ces points, jamais une simple question de cours ni une réponse lisible directement dans le texte. Chaque consigne est UNE MISSION globale, rédigée en une ou deux phrases fluides (par exemple « Explique…, puis détermine…, et justifie… », « Réalise… et présente… »), qui oblige l’élève à mener lui-même plusieurs étapes de travail (organiser les données, calculer ou exploiter des mesures, schématiser ou construire, interpréter, conclure). INTERDIT : découper la consigne en petites questions, en sous-questions numérotées ou lettrées (pas de a), b), c), d), pas de liste) ; l’élève doit trouver seul les étapes à suivre, c’est la grille qui les détaille. Les données de la situation obligent à raisonner : il faut combiner au moins deux informations ou deux étapes de calcul. Chaque étape attendue correspond à des lignes de la grille de correction, qui doit pouvoir détailler au moins 4 étapes notées par consigne.  Ne te limite pas aux décors habituels (marché, village, coopérative, atelier) : utilise le cadre imposé plus bas et varie les personnages, les lieux et les objets (prénoms togolais bienvenus). Si les capacités viennent de plusieurs leçons, la situation en relie deux de leçons différentes (voir « FOCUS DE LA SITUATION »). Chaque consigne (champ « consignes ») ne contient QUE son libellé : n’écris jamais le mot « Consigne » ni son numéro dans le texte. FIGURES : une figure peut accompagner la situation (clé « figSit »), un exercice (clé « fig » dans l’objet de la partie) ou le corrigé (« figCorrSit » pour la situation, « figCorr » pour une partie). Si une consigne ou une question demande de représenter, tracer, dessiner, schématiser ou construire (par exemple représenter une force), le corrigé contient OBLIGATOIREMENT la figure correspondante, avec la réponse tracée comme l’élève doit la tracer ; il ne se contente jamais de la décrire par du texte. La figure de la situation est FACULTATIVE : ajoute-la seulement quand elle aide réellement à comprendre ou à résoudre la situation, et choisis le TYPE de figure que la situation demande, sans te limiter à la géométrie : figure de géométrie (triangle, cercle, droites, points, angles, symétrie, construction, solide, patron), schéma d’un montage ou d’un objet, courbe, graphique, histogramme, diagramme, plan ou croquis à l’échelle, carte simplifiée, schéma d’un organe, d’un cycle ou d’un circuit, ligne du temps… FORMATS : géométrie plane → l’objet décrit plus bas ; montage ou dispositif de physique-chimie → {"items":[…]} s’il est décrit dans les règles de la discipline ; TOUT AUTRE dessin → {"svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"340\" viewBox=\"0 0 480 340\">…</svg>"} (balises svg, g, line, rect, circle, ellipse, polygon, polyline, path, text, tspan ; traits noirs sur fond blanc, textes de 14 px au moins, sans chevauchement, dimensions et valeurs de la situation écrites sur la figure). Quand la situation se résout par un calcul, des données chiffrées, un tableau de mesures décrit ou une observation racontée, omets « figSit » : le texte se suffit et ne renvoie à aucune figure. La figure représente EXACTEMENT ce que le texte décrit. La figure de l’énoncé montre seulement les données ; celle du corrigé montre en plus ce qu’il fallait construire ou trouver. Le texte renvoie à « la figure ci-dessous » seulement si une figure est fournie. '+GEO_DOC+'\n\n'+
   'NUMÉROTATION : les parties de chaque exercice sont numérotées (I., II., III. ou A), B), C)) et leurs questions (1), 2), 3)).\n'+
-  'PRÉSENTATION : dans « enonce » et « corrige » de chaque partie, le contexte vient d’abord, puis chaque question numérotée 1), 2), 3)… sur SA PROPRE LIGNE (sépare par \n). Le champ « corrige » est OBLIGATOIRE pour TOUTES les parties (exercices 2 et 3), avec une réponse par ligne, numérotée comme la question ; quand une question demande de représenter, tracer ou construire (forces en vecteurs, schéma, courbe), le corrigé donne les grandeurs, l’échelle et la longueur des flèches, et « figCorr » contient la figure attendue. QUESTION QUI DEMANDE DE REPRÉSENTER (« représente », « trace », « construis », « schématise », « dessine le vecteur… ») : la figure « fig » de l’énoncé montre SEULEMENT le dispositif de départ (par exemple le solide suspendu à son fil), SANS la force, le vecteur, la courbe ou le schéma que l’élève doit produire ; la réponse attendue est dessinée uniquement dans « figCorr » (corrigé). Pour chaque dispositif cité (transistor, capteur, circuit, verrerie, plan incliné…), utilise les composants correspondants de la liste : n’aie pas peur de faire des schémas variés, adaptés à CHAQUE contenu.  CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne, ORGANISÉE PAR CONSIGNE : commence par « Consigne 1 : » puis sa résolution complète ; à la fin de la consigne 1, va à la ligne (\n) et écris « Consigne 2 : » avec sa résolution, et ainsi de suite ; ne mets jamais deux consignes dans la même ligne. Si la situation contient plusieurs expériences, chaque expérience (« Expérience 1 : … », « Expérience 2 : … ») occupe son propre paragraphe, séparé par un saut de ligne.\n\n'+
+  NB_RULE+'\n'+'PRÉSENTATION : dans « enonce » et « corrige » de chaque partie, le contexte vient d’abord, puis chaque question numérotée 1), 2), 3)… sur SA PROPRE LIGNE (sépare par \n). Le champ « corrige » est OBLIGATOIRE pour TOUTES les parties (exercices 2 et 3), avec une réponse par ligne, numérotée comme la question ; quand une question demande de représenter, tracer ou construire (forces en vecteurs, schéma, courbe), le corrigé donne les grandeurs, l’échelle et la longueur des flèches, et « figCorr » contient la figure attendue. QUESTION QUI DEMANDE DE REPRÉSENTER (« représente », « trace », « construis », « schématise », « dessine le vecteur… ») : la figure « fig » de l’énoncé montre SEULEMENT le dispositif de départ (par exemple le solide suspendu à son fil), SANS la force, le vecteur, la courbe ou le schéma que l’élève doit produire ; la réponse attendue est dessinée uniquement dans « figCorr » (corrigé). Pour chaque dispositif cité (transistor, capteur, circuit, verrerie, plan incliné…), utilise les composants correspondants de la liste : n’aie pas peur de faire des schémas variés, adaptés à CHAQUE contenu.  CORRIGÉ : réponses complètes et EXACTES (vérifie chaque calcul). « corrSit » est la résolution rédigée de la situation, avec tous les calculs, une étape par ligne, ORGANISÉE PAR CONSIGNE : commence par « Consigne 1 : » puis sa résolution complète ; à la fin de la consigne 1, va à la ligne (\n) et écris « Consigne 2 : » avec sa résolution, et ainsi de suite ; ne mets jamais deux consignes dans la même ligne. Si la situation contient plusieurs expériences, chaque expérience (« Expérience 1 : … », « Expérience 2 : … ») occupe son propre paragraphe, séparé par un saut de ligne.\n\n'+
   'PORTÉE DU CORRIGÉ ET DE LA GRILLE (règle stricte) : le corrigé de la situation, le corrigé de chaque partie des exercices 2 et 3 et TOUS les niveaux de performance de la grille n’emploient QUE les notions, définitions, lois, formules, grandeurs, unités et méthodes qui figurent dans les contenus listés ci-dessus. Aucune notion extérieure, même exacte (pas de loi, de formule, de grandeur, de vocabulaire ou de raisonnement absent des contenus). Si la résolution d’une consigne exigerait une notion non listée, modifie la consigne ou la situation pour qu’elle s’en passe : ne corrige jamais avec une notion qui n’a pas été enseignée.\n'+
   'GRILLE DE CORRECTION de la situation d’évaluation uniquement (total EXACT : '+fmtN(p1)+' pts). Elle doit être DÉTAILLÉE, ligne par ligne, comme une vraie grille officielle. Quatre critères dans cet ordre : CM1 Pertinence, CM2 Correction, CM3 Cohérence, CP Perfectionnement. Les totaux par critère s’adaptent (usuel pour 8 pts : 2,5 ; 2,5 ; 2 ; 1) et leur somme vaut '+fmtN(p1)+'. Chaque critère est une liste de lignes {"ind":indicateur, "niv":niveau de performance, "pts":barème}. Un indicateur regroupe PLUSIEURS lignes consécutives : RÉPÈTE le même texte d’indicateur, à l’identique, sur chaque ligne de son groupe. Chaque ligne de niveau de performance vaut 0,25 pt (multiples de 0,25 seulement) : un critère de 2,5 pts contient donc 10 lignes, un critère de 2 pts en contient 8. INDICATEURS ET NIVEAUX : '+
   'CM1 (trois indicateurs) : « Adéquation avec le support : données et contraintes identifiées » (UNE ligne par donnée numérique ou contrainte du texte et de la figure, ex. « Côté de la cour : (x + 5) m », « Prix du béton : 2 500 F le m² ») ; « Adéquation avec la consigne (compréhension de la consigne) » (une ligne par tâche demandée : ce qu’il faut exprimer, calculer, factoriser, construire) ; « Justesse de la réponse au regard de la consigne » (une ligne par grandeur finale demandée, ex. « Calculer le coût du béton pour x = 10 »). '+
