@@ -1773,8 +1773,22 @@ async function pdfImages(doc,count){
   return out;
 }
 /* ---------- extraction du programme ---------- */
+function fixTitleNumbers(txt){
+  if(typeof txt!=='string'||!txt) return txt;
+  const L=txt.split('\n');
+  const lvl=l=>{const m=/^\s*(?:__|\*\*)\s*(?:([IVX]+)|(\d{1,2})|([a-h]))\s*[.)]\s+\S/.exec(l); if(!m) return 0; return m[1]?1:m[2]?2:3};
+  const strip=(i,kind)=>{L[i]=L[i].replace(kind===3?/^(\s*(?:__|\*\*)\s*)[a-h]\s*[.)]\s+/:/^(\s*(?:__|\*\*)\s*)\d{1,2}\s*[.)]\s+/,'$1')};
+  for(const kind of [3,2]){
+    let grp=[];
+    const flush=()=>{ if(grp.length===1) strip(grp[0],kind); grp=[] };
+    for(let i=0;i<L.length;i++){ const v=lvl(L[i]); if(!v) continue;
+      if(v===kind) grp.push(i); else if(v<kind) flush(); }
+    flush();
+  }
+  return L.join('\n');
+}
 const ROMAINS=['I','II','III','IV','V','VI','VII','VIII','IX','X'];
-const TITRES_RULE=(i)=>'NUMÉROTATION DES TITRES (obligatoire, chaque titre seul sur sa ligne et souligné avec __titre__) : GRAND TITRE en chiffres romains (I., II., III., IV.…), SOUS-TITRE en chiffres (1., 2., 3.…), SOUS-SOUS-TITRE en lettres minuscules (a., b., c.…). Le début de chaque capacité traitée dans la séance est un GRAND TITRE : celui de cette séance est numéroté « '+(ROMAINS[i]||'I')+'. » (si la séance traite plusieurs capacités, un grand titre par capacité, numérotés à la suite). Exemple : __I. Les droites particulières d’un triangle__ / __1. Les médiatrices__ / __a. Définition__ / __b. Construction__ / __2. Les médianes__ / __a. Définition__… Ne mets AUCUN autre système de numérotation pour les titres.';
+const TITRES_RULE=(i)=>'NUMÉROTATION DES TITRES (obligatoire, chaque titre seul sur sa ligne et souligné avec __titre__) : GRAND TITRE en chiffres romains (I., II., III., IV.…), SOUS-TITRE en chiffres (1., 2., 3.…), SOUS-SOUS-TITRE en lettres minuscules (a., b., c.…). Le début de chaque capacité traitée dans la séance est un GRAND TITRE : celui de cette séance est numéroté « '+(ROMAINS[i]||'I')+'. » (si la séance traite plusieurs capacités, un grand titre par capacité, numérotés à la suite). Exemple : __I. Les droites particulières d’un triangle__ / __1. Les médiatrices__ / __a. Définition__ / __b. Construction__ / __2. Les médianes__ / __a. Définition__… Un titre qui n’a pas de frère n’est PAS numéroté : n’écris « a. » que s’il y a au moins un « b. » dans le même groupe (sinon écris seulement « Définition »), et « 1. » que s’il y a un « 2. ». Ne mets AUCUN autre système de numérotation pour les titres.';
 const LATEX_RULE='Écris toute fraction, puissance, racine ou symbole mathématique en LaTeX entre signes dollar (ex. $\\frac{3}{4}$, $x^{2}$, $\\sqrt{a+b}$, $\\overrightarrow{AB}$, $\\mathbb{Q}$, $\\parallel$). TOUTE formule LaTeX (système d’inéquations, accolade, tableau, ≥, ≤, fraction…) est ENTRE SIGNES DOLLAR et sans « \\displaystyle » : jamais de code LaTeX hors des dollars. Exemple de système : $\\left\\{\\begin{array}{l} 2x+1>5 \\\\ -x+4\\ge 1 \\end{array}\\right.$. Mets en **gras** les mots clés et souligne les titres avec __titre__. N’utilise aucune autre balise.';
 const LATEX_RULE_EPR=LATEX_RULE.replace('Mets en **gras** les mots clés et souligne les titres avec __titre__.','Mets en **gras** les mots clés. Ne souligne RIEN (aucun __ ... __), pas même « Choisis la bonne réponse » ou « Complète le texte suivant ».');
 async function extractProgramme(f,src,hint){
@@ -2382,6 +2396,205 @@ const GL=[
  ['transl',/translation/,[
   ['Translation de vecteur MN : A’B’C’ est l’image de ABC (chaque point est déplacé de A vers A’ comme de M vers N)',{points:{A:[0,0],B:[2.5,0],C:[1,2],M:[0,3.5],N:[4,3.5]},construire:[{transl:'A’',de:'A',vecteur:['M','N']},{transl:'B’',de:'B',vecteur:['M','N']},{transl:'C’',de:'C',vecteur:['M','N']}],polygones:[['A','B','C'],['A’','B’','C’']],segments:[['M','N'],{p:['A','A’'],tirets:true}]}]]]
 ];
+function instrCoordFig(ins){
+  const t=String(ins||''); if(!/rep[èe]re|plan|coordonn/i.test(t)) return null;
+  const re=/\b([A-Z])\s*\(\s*(-?\d+(?:[.,]\d+)?)\s*[;,]\s*(-?\d+(?:[.,]\d+)?)\s*\)/g; const P={}; let m;
+  while((m=re.exec(t))) P[m[1]]=[+m[2].replace(',','.'),+m[3].replace(',','.')];
+  const names=Object.keys(P); if(!names.length) return null;
+  const tri=/triangle\s+([A-Z])([A-Z])([A-Z])/i.exec(t), rect=/rectangle\s+en\s+([A-Z])/i.exec(t);
+  const poly=[];
+  if(tri){ const [a,b,c]=[tri[1],tri[2],tri[3]].map(x=>x.toUpperCase());
+    if(!P[c]&&rect&&rect[1].toUpperCase()===c&&P[a]&&P[b]) P[c]=[P[a][0],P[b][1]];  /* angle droit en C : CA vertical, CB horizontal */
+    if(!P[a]||!P[b]||!P[c]) return null; poly.push([a,b,c]) }
+  const ks=Object.keys(P),xs=ks.map(k=>P[k][0]),ys=ks.map(k=>P[k][1]);
+  const sp={points:P,repere:{xmin:Math.floor(Math.min(0,...xs))-1,xmax:Math.ceil(Math.max(0,...xs))+1,ymin:Math.floor(Math.min(0,...ys))-1,ymax:Math.ceil(Math.max(0,...ys))+1,pas:1,grille:true,coordonnees:true}};
+  if(poly.length){ sp.polygones=poly; if(rect){const c=rect[1].toUpperCase(),o=poly[0].filter(x=>x!==c); if(o.length===2) sp.anglesDroits=[[o[0],c,o[1]]]} }
+  else if(/segment|droite|vecteur/i.test(t)&&ks.length>=2) sp.segments=[[ks[0],ks[1]]];
+  return {legende:'',geo:sp};
+}
+
+/* ===== Figure demandée par l'enseignant : lecture locale des cas courants (tracé exact), sinon IA + vérification ===== */
+const NUMR=String.raw`-?\d+(?:[.,]\d+)?`; const nv=x=>+String(x).replace(',','.');
+function instrAxisFig(t){
+  if(!/gradu[ée]e|axe gradu/i.test(t)) return null;
+  const P={}; let m; const re=new RegExp('\\b([A-Z])\\s*(?:\\(\\s*('+NUMR+')\\s*\\)|d[’\']abscisse\\s*('+NUMR+'))','g');
+  while((m=re.exec(t))) P[m[1]]=nv(m[2]!==undefined?m[2]:m[3]);
+  const r=new RegExp('de\\s*('+NUMR+')\\s*(?:à|a|jusqu[’\']à)\\s*('+NUMR+')','i').exec(t);
+  const vals=Object.values(P);
+  let mn=r?nv(r[1]):(vals.length?Math.floor(Math.min(0,...vals)):0), mx=r?nv(r[2]):(vals.length?Math.ceil(Math.max(...vals))+1:6);
+  if(mx<=mn) mx=mn+6;
+  const sous=/dixi[èe]me/i.test(t)?10:/demi-?gradu|moiti|\b0[,.]5\b/i.test(t)?2:/quart/i.test(t)?4:1;
+  const d={min:mn,max:mx,pas:(mx-mn)>15?Math.ceil((mx-mn)/10):1,sous:sous,origine:mn<=0&&mx>=0};
+  if(/demi-?droite/i.test(t)) d.demi=/gauche/i.test(t)?'gauche':'droite';
+  if(Object.keys(P).length) d.points=P;
+  return {droiteGraduee:d};
+}
+function instrTriFig(t){
+  const tri=new RegExp('triangle\\s+([A-Z])([A-Z])([A-Z])','i').exec(t); if(!tri) return null;
+  const [X,Y,Z]=[tri[1],tri[2],tri[3]].map(x=>x.toUpperCase()); const L={};
+  const re=new RegExp('\\b([A-Z])([A-Z])\\s*=\\s*('+NUMR+')\\s*(cm|mm|m)?','g'); let m;
+  while((m=re.exec(t))) L[[m[1],m[2]].sort().join('')]=[nv(m[3]),m[4]||'cm'];
+  const g=(a,b)=>L[[a,b].sort().join('')]; const rect=/rectangle\s+en\s+([A-Z])/i.exec(t);
+  const u=(g(X,Y)||g(X,Z)||g(Y,Z)||[0,'cm'])[1]; const lab=(a,b)=>g(a,b)?String(g(a,b)[0]).replace('.',',')+' '+u:'';
+  let P=null;
+  if(g(X,Y)&&g(X,Z)&&g(Y,Z)){const c=g(X,Y)[0],a=g(X,Z)[0],b=g(Y,Z)[0],x=(c*c+a*a-b*b)/(2*c),y2=a*a-x*x; if(y2>0) P={[X]:[0,0],[Y]:[c,0],[Z]:[x,Math.sqrt(y2)]}}
+  else if(rect){const V=rect[1].toUpperCase(),O=[X,Y,Z].filter(k=>k!==V); if(O.length===2&&g(V,O[0])&&g(V,O[1])) P={[V]:[0,0],[O[0]]:[g(V,O[0])[0],0],[O[1]]:[0,g(V,O[1])[0]]}}
+  if(!P) return null;
+  const sp={points:P,polygones:[[X,Y,Z]],segments:[[X,Y],[X,Z],[Y,Z]].map(([a,b])=>({p:[a,b],label:lab(a,b)}))};
+  if(rect){const V=rect[1].toUpperCase(),O=[X,Y,Z].filter(k=>k!==V); sp.anglesDroits=[[O[0],V,O[1]]]}
+  return sp;
+}
+function instrCircleFig(t){
+  const m=new RegExp('cercle\\s+(?:\\([A-Za-z]+\\)\\s*)?de\\s+centre\\s+([A-Z]).{0,40}?rayon\\s*('+NUMR+')\\s*(cm|mm|m)?','i').exec(t); if(!m) return null;
+  const r=nv(m[2]); return {points:{[m[1]]:[0,0],_E:[r,0]},cercles:[{c:m[1],r:r}],segments:[{p:[m[1],'_E'],label:String(m[2])+' '+(m[3]||'cm')}]};
+}
+
+function instrSymFig(t){
+  if(!/sym[ée]tri/i.test(t)) return null;
+  const tri=new RegExp('triangle\\s+([A-Z])([A-Z])([A-Z])','i').exec(t), pt=/point\s+([A-Z])\b/i.exec(t)||/\bde\s+([A-Z])\b/.exec(t);
+  const central=/centrale|par rapport au point|centre\s+([A-Z])/i.test(t)&&!/axiale|par rapport à (?:la droite|l[’']axe)/i.test(t);
+  const nm=new RegExp('(?:droite|axe)\\s*\\((\\w[\'’]?\\d?)\\)','i').exec(t), dn='('+(nm?nm[1]:'d')+')';
+  const cen=(/centre\s+([A-Z])/i.exec(t)||/point\s+([A-Z])\b/i.exec(t.replace(/triangle\s+[A-Z]{3}/i,'')))||null, O=cen?cen[1].toUpperCase():'O';
+  let V=tri?[tri[1],tri[2],tri[3]].map(x=>x.toUpperCase()):[(pt?pt[1]:'A').toUpperCase()];
+  if(central) V=V.filter(v=>v!==O); if(!V.length) V=['A'];
+  const base=tri&&V.length===3?{[V[0]]:[0.8,3.2],[V[1]]:[0.2,0.8],[V[2]]:[2.8,1.4]}:{[V[0]]:[1.2,2.4]};
+  const pr=v=>v+'’'; const sp={points:Object.assign({},base),construire:[],polygones:[],segments:[],droites:[]};
+  if(central){ sp.points[O]=[3.4,2.2]; V.forEach(v=>sp.construire.push({symC:pr(v),de:v,centre:O})) }
+  else { sp.points._D1=[3.6,-0.6]; sp.points._D2=[3.6,4.6]; sp.droites.push({p:['_D1','_D2'],label:dn}); V.forEach(v=>sp.construire.push({sym:pr(v),de:v,axe:['_D1','_D2']})) }
+  if(V.length===3){ sp.polygones.push(V,V.map(pr)) } else sp.segments.push({p:[V[0],pr(V[0])],tirets:true});
+  return sp;
+}
+function instrParFig(t){
+  if(!/parall[èe]le|perpendiculaire/i.test(t)) return null;
+  const perp=/perpendiculaire/i.test(t)&&!/parall[èe]le/i.test(t);
+  const m=/passant par\s+(?:le point\s+)?([A-Z])/i.exec(t), ab=/\(\s*([A-Z])([A-Z])\s*\)/.exec(t);
+  const dn=/\((d['’]?\d?)\)/g, names=[]; let q; while((q=dn.exec(t))) names.push(q[1]); const d1=names[0]||'d', d2=names[1]||(d1+'’');
+  if(perp){ const sp={points:{O:[2,1.5],_A:[-0.6,1.5],_B:[4.6,1.5],_C:[2,-0.8],_D:[2,3.8]},droites:[{p:['_A','_B'],label:'('+d1+')'},{p:['_C','_D'],label:'('+d2+')'}],anglesDroits:[['_B','O','_D']]}; return sp }
+  if(m||ab){ const A=ab?ab[1]:'A',B=ab?ab[2]:'B',M=m?m[1].toUpperCase():'M';
+    return {points:{[A]:[0,0],[B]:[4,0.9],[M]:[1.2,2.6]},construire:[{transl:'_N',de:M,vecteur:[A,B]}],droites:[{p:[A,B],label:'('+(ab?A+B:d1)+')'},{p:[M,'_N'],label:'('+d2+')'}]} }
+  return {points:{_A:[0,0],_B:[4.5,1],_C:[0,2],_D:[4.5,3]},droites:[{p:['_A','_B'],label:'('+d1+')'},{p:['_C','_D'],label:'('+d2+')'}]};
+}
+function instrSegFig(t){
+  const m=new RegExp('(?:segment|\\[)\\s*\\[?([A-Z])([A-Z])\\]?\\s*(?:de longueur|mesurant|=|:)?\\s*('+NUMR+')\\s*(cm|mm|m)\\b','i').exec(t); if(!m) return null;
+  const L=nv(m[3]);
+  const sp={points:{[m[1]]:[0,0],[m[2]]:[L,0]},segments:[{p:[m[1],m[2]],label:String(m[3]).replace('.',',')+' '+m[4]}]};
+  if(/milieu\s+([A-Z])/i.test(t)){const I=/milieu\s+([A-Z])/i.exec(t)[1]; sp.construire=[{milieu:I,de:[m[1],m[2]]}]}
+  return sp;
+}
+function instrHalfFig(t){
+  const h=/demi-?droite\s*\[\s*([A-Z])([A-Z])\s*\)/i.exec(t), d=/droite\s*\(\s*([A-Z])([A-Z])\s*\)/i.exec(t);
+  if(h) return {points:{[h[1]]:[0,0],[h[2]]:[3,1]},demiDroites:[{p:[h[1],h[2]]}]};
+  if(d&&!/triangle|cercle|parall|perpend|sym[ée]tri|tangente/i.test(t)) return {points:{[d[1]]:[0,0],[d[2]]:[3,1]},droites:[{p:[d[1],d[2]]}]};
+  return null;
+}
+function instrTangFig(t){
+  if(!/tangente/i.test(t)||!/cercle/i.test(t)) return null;
+  const c=/centre\s+([A-Z])/i.exec(t), a=/(?:en|au point)\s+([A-Z])\b/.exec(t), r=new RegExp('rayon\\s*('+NUMR+')\\s*(cm|mm|m)?','i').exec(t);
+  const O=c?c[1].toUpperCase():'O', A=a&&a[1]!==O?a[1]:'T', R=r?nv(r[1]):2.5, th=40*Math.PI/180;
+  return {points:{[O]:[0,0],[A]:[R*Math.cos(th),R*Math.sin(th)]},construire:[{perp:'_P',en:A,dir:[O,A],long:R*0.9},{perp:'_Q',en:A,dir:[A,O],long:R*0.9}].slice(0,1),cercles:[{c:O,r:R}],segments:[{p:[O,A],label:r?r[1]+' '+(r[2]||'cm'):''}],droites:[{p:[A,'_P'],label:'(T)'}],anglesDroits:[[O,A,'_P']]};
+}
+function instrSolidFig(t){
+  const x=t.toLowerCase(), H=new RegExp('hauteur\\s*(?:de|=|:)?\\s*('+NUMR+')\\s*(cm|mm|m)?','i').exec(t), R=new RegExp('rayon\\s*(?:de|=|:)?\\s*('+NUMR+')\\s*(cm|mm|m)?','i').exec(t), Ar=new RegExp('ar[êe]te\\s*(?:de|=|:)?\\s*('+NUMR+')\\s*(cm|mm|m)?','i').exec(t);
+  const tx=(X,Y,s2,anc)=>({t:'texte',x:X,y:Y,texte:s2,taille:13,ancre:anc||'start'}); const nm=/(?:pyramide|c[ôo]ne|t[ée]tra[èe]dre|prisme)\s+([A-Z]{3,6})\b/.exec(t);
+  const u=m=>m?(' '+(m[2]||'cm')):'';
+  if(/c[ôo]ne/.test(x)){ const it=[{t:'cone',x:150,y:25,w:180,h:210}]; if(H) it.push(tx(246,130,'h = '+H[1]+u(H))); if(R) it.push(tx(250,250,'r = '+R[1]+u(R))); return {items:it} }
+  if(/pyramide/.test(x)){ const n=nm?nm[1].split(''):['S','A','B','C','D']; const it=[{t:'pyramide',x:130,y:25,w:220,h:200,noms:[n[0],n[1],n[2],n[3],n[4]]}]; if(H) it.push(tx(362,130,'h = '+H[1]+u(H))); if(Ar) it.push(tx(250,255,'AB = '+Ar[1]+u(Ar))); return {items:it} }
+  if(/t[ée]tra[èe]dre/.test(x)) return {items:[{t:'tetraedre',x:130,y:25,w:220,h:200,noms:(nm?nm[1].split(''):['S','A','B','C'])}]};
+  if(/prisme/.test(x)) return {items:[{t:'prismetriangulaire',x:100,y:50,w:170,h:150,p:50,noms:['A','B','C','D','E','F']}]};
+  if(/sph[èe]re|boule/.test(x)){ const it=[{t:'sphere',x:240,y:130,r:90}]; if(R) it.push(tx(250,125,'r = '+R[1]+u(R))); return {items:it} }
+  if(/cylindre/.test(x)){ const it=[{t:'cylindre',x:150,y:30,w:180,h:200}]; if(H) it.push(tx(342,135,'h = '+H[1]+u(H))); if(R) it.push(tx(240,258,'r = '+R[1]+u(R))); return {items:it} }
+  if(/cube|pav[ée]|parall[ée]l[ée]pip/.test(x)){ const cu=/cube/.test(x); const it=[{t:cu?'cube':'parallelepipede',x:150,y:50,w:cu?140:190,h:cu?140:120,p:60,label:''}]; if(Ar) it.push(tx(250,255,'a = '+Ar[1]+u(Ar))); return {items:it} }
+  return null;
+}
+
+function instrAngleFig(t){
+  if(!/angle/i.test(t)||/triangle|quadrilat|polygone/i.test(t)) return null;
+  let deg=null,m=/(\d{1,3}(?:[.,]\d+)?)\s*°/.exec(t); if(m) deg=nv(m[1]); else if(/droit/i.test(t)) deg=90; else if(/aigu/i.test(t)) deg=50; else if(/obtus/i.test(t)) deg=120; else if(/plat/i.test(t)) deg=180;
+  if(deg==null||deg<=0||deg>180) return null;
+  const xo=/\b([a-z])\s*([A-Z])\s*([a-z])\b/.exec(t), nm=/angle\s+([A-Z])([A-Z])([A-Z])\b/.exec(t);
+  let P1='A',O='O',P2='B',dem=false; if(nm){P1=nm[1];O=nm[2];P2=nm[3]} else if(xo&&xo[1]!==xo[3]){P1=xo[1];O=xo[2];P2=xo[3];dem=true}
+  const r=3.2,th=deg*Math.PI/180; const lab=(m?m[1].replace('.',','):String(deg))+'°';
+  const sp={points:{[O]:[0,0],[P1]:[r,0],[P2]:[r*Math.cos(th),r*Math.sin(th)]},angles:[{p:[P1,O,P2],label:lab}]};
+  if(deg===180) sp.points[P2]=[-r,0];
+  sp.demiDroites=[{p:[O,P1]},{p:[O,P2]}];
+  if(deg===90) {delete sp.angles; sp.anglesDroits=[[P1,O,P2]]}
+  return sp;
+}
+function instrQuadFig(t){
+  const m=new RegExp('(carr[ée]|rectangle|losange|parall[ée]logramme|trap[èe]ze)\\s+([A-Z])([A-Z])([A-Z])([A-Z])','i').exec(t); if(!m) return null;
+  const kind=m[1].toLowerCase().replace('é','e').replace('è','e'), [A,B,C,D]=[m[2],m[3],m[4],m[5]].map(x=>x.toUpperCase());
+  const L={},re=new RegExp('\\b([A-Z])([A-Z])\\s*=\\s*('+NUMR+')\\s*(cm|mm|m)?','g'); let q; while((q=re.exec(t))) L[[q[1],q[2]].sort().join('')]=[nv(q[3]),q[4]||'cm'];
+  const g=(a,b)=>L[[a,b].sort().join('')], lab=(a,b)=>g(a,b)?String(g(a,b)[0]).replace('.',',')+' '+g(a,b)[1]:'';
+  let P,tr=0;
+  if(/^carre/.test(kind)){const c=(g(A,B)||g(B,C)||[3.2])[0]; P=[[0,0],[c,0],[c,c],[0,c]]}
+  else if(/^rectangle/.test(kind)){const a=(g(A,B)||[4.4])[0],b=(g(A,D)||g(B,C)||[2.6])[0]; P=[[0,0],[a,0],[a,b],[0,b]]}
+  else if(/^losange/.test(kind)){const a=(g(A,B)||[3.4])[0],th=60*Math.PI/180; P=[[0,0],[a,0],[a+a*Math.cos(th),a*Math.sin(th)],[a*Math.cos(th),a*Math.sin(th)]]; tr=1}
+  else if(/^parall/.test(kind)){const a=(g(A,B)||[4.4])[0],b=(g(A,D)||[2.6])[0],th=60*Math.PI/180; P=[[0,0],[a,0],[a+b*Math.cos(th),b*Math.sin(th)],[b*Math.cos(th),b*Math.sin(th)]]}
+  else {P=[[0,0],[5,0],[3.8,2.4],[1.2,2.4]]}
+  const sp={points:{[A]:P[0],[B]:P[1],[C]:P[2],[D]:P[3]},polygones:[[A,B,C,D]]};
+  sp.segments=[[A,B],[B,C],[C,D],[D,A]].map(([a,b])=>({p:[a,b],label:lab(a,b),trait:tr?1:undefined}));
+  if(/^(carre|rectangle)/.test(kind)) sp.anglesDroits=[[D,A,B],[A,B,C],[B,C,D],[C,D,A]];
+  return sp;
+}
+function instrThalesFig(t){
+  if(!/thal[èe]s|(?:\(MN\)|\(DE\))\s*(?:\/\/|parall)/i.test(t)) return null;
+  const tri=new RegExp('triangle\\s+([A-Z])([A-Z])([A-Z])','i').exec(t); const [A,B,C]=tri?[tri[1],tri[2],tri[3]].map(x=>x.toUpperCase()):['A','B','C'];
+  const L={},re=new RegExp('\\b([A-Z])([A-Z])\\s*=\\s*('+NUMR+')\\s*(cm|mm|m)?','g'); let q; while((q=re.exec(t))) L[[q[1],q[2]].sort().join('')]=[nv(q[3]),q[4]||'cm'];
+  const lab=(a,b)=>{const v=L[[a,b].sort().join('')]; return v?String(v[0]).replace('.',',')+' '+v[1]:''};
+  const M='M',N='N'; const segs=[{p:[M,N],label:lab(M,N)},{p:[B,C],label:lab(B,C)},{p:[A,M],label:lab(A,M)},{p:[M,B],label:lab(M,B)},{p:[A,N],label:lab(A,N)},{p:[N,C],label:lab(N,C)},{p:[A,B],label:lab(A,B)},{p:[A,C],label:lab(A,C)}].filter(x=>x.label||x.p[0]===M&&x.p[1]===N);
+  return {points:{[A]:[1.6,4],[B]:[0,0],[C]:[5,0]},construire:[{nom:M,sur:[A,B],t:0.45},{nom:N,sur:[A,C],t:0.45}],polygones:[[A,B,C]],segments:segs};
+}
+function instrRegFig(t){
+  let n=0,nm=null; const x=t.toLowerCase();
+  if(/[ée]quilat[ée]ral/.test(x)) {n=3; nm=/[ée]quilat[ée]ral\s+([A-Z]{3})/i.exec(t)}
+  else if(/pentagone/.test(x)) n=5; else if(/hexagone/.test(x)) n=6; else if(/octogone/.test(x)) n=8;
+  else {const m=/polygone r[ée]gulier\s+(?:[àa]\s*)?(\d+)\s*c[ôo]t[ée]s?/i.exec(t); if(m) n=+m[1]}
+  if(n<3||n>12) return null;
+  const names=(nm?nm[1].toUpperCase():'ABCDEFGHIJKL').split(''), P={}; const ks=[];
+  for(let k=0;k<n;k++){const a=Math.PI/2+2*Math.PI*k/n; P[names[k]]=[2.2*Math.cos(a),2.2*Math.sin(a)]; ks.push(names[k])}
+  return {points:P,polygones:[ks],segments:ks.map((a,k)=>({p:[a,ks[(k+1)%n]],trait:1}))};
+}
+function instrFuncFig(t){
+  const m=/(?:\b[fgh]\s*\(\s*x\s*\)|\by)\s*=\s*([-+*/^().,\dx²³\s]+?)(?=$|[;]|\s+et\s|\.\s|\.$|,\s*[A-Za-z])/i.exec(t.replace(/\u2212/g,'-')); if(!m) return null;
+  let e=m[1].trim().replace(/²/g,'^2').replace(/³/g,'^3').replace(/(\d),(\d)/g,'$1.$2').replace(/(\d|\))\s*x/gi,'$1*x').replace(/\s+/g,''); if(!/x/i.test(e)||!/^[-+*/^().\dx]+$/i.test(e)) return null;
+  let ys=[]; try{ const fn=new Function('x','return '+e.replace(/x/gi,'(x)').replace(/\^/g,'**')); for(let x=-5;x<=5;x+=0.5){const y=fn(x); if(Number.isFinite(y)) ys.push(y)} }catch(err){return null}
+  if(!ys.length) return null; const ymn=Math.max(-10,Math.floor(Math.min(...ys,0))-1), ymx=Math.min(10,Math.ceil(Math.max(...ys,0))+1);
+  return {items:[{t:'fonction',x:50,y:270,w:380,h:250,xmin:-5,xmax:5,ymin:ymn,ymax:ymx,expr:[e]}]};
+}
+function instrStatFig(t){
+  if(!/histogramme|diagramme|barres|b[âa]tons|camembert|circulaire|secteurs/i.test(t)) return null;
+  const V=[],Lb=[],re=/([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' ]{0,17}?)\s*[:=(]\s*(\d+(?:[.,]\d+)?)\s*\)?/g; let q;
+  const body=t.replace(/^[^:]*:\s*/,''); while((q=re.exec(body))){Lb.push(q[1].trim()); V.push(nv(q[2]))}
+  if(V.length<2) return null;
+  if(/camembert|circulaire|secteurs/i.test(t)) return {items:[{t:'camembert',x:240,y:150,r:105,valeurs:V,labels:Lb}]};
+  return {items:[{t:/b[âa]tons/i.test(t)?'batons':'histogramme',x:55,y:255,w:390,h:215,valeurs:V,labels:Lb}]};
+}
+function instrPatronFig(t){
+  if(/patron/i.test(t)&&/cube/i.test(t)) return {items:[{t:'patroncube',x:70,y:60,c:55}]};
+  return null;
+}
+
+/* Sections du cours (titres I., 1., a. de l'essentiel ou de la trace écrite) : sert à rendre la figure cohérente avec la partie du cours illustrée */
+function courseSections(s){
+  const txt=String((s&&(s.essentiel||s.trace))||''); const L=txt.split('\n'), out=[];
+  const rt=/^\s*(?:__|\*\*)\s*(?:([IVX]+)|(\d{1,2})|([a-h]))\s*[.)]\s+(.+?)\s*(?:__|\*\*)\s*:?\s*$/, ru=/^\s*(?:__|\*\*)\s*(.+?)\s*(?:__|\*\*)\s*:?\s*$/;
+  L.forEach((l,k)=>{let m=rt.exec(l); if(m) out.push({k,lvl:m[1]?1:m[2]?2:3,title:m[4].trim()}); else if((m=ru.exec(l))) out.push({k,lvl:3,title:m[1].trim()})});
+  out.forEach((o,n)=>{let e=L.length; for(let j=n+1;j<out.length;j++) if(out[j].lvl<=o.lvl){e=out[j].k;break} o.text=L.slice(o.k+1,e).join('\n').trim(); o.key=String(o.k); const nx=out[n+1]?out[n+1].k:L.length; o.own=L.slice(o.k+1,nx).join('\n')});
+  return out;
+}
+function sectionFor(s,key,ins){
+  const secs=courseSections(s); if(!secs.length) return null;
+  if(key){const o=secs.find(x=>x.key===String(key)); if(o) return o}
+  const tok=t=>new Set(String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/[^a-z0-9]+/).filter(w=>w.length>3));
+  const q=tok(ins); let best=null,bs=0;
+  secs.forEach(o=>{const T=tok(o.title+' '+o.own); let c=0; q.forEach(w=>{if(T.has(w)) c++}); const sc=c+o.lvl*0.01; if(c>=1&&sc>bs){bs=sc;best=o}});
+  return best;
+}
+function instrLocalFig(ins){
+  const t=String(ins||''); if(!t.trim()) return null;
+  const c=instrCoordFig(t); if(c) return c.geo;
+  return instrAxisFig(t)||instrTangFig(t)||instrThalesFig(t)||instrTriFig(t)||instrQuadFig(t)||instrSymFig(t)||instrParFig(t)||instrRegFig(t)||instrAngleFig(t)||instrCircleFig(t)||instrPatronFig(t)||instrFuncFig(t)||instrStatFig(t)||instrHalfFig(t)||instrSegFig(t)||instrSolidFig(t)||null;
+}
 function localGeoFigs(text,opt){
   const t=String(text||'').toLowerCase().replace(/’/g,"'");
   const out=[]; const seen=new Set();
@@ -2402,7 +2615,7 @@ async function localCourseFigs(text,opt){
   }
   return out;
 }
-async function genCourseFigures(f,i,ins,asker,depth){
+async function genCourseFigures(f,i,ins,asker,depth,secKey){
   const s=f.seances[i];
   /* 1) notions de géométrie reconnues dans le cours : figures tracées par l’application elle-même (pas besoin d’IA) */
   let locKeep=[];
@@ -2411,6 +2624,19 @@ async function genCourseFigures(f,i,ins,asker,depth){
   const lopt=ins?undefined:{geo:needsCourseGeo(f,s)||/techno/i.test([f.disc,f.sub].join(' ')),
     dec:/rang|partie enti|partie d[ée]cimale/i.test([s.capTitre,s.contenus].join(' '))&&!opLesson&&!(f.seances||[]).some((x,k)=>k!==i&&x&&x._dec)};
   let locFallback=[];
+  const SEC=ins?sectionFor(s,secKey,ins):null, secTxt=SEC?(SEC.title+'\n'+SEC.text).slice(0,900):'';
+  if(ins){
+    /* 1) cas courants lus et tracés exactement par l'application (repère + coordonnées, droite graduée, triangle avec longueurs, cercle) */
+    {const sp=instrLocalFig(ins)||(secTxt&&!/\d/.test(ins)?instrLocalFig(ins+' '+secTxt):null); if(sp){try{FIG3D=true; const im=sp.items?await eprFigOf({items:sp.items},420):await eprFig(sp,420,false); if(im){im.credit=''; return [im]}}catch(e){}}}
+    /* 1 bis) notion de géométrie sans données chiffrées (médiane, hauteur, médiatrice, bissectrice, cercle circonscrit…) : figure du cours tracée par l'application */
+    if(!/\d/.test(ins)){const lc=await localCourseFigs(ins+' '+secTxt); if(lc.length) return lc}
+    /* 2) tout autre type de figure : l'IA trace EXACTEMENT la demande, puis la figure est contrôlée (vision) et corrigée jusqu'à 3 essais */
+    try{
+      set3D(ins);
+      const pr='Tu es un enseignant qui trace une figure au tableau (niveau '+(f.classe||'collège')+', '+discLabel(f)+'). DEMANDE EXACTE DE L’ENSEIGNANT : « '+ins+' ». Trace UNIQUEMENT ce qui est demandé : tous les éléments cités (noms des points, valeurs, longueurs, angles, graduations, coordonnées, couleurs, positions, légendes) apparaissent exactement comme écrits, rien d’autre n’est ajouté. Si une donnée manque, choisis-la de façon cohérente avec la demande. Si le texte ne précise pas un élément, ne le dessine pas. Le contexte de la leçon (« '+(f.titre||'')+' ») ne sert qu’à choisir le niveau, pas à ajouter des éléments.'+(secTxt?' SECTION DU COURS QUE LA FIGURE ILLUSTRE (la figure doit être COHÉRENTE avec elle : reprends ses notations, noms de points, valeurs et vocabulaire, et ne montre pas plus que ce qu’elle enseigne) :\n« '+secTxt+' »':'')+'\n'+SCH_CATALOG+'\n'+GEO_DOC+'\n'+FIG_ANY_DOC;
+      const im=await figAny(pr,{dw:420,ctx:ins}); if(im){im.credit=''; return [im]}
+    }catch(e){ if(e&&(e.code==='cancelled'||e.code==='fatal'||e.code==='no_ai')) throw e }
+  }
   {const loc=await localCourseFigs(ins?ins:[f.titre,s.capTitre,s.contenus,s.essentiel,s.trace,s.synthese].join('\n'),lopt);
    if(ins&&loc.length){ locFallback=loc; loc.length=0 }
    if(loc.some(im=>/^Rang de chaque chiffre/.test(String(im.credit||'')))) s._dec=true;
@@ -2447,6 +2673,7 @@ function figsBlock(f,s,i){
    ${L.map((im,k)=>`<div class="row" style="align-items:center;gap:10px"><img class="thumb" alt="Figure ${k+1}" src="${im.src}"><label class="f" for="fw_${i}_${k}" style="max-width:190px">Largeur (px)<input type="number" id="fw_${i}_${k}" data-p="seances.${i}.figs.${k}.dw" min="80" max="600" value="${im.dw||300}"></label><button class="btn danger sm" type="button" data-delfig="${i}|${k}">Retirer</button></div>`).join('')}
    ${(Array.isArray(f.guideImgs)&&f.guideImgs.length)?`<div style="margin-top:8px"><div class="hint">Figures du document d’accompagnement : cliquez sur une figure pour l’ajouter à cette séance</div><div class="row" style="gap:6px;flex-wrap:wrap">${f.guideImgs.map((im,k)=>`<button type="button" class="btn alt sm" data-guidepick="${i}|${k}" title="${esc((im.ctx||'').slice(0,120))}" style="padding:2px"><img alt="Figure du document ${k+1}" src="${im.src}" style="height:56px;display:block"></button>`).join('')}</div></div>`:''}
    <label class="f" for="fd-${i}" style="margin-top:6px"><span class="hint">Décrivez la figure à tracer (facultatif) — ex. : demi-droite graduée de 0 à 6 avec A(1) et B(2,5)</span><input type="text" id="fd-${i}" placeholder="Laissez vide pour que l’application choisisse les figures du cours"></label>
+   ${courseSections(s).length?`<label class="f" for="fs-${i}" style="margin-top:6px"><span class="hint">Section du cours illustrée (facultatif) : la figure sera cohérente avec cette partie</span><select id="fs-${i}"><option value="">Automatique (la section la plus proche de la demande)</option>${courseSections(s).map(o=>`<option value="${o.key}">${o.lvl===1?'':o.lvl===2?'  ':'    '}${String(o.title).replace(/[<>&"]/g,'')}</option>`).join('')}</select></label>`:''}
    <div class="row" style="margin-top:6px"><button class="btn alt sm" type="button" data-figadd="${i}">Ajouter des figures tracées automatiquement</button></div></div>`;
 }
 const GEO_STRONG_RE=/\b(m[ée]diatrices?|m[ée]dianes?|hauteurs?|bissectrices?|orthocentre|cercles? (?:circonscrit|inscrit)|centre de gravit[ée]|triangles?|parall[èe]logrammes?|losanges?|trap[èe]zes?|sym[ée]tri\w*|translation|rotation|th[ée]or[èe]me de (?:thal[èe]s|pythagore)|thal[èe]s|pythagore|droites? (?:parall[èe]les?|perpendiculaires?)|perpendiculaires?)\b/i;
@@ -3659,8 +3886,8 @@ ${desc}`;
    if(has(d.definition)&&!cur.includes(String(d.definition).trim().slice(0,25))) parts.push('__Définition__\n'+String(d.definition).trim());
    if(has(d.utilite)&&!/à quoi (ça|cela) sert/i.test(cur)) parts.push('__À quoi ça sert ?__\n'+String(d.utilite).trim());
    if(parts.length) d[k]=parts.join('\n')+'\n'+cur;}
-  if(A){put(s.m.remob,'prof',d.remobProf);put(s.m.remob,'eleve',d.remobEleve);put(s.m.appro,'eleve',d.approEleve);put(s,'synthese',d.synthese);put(s,'essentiel',d.essentiel);put(s,'exoApp',d.exoApp);put(s,'exoMaison',d.exoMaison)}
-  else{put(s.m.prereq,'prof',d.prereqProf);put(s.m.prereq,'eleve',d.prereqEleve);put(s,'consignes',d.consignes);put(s,'resolution',d.resolution);put(s,'trace',d.trace);put(s,'exoApp',d.exoApp);put(s,'exoAppSol',d.exoAppSol);put(s,'evalQ',d.evalQ);put(s,'evalR',d.evalR);put(s,'exoMaison',d.exoMaison);put(s,'exoMaisonSol',d.exoMaisonSol)}
+  if(A){put(s.m.remob,'prof',d.remobProf);put(s.m.remob,'eleve',d.remobEleve);put(s.m.appro,'eleve',d.approEleve);put(s,'synthese',d.synthese);put(s,'essentiel',fixTitleNumbers(d.essentiel));put(s,'exoApp',d.exoApp);put(s,'exoMaison',d.exoMaison)}
+  else{put(s.m.prereq,'prof',d.prereqProf);put(s.m.prereq,'eleve',d.prereqEleve);put(s,'consignes',d.consignes);put(s,'resolution',d.resolution);put(s,'trace',fixTitleNumbers(d.trace));put(s,'exoApp',d.exoApp);put(s,'exoAppSol',d.exoAppSol);put(s,'evalQ',d.evalQ);put(s,'evalR',d.evalR);put(s,'exoMaison',d.exoMaison);put(s,'exoMaisonSol',d.exoMaisonSol)}
   let axisDone=false;
   const guideFigs=(o.overwrite||!(Array.isArray(s.figs)&&s.figs.length))?guideFigsFor(f,s,3):[];
   if(guideFigs.length){s.figs=guideFigs;axisDone=true}
@@ -5194,7 +5421,9 @@ root.addEventListener('click',async e=>{
   if(b.dataset.pick){const [i,key,n]=b.dataset.pick.split('|');pickImage(i,key,+n);return}
   if(d.figadd!==undefined){const i=+d.figadd,st=document.getElementById('ai-'+i),inp=document.getElementById('fd-'+i),ins=((inp&&inp.value)||'').trim();b.disabled=true;
     try{
-      const ims=await genCourseFigures(f,i,ins,p=>corrAsk(p,st,'Tracé des figures…'));
+      const sel=document.getElementById('fs-'+i), sk=sel&&sel.value||''; let ins2=ins;
+      if(!ins2&&sk){const so=courseSections(f.seances[i]).find(x=>x.key===sk); if(so) ins2='Trace la figure qui illustre la section « '+so.title+' » du cours'}
+      const ims=await genCourseFigures(f,i,ins2,p=>corrAsk(p,st,'Tracé des figures…'),undefined,sk);
       if(ims.length){const s=f.seances[i];s.figs=(s.figs||[]).concat(ims);openSeances.add(i);touch();render2();flash(ims.length+' figure(s) ajoutée(s) : vérifiez-les dans la fiche.')}
       else flash('Aucune figure n’a pu être tracée. Décrivez-la dans la case (ex. « demi-droite graduée de 0 à 6 avec A(1) et B(2,5) »).',true)
     }catch(e){flash(errCopy(e),true)}
